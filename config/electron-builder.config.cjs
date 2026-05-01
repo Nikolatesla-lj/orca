@@ -135,6 +135,9 @@ module.exports = {
     artifactName: 'orca-macos-${arch}.${ext}'
   },
   linux: {
+    // Why: Ubuntu 26 ships GNOME Orca as the `orca` package and /usr/bin/orca.
+    // The Linux installer should not claim those system package/file names.
+    executableName: 'orca-ide',
     extraResources: [
       {
         from: 'resources/linux/bin/orca',
@@ -151,6 +154,10 @@ module.exports = {
   },
   appImage: {
     artifactName: 'orca-linux.${ext}'
+  },
+  deb: {
+    packageName: 'orca-ide',
+    artifactName: 'orca-ide_${version}_${arch}.${ext}'
   },
   // Why: must be true so that electron-builder rebuilds native modules
   // (node-pty) for each target architecture when producing dual-arch macOS
