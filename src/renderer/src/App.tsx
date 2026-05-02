@@ -2,7 +2,7 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { DEFAULT_STATUS_BAR_ITEMS, DEFAULT_WORKTREE_CARD_PROPERTIES } from '../../shared/constants'
 
-import { ArrowLeft, ArrowRight, Minimize2, PanelLeft, PanelRight, Search } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Minimize2, PanelLeft, PanelRight } from 'lucide-react'
 import {
   FOCUS_TERMINAL_PANE_EVENT,
   SYNC_FIT_PANES_EVENT,
@@ -52,6 +52,9 @@ const Settings = lazy(() => import('./components/settings/Settings'))
 const QuickOpen = lazy(() => import('./components/QuickOpen'))
 const WorktreeJumpPalette = lazy(() => import('./components/WorktreeJumpPalette'))
 const NewWorkspaceComposerModal = lazy(() => import('./components/NewWorkspaceComposerModal'))
+// Why: lazy-loaded so the WebP asset + overlay module aren't fetched unless
+// the user opts into the experimental flag.
+const SidekickOverlay = lazy(() => import('./components/sidekick/SidekickOverlay'))
 
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
@@ -146,6 +149,8 @@ function App(): React.JSX.Element {
   // subscriptions (agentStatusByPaneKey, agentStatusEpoch, etc.) instead of
   // keeping them alive behind an early-return inside the hook bodies.
   const agentDashboardEnabled = useAppStore((s) => s.settings?.experimentalAgentDashboard === true)
+  const sidekickEnabled = useAppStore((s) => s.settings?.experimentalSidekick === true)
+  const sidekickVisible = useAppStore((s) => s.sidekickVisible)
   const canGoBackWorktree = useAppStore(canGoBackWorktreeHistory)
   const canGoForwardWorktree = useAppStore(canGoForwardWorktreeHistory)
   const titlebarLeftControlsRef = useRef<HTMLDivElement | null>(null)
@@ -864,27 +869,6 @@ function App(): React.JSX.Element {
             </PopoverContent>
           </Popover>
         ) : null}
-        {/* Why: always rendered (not gated on showSidebar) because the
-            worktree palette is global — it mirrors the ⌘J/Ctrl+Shift+J
-            shortcut which is live from every view including Settings and
-            Landing. The `sidebar-toggle` class is the shared titlebar
-            icon-button style used by back/forward/sidebar-toggle/right-
-            sidebar neighbors; the name is historical and applies to any
-            titlebar icon button, not only sidebar toggles. */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              className="sidebar-toggle"
-              onClick={() => actions.openModal('worktree-palette')}
-              aria-label="Search worktrees and browser tabs"
-            >
-              <Search size={14} />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" sideOffset={6}>
-            {`Search (${isMac ? '⌘J' : 'Ctrl+Shift+J'})`}
-          </TooltipContent>
-        </Tooltip>
       </div>
       {/* Why: Back/Forward traverse mixed worktree + Tasks history, so the
           cluster is shown wherever the history shortcut is live (terminal or
@@ -1105,6 +1089,15 @@ function App(): React.JSX.Element {
         {mountedLazyModalIds.has('quick-open') ? <QuickOpen /> : null}
         {mountedLazyModalIds.has('worktree-palette') ? <WorktreeJumpPalette /> : null}
       </Suspense>
+      {/* Why: mount SidekickOverlay only when the experimental flag is on AND
+          the user hasn't hit "Hide sidekick" in the status-bar menu. Both
+          conditions must be true — see design doc (sidekick-overlay.md) on why
+          the two toggles are kept independent. */}
+      {sidekickEnabled && sidekickVisible ? (
+        <Suspense fallback={null}>
+          <SidekickOverlay />
+        </Suspense>
+      ) : null}
       <UpdateCard />
       <StarNagCard />
       <ZoomOverlay />

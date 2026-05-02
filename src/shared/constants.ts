@@ -191,7 +191,10 @@ export function getDefaultSettings(homedir: string): GlobalSettings {
     // Why: opt-in preview — default off so managed-hook installation
     // (Claude/Codex/Gemini) stays dormant for existing users and upgraders
     // (persistence.ts merges defaults first, so upgraders inherit this).
-    experimentalAgentDashboard: false
+    experimentalAgentDashboard: false,
+    // Why: off by default — opt-in cosmetic joke feature. Leaving the default
+    // false keeps the overlay unmounted for users who never enable it.
+    experimentalSidekick: false
   }
 }
 
@@ -210,6 +213,7 @@ export function getDefaultPersistedState(homedir: string): PersistedState {
   return {
     schemaVersion: SCHEMA_VERSION,
     repos: [],
+    sparsePresetsByRepo: {},
     worktreeMeta: {},
     settings: getDefaultSettings(homedir),
     ui: getDefaultUIState(),

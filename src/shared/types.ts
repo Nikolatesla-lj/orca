@@ -4,6 +4,23 @@ import type { SshTarget } from './ssh-types'
 // ─── Repo ────────────────────────────────────────────────────────────
 export type RepoKind = 'git' | 'folder'
 
+/**
+ * Per-repo user choice for where issues are fetched and filed.
+ *
+ * Why three states, not two: storage must distinguish "user explicitly chose
+ * upstream" from "heuristic happens to resolve to upstream right now." Collapsing
+ * the two would let a remote-topology change (someone removes `upstream`, or
+ * adds one later) silently move the effective source — the exact silent-source-
+ * switch class the upstream-issue-source design rejects.
+ *
+ * - `'auto'` (or undefined): honor the heuristic in `getIssueOwnerRepo`
+ *   (upstream-if-exists, else origin). Initial state for every repo.
+ * - `'upstream'`: explicit upstream. Wins over heuristic and future topology
+ *   changes. Falls back to origin if `upstream` remote vanishes, with a toast.
+ * - `'origin'`: explicit origin. Same precedence.
+ */
+export type IssueSourcePreference = 'upstream' | 'origin' | 'auto'
+
 export type Repo = {
   id: string
   path: string
@@ -16,6 +33,10 @@ export type Repo = {
   hookSettings?: RepoHookSettings
   /** SSH target ID for remote repos. null/undefined = local. */
   connectionId?: string | null
+  /** Per-repo override for issue-source resolution. `undefined` is treated
+   *  identically to `'auto'`; writers leave it undefined on creation so
+   *  existing persisted records stay forward-compatible. */
+  issueSourcePreference?: IssueSourcePreference
 }
 
 export type SetupRunPolicy = 'ask' | 'run-by-default' | 'skip-by-default'
@@ -48,6 +69,7 @@ export type GitWorktreeInfo = {
   head: string
   branch: string
   isBare: boolean
+  isSparse?: boolean
   /** True for the repo's main working tree (the first entry from `git worktree list`).
    *  Linked worktrees created via `git worktree add` have this set to false. */
   isMainWorktree: boolean
@@ -67,6 +89,11 @@ export type Worktree = {
   isPinned: boolean
   sortOrder: number
   lastActivityAt: number
+  sparseDirectories?: string[]
+  sparseBaseRef?: string
+  /** ID of the saved preset this worktree was created from, if any. Cleared
+   *  when the worktree is no longer sparse on refresh. */
+  sparsePresetId?: string
   diffComments?: DiffComment[]
 } & GitWorktreeInfo
 
@@ -82,6 +109,9 @@ export type WorktreeMeta = {
   isPinned: boolean
   sortOrder: number
   lastActivityAt: number
+  sparseDirectories?: string[]
+  sparseBaseRef?: string
+  sparsePresetId?: string
   diffComments?: DiffComment[]
 }
 
@@ -600,6 +630,7 @@ export type ClassifiedError = {
   type:
     | 'permission_denied'
     | 'not_found'
+    | 'issues_disabled'
     | 'validation_error'
     | 'rate_limited'
     | 'network_error'
@@ -632,10 +663,24 @@ export type ListWorkItemsResult<T> = {
   sources: {
     issues: GitHubOwnerRepo | null
     prs: GitHubOwnerRepo | null
+    /** Raw `upstream` remote resolved for this repo, independent of the
+     *  user's preference. Present so the renderer's issue-source selector
+     *  can always decide whether to render (upstream exists & differs from
+     *  origin) and show both slugs in its tooltips, even when the user has
+     *  picked 'origin' and `sources.issues` has collapsed onto origin. */
+    upstreamCandidate: GitHubOwnerRepo | null
   }
   errors?: {
     issues?: ClassifiedError
   }
+  /** True when the user's per-repo preference was `'upstream'` but no upstream
+   *  remote is configured, so the resolver fell back to origin. Renderer uses
+   *  this to surface a one-time-per-session toast. Omitted when absent so
+   *  existing consumers and test fixtures don't care about it.
+   *  Typed as `?: true` (not `?: boolean`) to encode the invariant "present
+   *  iff fell-back" — an explicit `false` write would be a bug, so make it a
+   *  compile error. */
+  issueSourceFellBack?: true
 }
 
 export type LinearWorkflowState = {
@@ -690,11 +735,32 @@ export type WorktreeSetupLaunch = {
   envVars: Record<string, string>
 }
 
+export type CreateSparseCheckoutRequest = {
+  directories: string[]
+  /** Set when the directories came from a saved preset and the user did not
+   *  modify them — recorded on WorktreeMeta so the worktree can show "from
+   *  preset X" later. Cleared if the user edited the textarea. */
+  presetId?: string
+}
+
+/** A reusable per-repo sparse directory list. Saved by the user from the
+ *  composer; surfaced again the next time they create a worktree in the same
+ *  repo. The MVP scope (no preset) is `presetId === undefined`. */
+export type SparsePreset = {
+  id: string
+  repoId: string
+  name: string
+  directories: string[]
+  createdAt: number
+  updatedAt: number
+}
+
 export type CreateWorktreeArgs = {
   repoId: string
   name: string
   baseBranch?: string
   setupDecision?: SetupDecision
+  sparseCheckout?: CreateSparseCheckoutRequest
 }
 
 export type CreateWorktreeResult = {
@@ -1045,6 +1111,11 @@ export type GlobalSettings = {
    *  takes effect on the next app launch. The in-pane status indicators and
    *  the cursor-agent hook path are unaffected by this toggle. */
   experimentalAgentDashboard: boolean
+  /** Experimental: floating animated sidekick (claude.webp) in the bottom-right
+   *  corner. Opt-in because it's a cosmetic joke feature; users who leave it
+   *  off never mount the overlay. Toggling takes effect immediately in the
+   *  current session (no relaunch) because it is purely renderer-side. */
+  experimentalSidekick: boolean
 }
 
 export type GhosttyImportPreview = {
@@ -1162,6 +1233,35 @@ export type PersistedUIState = {
    *  suppress the nag — no further thresholds, no notifications. */
   starNagCompleted?: boolean
   trustedOrcaHooks?: PersistedTrustedOrcaHooks
+  /** Whether the experimental sidekick overlay is currently visible. Separate
+   *  from the experimentalSidekick settings flag so "Hide sidekick" from the
+   *  status-bar menu is a reversible dismiss (re-show without re-enabling the
+   *  feature). Absent = treated as true so existing users see the sidekick
+   *  the first time they enable the experimental flag. */
+  sidekickVisible?: boolean
+  /** Active sidekick id: one of the bundled ids or a custom UUID from
+   *  customSidekicks. Unknown ids fall back to the default at read time so
+   *  removing a custom sidekick the user had selected doesn't leave the
+   *  overlay rendering nothing. */
+  sidekickId?: string
+  /** User-uploaded sidekick images. Bytes live under userData/sidekicks/custom/;
+   *  this field is the metadata index so custom sidekicks ride the existing
+   *  PersistedUIState save pipeline. */
+  customSidekicks?: CustomSidekick[]
+}
+
+/** Metadata for a user-uploaded sidekick image. `id` is the stable identifier;
+ *  the on-disk filename (preserving the original extension) lives in `fileName`.
+ *  The renderer never learns the absolute path — it asks main for the bytes
+ *  via sidekick:read using (id, fileName). */
+export type CustomSidekick = {
+  id: string
+  label: string
+  fileName: string
+  /** MIME type needed so the renderer builds a Blob with the correct
+   *  Content-Type — especially image/svg+xml, which browsers won't render
+   *  from a misdeclared blob URL. */
+  mimeType: string
 }
 
 export type PersistedTrustedOrcaHookEntry = {
@@ -1184,6 +1284,9 @@ export type PersistedTrustedOrcaHooks = Record<string, PersistedTrustedOrcaHookR
 export type PersistedState = {
   schemaVersion: number
   repos: Repo[]
+  /** Sparse-checkout presets keyed by repoId. Empty record on first launch;
+   *  presets are managed from the new-workspace composer and repo settings. */
+  sparsePresetsByRepo: Record<string, SparsePreset[]>
   worktreeMeta: Record<string, WorktreeMeta>
   settings: GlobalSettings
   ui: PersistedUIState

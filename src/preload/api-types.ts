@@ -8,7 +8,9 @@ import type {
   BrowserSessionProfileSource,
   ClaudeRateLimitAccountsState,
   CodexRateLimitAccountsState,
+  CreateWorktreeArgs,
   CreateWorktreeResult,
+  CustomSidekick,
   DirEntry,
   FsChangedPayload,
   GhosttyImportPreview,
@@ -46,6 +48,7 @@ import type {
   PRComment,
   PRInfo,
   Repo,
+  SparsePreset,
   SearchOptions,
   SearchResult,
   StatsSummary,
@@ -309,7 +312,15 @@ export type PreloadApi = {
     update: (args: {
       repoId: string
       updates: Partial<
-        Pick<Repo, 'displayName' | 'badgeColor' | 'hookSettings' | 'worktreeBaseRef' | 'kind'>
+        Pick<
+          Repo,
+          | 'displayName'
+          | 'badgeColor'
+          | 'hookSettings'
+          | 'worktreeBaseRef'
+          | 'kind'
+          | 'issueSourcePreference'
+        >
       >
     }) => Promise<Repo>
     pickFolder: () => Promise<string | null>
@@ -329,15 +340,21 @@ export type PreloadApi = {
     searchBaseRefs: (args: { repoId: string; query: string; limit?: number }) => Promise<string[]>
     onChanged: (callback: () => void) => () => void
   }
+  sparsePresets: {
+    list: (args: { repoId: string }) => Promise<SparsePreset[]>
+    save: (args: {
+      repoId: string
+      id?: string
+      name: string
+      directories: string[]
+    }) => Promise<SparsePreset>
+    remove: (args: { repoId: string; presetId: string }) => Promise<void>
+    onChanged: (callback: (data: { repoId: string }) => void) => () => void
+  }
   worktrees: {
     list: (args: { repoId: string }) => Promise<Worktree[]>
     listAll: () => Promise<Worktree[]>
-    create: (args: {
-      repoId: string
-      name: string
-      baseBranch?: string
-      setupDecision?: 'inherit' | 'run' | 'skip'
-    }) => Promise<CreateWorktreeResult>
+    create: (args: CreateWorktreeArgs) => Promise<CreateWorktreeResult>
     resolvePrBase: (args: {
       repoId: string
       prNumber: number
@@ -574,6 +591,11 @@ export type PreloadApi = {
     pickImage: () => Promise<string | null>
     pickDirectory: (args: { defaultPath?: string }) => Promise<string | null>
     copyFile: (args: { srcPath: string; destPath: string }) => Promise<void>
+  }
+  sidekick: {
+    import: () => Promise<CustomSidekick | null>
+    read: (id: string, fileName: string) => Promise<ArrayBuffer | null>
+    delete: (id: string, fileName: string) => Promise<void>
   }
   browser: BrowserApi
   hooks: {
