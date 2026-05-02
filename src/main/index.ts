@@ -29,6 +29,7 @@ import {
   patchPackagedProcessPath
 } from './startup/configure-process'
 import { hydrateShellPath, mergePathSegments } from './startup/hydrate-shell-path'
+import { installSingleInstanceGuard } from './startup/single-instance'
 import { RateLimitService } from './rate-limits/service'
 import { attachMainWindowServices } from './window/attach-main-window-services'
 import { createMainWindow } from './window/createMainWindow'
@@ -64,41 +65,45 @@ let rateLimits: RateLimitService | null = null
 let runtimeRpc: OrcaRuntimeRpcServer | null = null
 let starNag: StarNagService | null = null
 
-installUncaughtPipeErrorGuard()
-// Why: propagate the Orca app version into `process.env` so PTY-env
-// construction in both main (local-pty-provider) and the forked daemon
-// (pty-subprocess) can set `TERM_PROGRAM_VERSION` without re-importing
-// electron. The daemon inherits `process.env` via fork (daemon-init.ts:93).
-process.env.ORCA_APP_VERSION = app.getVersion()
-patchPackagedProcessPath()
-// Why: patchPackagedProcessPath seeds a minimal list of well-known system
-// dirs synchronously so early IPC (e.g. preflight before the shell spawn
-// completes) doesn't miss homebrew/nix. Kick off the login-shell probe in
-// parallel for packaged runs — when it resolves, its PATH is prepended and
-// detectInstalledAgents picks up whatever the user's rc files put on PATH
-// (cargo/pyenv/volta/custom tool install dirs) without hardcoding each one.
-// Dev runs already inherit a complete PATH from the launching terminal, so
-// the spawn cost is only paid where it's needed.
-if (app.isPackaged && process.platform !== 'win32') {
-  void hydrateShellPath().then((result) => {
-    if (result.ok) {
-      mergePathSegments(result.segments)
-    }
-  })
+const hasSingleInstanceLock = installSingleInstanceGuard(app, () => mainWindow)
+
+if (hasSingleInstanceLock) {
+  installUncaughtPipeErrorGuard()
+  // Why: propagate the Orca app version into `process.env` so PTY-env
+  // construction in both main (local-pty-provider) and the forked daemon
+  // (pty-subprocess) can set `TERM_PROGRAM_VERSION` without re-importing
+  // electron. The daemon inherits `process.env` via fork (daemon-init.ts:93).
+  process.env.ORCA_APP_VERSION = app.getVersion()
+  patchPackagedProcessPath()
+  // Why: patchPackagedProcessPath seeds a minimal list of well-known system
+  // dirs synchronously so early IPC (e.g. preflight before the shell spawn
+  // completes) doesn't miss homebrew/nix. Kick off the login-shell probe in
+  // parallel for packaged runs — when it resolves, its PATH is prepended and
+  // detectInstalledAgents picks up whatever the user's rc files put on PATH
+  // (cargo/pyenv/volta/custom tool install dirs) without hardcoding each one.
+  // Dev runs already inherit a complete PATH from the launching terminal, so
+  // the spawn cost is only paid where it's needed.
+  if (app.isPackaged && process.platform !== 'win32') {
+    void hydrateShellPath().then((result) => {
+      if (result.ok) {
+        mergePathSegments(result.segments)
+      }
+    })
+  }
+  configureDevUserDataPath(is.dev)
+  installDevParentDisconnectQuit(is.dev)
+  installDevParentWatchdog(is.dev)
+  // Why: must run after configureDevUserDataPath (which redirects userData to
+  // orca-dev in dev mode) but before app.setName('Orca') inside whenReady
+  // (which would change the resolved path on case-sensitive filesystems).
+  initDataPath()
+  // Why: same timing constraint as initDataPath — capture the userData path
+  // before app.setName changes it. See persistence.ts:20-28.
+  initStatsPath()
+  initClaudeUsagePath()
+  initCodexUsagePath()
+  enableMainProcessGpuFeatures()
 }
-configureDevUserDataPath(is.dev)
-installDevParentDisconnectQuit(is.dev)
-installDevParentWatchdog(is.dev)
-// Why: must run after configureDevUserDataPath (which redirects userData to
-// orca-dev in dev mode) but before app.setName('Orca') inside whenReady
-// (which would change the resolved path on case-sensitive filesystems).
-initDataPath()
-// Why: same timing constraint as initDataPath — capture the userData path
-// before app.setName changes it. See persistence.ts:20-28.
-initStatsPath()
-initClaudeUsagePath()
-initCodexUsagePath()
-enableMainProcessGpuFeatures()
 
 function openMainWindow(): BrowserWindow {
   if (!store) {
@@ -312,191 +317,193 @@ function driveCursorPaneFromHook(paneKey: string, state: string): void {
   sendCursorTitle(ptyId, synthetic)
 }
 
-app.whenReady().then(async () => {
-  electronApp.setAppUserModelId('com.stablyai.orca')
-  app.setName('Orca')
+if (hasSingleInstanceLock) {
+  app.whenReady().then(async () => {
+    electronApp.setAppUserModelId('com.stablyai.orca')
+    app.setName('Orca')
 
-  if (process.platform === 'darwin' && is.dev) {
-    const dockIcon = nativeImage.createFromPath(devIcon)
-    app.dock?.setIcon(dockIcon)
-  }
+    if (process.platform === 'darwin' && is.dev) {
+      const dockIcon = nativeImage.createFromPath(devIcon)
+      app.dock?.setIcon(dockIcon)
+    }
 
-  store = new Store()
-  stats = new StatsCollector()
-  claudeUsage = new ClaudeUsageStore(store)
-  codexUsage = new CodexUsageStore(store)
-  rateLimits = new RateLimitService()
-  codexRuntimeHome = new CodexRuntimeHomeService(store)
-  codexAccounts = new CodexAccountService(store, rateLimits, codexRuntimeHome)
-  claudeRuntimeAuth = new ClaudeRuntimeAuthService(store)
-  claudeAccounts = new ClaudeAccountService(store, rateLimits, claudeRuntimeAuth)
-  rateLimits.setCodexHomePathResolver(() => codexRuntimeHome!.prepareForRateLimitFetch())
-  rateLimits.setClaudeAuthPreparationResolver(() => claudeRuntimeAuth!.prepareForRateLimitFetch())
-  rateLimits.setSettingsResolver(() => store!.getSettings())
-  rateLimits.setInactiveClaudeAccountsResolver(() => {
-    const settings = store!.getSettings()
-    return settings.claudeManagedAccounts
-      .filter((account) => account.id !== settings.activeClaudeManagedAccountId)
-      .map((account) => ({ id: account.id, managedAuthPath: account.managedAuthPath }))
-  })
-  rateLimits.setInactiveCodexAccountsResolver(() => {
-    const settings = store!.getSettings()
-    return settings.codexManagedAccounts
-      .filter((account) => account.id !== settings.activeCodexManagedAccountId)
-      .map((account) => ({ id: account.id, managedHomePath: account.managedHomePath }))
-  })
-  runtime = new OrcaRuntimeService(store, stats)
-  starNag = new StarNagService(store, stats)
-  starNag.start()
-  starNag.registerIpcHandlers()
-  runtime.setAgentBrowserBridge(new AgentBrowserBridge(browserManager))
-  nativeTheme.themeSource = store.getSettings().theme ?? 'system'
-  // Why: managed hook installation mutates user-global agent config.
-  // Startup must fail open so a malformed local config never bricks Orca.
-  // Claude/Codex/Gemini installs are gated behind the experimentalAgentDashboard
-  // setting because the feature they feed (the inline agent-activity list) is
-  // still in preview. Cursor installs unconditionally because cursor-agent
-  // emits no title-based working/idle signal at all (its terminal title stays
-  // literally "Cursor Agent" across a turn), so the hook channel is the only
-  // way to drive the sidebar spinner + unread path for it — there is no
-  // title-based fallback the way Claude/Codex have. Toggling the setting
-  // takes effect on next launch because the hook scripts are installed once
-  // per boot.
-  const agentDashboardEnabled = store.getSettings().experimentalAgentDashboard === true
-  if (agentDashboardEnabled) {
-    for (const installManagedHooks of [
-      () => claudeHookService.install(),
-      () => codexHookService.install(),
-      () => geminiHookService.install()
-    ]) {
-      try {
-        installManagedHooks()
-      } catch (error) {
-        console.error('[agent-hooks] Failed to install managed hooks:', error)
+    store = new Store()
+    stats = new StatsCollector()
+    claudeUsage = new ClaudeUsageStore(store)
+    codexUsage = new CodexUsageStore(store)
+    rateLimits = new RateLimitService()
+    codexRuntimeHome = new CodexRuntimeHomeService(store)
+    codexAccounts = new CodexAccountService(store, rateLimits, codexRuntimeHome)
+    claudeRuntimeAuth = new ClaudeRuntimeAuthService(store)
+    claudeAccounts = new ClaudeAccountService(store, rateLimits, claudeRuntimeAuth)
+    rateLimits.setCodexHomePathResolver(() => codexRuntimeHome!.prepareForRateLimitFetch())
+    rateLimits.setClaudeAuthPreparationResolver(() => claudeRuntimeAuth!.prepareForRateLimitFetch())
+    rateLimits.setSettingsResolver(() => store!.getSettings())
+    rateLimits.setInactiveClaudeAccountsResolver(() => {
+      const settings = store!.getSettings()
+      return settings.claudeManagedAccounts
+        .filter((account) => account.id !== settings.activeClaudeManagedAccountId)
+        .map((account) => ({ id: account.id, managedAuthPath: account.managedAuthPath }))
+    })
+    rateLimits.setInactiveCodexAccountsResolver(() => {
+      const settings = store!.getSettings()
+      return settings.codexManagedAccounts
+        .filter((account) => account.id !== settings.activeCodexManagedAccountId)
+        .map((account) => ({ id: account.id, managedHomePath: account.managedHomePath }))
+    })
+    runtime = new OrcaRuntimeService(store, stats)
+    starNag = new StarNagService(store, stats)
+    starNag.start()
+    starNag.registerIpcHandlers()
+    runtime.setAgentBrowserBridge(new AgentBrowserBridge(browserManager))
+    nativeTheme.themeSource = store.getSettings().theme ?? 'system'
+    // Why: managed hook installation mutates user-global agent config.
+    // Startup must fail open so a malformed local config never bricks Orca.
+    // Claude/Codex/Gemini installs are gated behind the experimentalAgentDashboard
+    // setting because the feature they feed (the inline agent-activity list) is
+    // still in preview. Cursor installs unconditionally because cursor-agent
+    // emits no title-based working/idle signal at all (its terminal title stays
+    // literally "Cursor Agent" across a turn), so the hook channel is the only
+    // way to drive the sidebar spinner + unread path for it — there is no
+    // title-based fallback the way Claude/Codex have. Toggling the setting
+    // takes effect on next launch because the hook scripts are installed once
+    // per boot.
+    const agentDashboardEnabled = store.getSettings().experimentalAgentDashboard === true
+    if (agentDashboardEnabled) {
+      for (const installManagedHooks of [
+        () => claudeHookService.install(),
+        () => codexHookService.install(),
+        () => geminiHookService.install()
+      ]) {
+        try {
+          installManagedHooks()
+        } catch (error) {
+          console.error('[agent-hooks] Failed to install managed hooks:', error)
+        }
       }
     }
-  }
-  try {
-    cursorHookService.install()
-  } catch (error) {
-    console.error('[agent-hooks] Failed to install Cursor managed hooks:', error)
-  }
-
-  registerAppMenu({
-    onCheckForUpdates: (options) => checkForUpdatesFromMenu(options),
-    onOpenSettings: () => {
-      mainWindow?.webContents.send('ui:openSettings')
-    },
-    onZoomIn: () => {
-      mainWindow?.webContents.send('terminal:zoom', 'in')
-    },
-    onZoomOut: () => {
-      mainWindow?.webContents.send('terminal:zoom', 'out')
-    },
-    onZoomReset: () => {
-      mainWindow?.webContents.send('terminal:zoom', 'reset')
-    },
-    onToggleLeftSidebar: () => {
-      mainWindow?.webContents.send('ui:toggleLeftSidebar')
-    },
-    onToggleRightSidebar: () => {
-      mainWindow?.webContents.send('ui:toggleRightSidebar')
-    },
-    onToggleAppearance: (key) => {
-      if (!store) {
-        return
-      }
-      if (key === 'statusBarVisible') {
-        // Why: status bar visibility lives under the persisted UI state
-        // (ui:set/ui:get), not settings. The renderer owns the authoritative
-        // toggle logic (it knows the current value and persists it back), so
-        // we forward the event and let it flip + store.
-        mainWindow?.webContents.send('ui:toggleStatusBar')
-        return
-      }
-      const current = store.getSettings()
-      store.updateSettings({ [key]: !current[key] })
-      // Why: settings:get returns the current snapshot; renderer tracks
-      // settings through window.api.settings.get(). Push the new value so
-      // the sidebar/titlebar re-render without waiting for a round-trip.
-      mainWindow?.webContents.send('settings:changed', { [key]: !current[key] })
-      rebuildAppMenu()
-    },
-    getAppearanceState: () => {
-      const settings = store?.getSettings()
-      const ui = store?.getUI()
-      return {
-        showTasksButton: settings?.showTasksButton !== false,
-        showTitlebarAgentActivity: settings?.showTitlebarAgentActivity !== false,
-        statusBarVisible: ui?.statusBarVisible !== false
-      }
+    try {
+      cursorHookService.install()
+    } catch (error) {
+      console.error('[agent-hooks] Failed to install Cursor managed hooks:', error)
     }
-  })
-  runtimeRpc = new OrcaRuntimeRpcServer({
-    runtime,
-    userDataPath: app.getPath('userData')
-  })
 
-  // Why: the persistent-terminal daemon is always started. If it fails, the
-  // LocalPtyProvider (initialized at module load in ipc/pty.ts) remains as the
-  // implicit fallback — terminals work, just without cross-restart persistence.
-  try {
-    await initDaemonPtyProvider()
-  } catch (error) {
-    console.error('[daemon] Failed to start daemon PTY provider, falling back to local:', error)
-  }
-  setAppRuntimeFlags({
-    agentDashboardEnabledAtStartup: agentDashboardEnabled
-  })
-
-  // Why: the hook server runs unconditionally so cursor-agent panes can reach
-  // it. Claude/Codex/Gemini hook scripts stay uninstalled while the
-  // experimentalAgentDashboard setting is off, so only cursor events flow
-  // in by default. PTY spawn env reads ORCA_AGENT_HOOK_* from the live
-  // server state, so the server must start before the window opens —
-  // otherwise restored terminals race ahead without the env on first launch.
-  try {
-    await agentHookServer.start({
-      env: app.isPackaged ? 'production' : 'development',
-      // Why: passing the userData path lets the server write its endpoint
-      // file (PORT/TOKEN/ENV/VERSION) to a stable location. Hook scripts
-      // source that file at invocation time so they reach the current Orca
-      // even when the PTY's env was frozen under a prior instance.
+    registerAppMenu({
+      onCheckForUpdates: (options) => checkForUpdatesFromMenu(options),
+      onOpenSettings: () => {
+        mainWindow?.webContents.send('ui:openSettings')
+      },
+      onZoomIn: () => {
+        mainWindow?.webContents.send('terminal:zoom', 'in')
+      },
+      onZoomOut: () => {
+        mainWindow?.webContents.send('terminal:zoom', 'out')
+      },
+      onZoomReset: () => {
+        mainWindow?.webContents.send('terminal:zoom', 'reset')
+      },
+      onToggleLeftSidebar: () => {
+        mainWindow?.webContents.send('ui:toggleLeftSidebar')
+      },
+      onToggleRightSidebar: () => {
+        mainWindow?.webContents.send('ui:toggleRightSidebar')
+      },
+      onToggleAppearance: (key) => {
+        if (!store) {
+          return
+        }
+        if (key === 'statusBarVisible') {
+          // Why: status bar visibility lives under the persisted UI state
+          // (ui:set/ui:get), not settings. The renderer owns the authoritative
+          // toggle logic (it knows the current value and persists it back), so
+          // we forward the event and let it flip + store.
+          mainWindow?.webContents.send('ui:toggleStatusBar')
+          return
+        }
+        const current = store.getSettings()
+        store.updateSettings({ [key]: !current[key] })
+        // Why: settings:get returns the current snapshot; renderer tracks
+        // settings through window.api.settings.get(). Push the new value so
+        // the sidebar/titlebar re-render without waiting for a round-trip.
+        mainWindow?.webContents.send('settings:changed', { [key]: !current[key] })
+        rebuildAppMenu()
+      },
+      getAppearanceState: () => {
+        const settings = store?.getSettings()
+        const ui = store?.getUI()
+        return {
+          showTasksButton: settings?.showTasksButton !== false,
+          showTitlebarAgentActivity: settings?.showTitlebarAgentActivity !== false,
+          statusBarVisible: ui?.statusBarVisible !== false
+        }
+      }
+    })
+    runtimeRpc = new OrcaRuntimeRpcServer({
+      runtime,
       userDataPath: app.getPath('userData')
     })
-  } catch (error) {
-    // Why: Claude/Codex/Gemini/OpenCode/Cursor hook callbacks are sidebar
-    // enrichment only. Orca must still boot even if the local loopback
-    // receiver cannot bind on this launch.
-    console.error('[agent-hooks] Failed to start local hook server:', error)
-  }
 
-  // Why: once the hook server is ready (or has already failed open), window
-  // creation and runtime RPC startup are independent.
-  const [win] = await Promise.all([
-    Promise.resolve(openMainWindow()),
-    runtimeRpc.start().catch((error) => {
-      console.error('[runtime] Failed to start local RPC transport:', error)
-    })
-  ])
-
-  // Why: the macOS notification permission dialog must fire after the window
-  // is visible and focused. If it fires before the window exists, the system
-  // dialog either doesn't appear or gets immediately covered by the maximized
-  // window, making it impossible for the user to click "Allow".
-  win.once('show', () => {
-    triggerStartupNotificationRegistration(store!)
-  })
-
-  app.on('activate', () => {
-    // Don't re-open a window while Squirrel's ShipIt is replacing the .app
-    // bundle.  Without this guard the old version gets resurrected and the
-    // update never applies.
-    if (BrowserWindow.getAllWindows().length === 0 && !isQuittingForUpdate()) {
-      openMainWindow()
+    // Why: the persistent-terminal daemon is always started. If it fails, the
+    // LocalPtyProvider (initialized at module load in ipc/pty.ts) remains as the
+    // implicit fallback — terminals work, just without cross-restart persistence.
+    try {
+      await initDaemonPtyProvider()
+    } catch (error) {
+      console.error('[daemon] Failed to start daemon PTY provider, falling back to local:', error)
     }
+    setAppRuntimeFlags({
+      agentDashboardEnabledAtStartup: agentDashboardEnabled
+    })
+
+    // Why: the hook server runs unconditionally so cursor-agent panes can reach
+    // it. Claude/Codex/Gemini hook scripts stay uninstalled while the
+    // experimentalAgentDashboard setting is off, so only cursor events flow
+    // in by default. PTY spawn env reads ORCA_AGENT_HOOK_* from the live
+    // server state, so the server must start before the window opens —
+    // otherwise restored terminals race ahead without the env on first launch.
+    try {
+      await agentHookServer.start({
+        env: app.isPackaged ? 'production' : 'development',
+        // Why: passing the userData path lets the server write its endpoint
+        // file (PORT/TOKEN/ENV/VERSION) to a stable location. Hook scripts
+        // source that file at invocation time so they reach the current Orca
+        // even when the PTY's env was frozen under a prior instance.
+        userDataPath: app.getPath('userData')
+      })
+    } catch (error) {
+      // Why: Claude/Codex/Gemini/OpenCode/Cursor hook callbacks are sidebar
+      // enrichment only. Orca must still boot even if the local loopback
+      // receiver cannot bind on this launch.
+      console.error('[agent-hooks] Failed to start local hook server:', error)
+    }
+
+    // Why: once the hook server is ready (or has already failed open), window
+    // creation and runtime RPC startup are independent.
+    const [win] = await Promise.all([
+      Promise.resolve(openMainWindow()),
+      runtimeRpc.start().catch((error) => {
+        console.error('[runtime] Failed to start local RPC transport:', error)
+      })
+    ])
+
+    // Why: the macOS notification permission dialog must fire after the window
+    // is visible and focused. If it fires before the window exists, the system
+    // dialog either doesn't appear or gets immediately covered by the maximized
+    // window, making it impossible for the user to click "Allow".
+    win.once('show', () => {
+      triggerStartupNotificationRegistration(store!)
+    })
+
+    app.on('activate', () => {
+      // Don't re-open a window while Squirrel's ShipIt is replacing the .app
+      // bundle.  Without this guard the old version gets resurrected and the
+      // update never applies.
+      if (BrowserWindow.getAllWindows().length === 0 && !isQuittingForUpdate()) {
+        openMainWindow()
+      }
+    })
   })
-})
+}
 
 app.on('before-quit', () => {
   isQuitting = true
