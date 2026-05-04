@@ -238,13 +238,33 @@ export function formatScreenshot(result: BrowserScreenshotResult): string {
 }
 
 export function formatTabList(result: BrowserTabListResult): string {
+  return formatTabListWithProfiles(result, false)
+}
+
+export function formatTabListWithProfiles(
+  result: BrowserTabListResult,
+  showProfile: boolean
+): string {
   if (result.tabs.length === 0) {
     return 'No browser tabs open.'
   }
   return result.tabs
     .map((t) => {
       const marker = t.active ? '* ' : '  '
-      return `${marker}[${t.index}] ${t.browserPageId}  ${t.title} — ${t.url}`
+      const profile = showProfile ? `  [${t.profileLabel ?? t.profileId ?? 'Unknown'}]` : ''
+      return `${marker}[${t.index}] ${t.browserPageId}  ${t.title} — ${t.url}${profile}`
+    })
+    .join('\n')
+}
+
+export function formatBrowserProfileList(result: BrowserProfileListResult): string {
+  if (result.profiles.length === 0) {
+    return 'No browser profiles found.'
+  }
+  return result.profiles
+    .map((profile) => {
+      const source = profile.source?.browserFamily ?? 'none'
+      return `${profile.id}  ${profile.label}  ${profile.scope}  source:${source}`
     })
     .join('\n')
 }

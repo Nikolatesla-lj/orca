@@ -154,6 +154,7 @@ export type BrowserApi = {
     browserPageId: string
     workspaceId: string
     worktreeId: string
+    sessionProfileId?: string | null
     webContentsId: number
   }) => Promise<void>
   unregisterGuest: (args: { browserPageId: string }) => Promise<void>
@@ -942,9 +943,18 @@ export type PreloadApi = {
     onWorktreeHistoryNavigate: (callback: (direction: 'back' | 'forward') => void) => () => void
     onNewBrowserTab: (callback: () => void) => () => void
     onRequestTabCreate: (
-      callback: (data: { requestId: string; url: string; worktreeId?: string }) => void
+      callback: (data: {
+        requestId: string
+        url: string
+        worktreeId?: string
+        sessionProfileId?: string
+      }) => void
     ) => () => void
     replyTabCreate: (reply: { requestId: string; browserPageId?: string; error?: string }) => void
+    onRequestTabSetProfile: (
+      callback: (data: { requestId: string; browserPageId: string; profileId: string }) => void
+    ) => () => void
+    replyTabSetProfile: (reply: { requestId: string; error?: string }) => void
     onRequestTabClose: (
       callback: (data: { requestId: string; tabId: string | null; worktreeId?: string }) => void
     ) => () => void

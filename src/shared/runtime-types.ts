@@ -259,6 +259,8 @@ export type BrowserTabInfo = {
   url: string
   title: string
   active: boolean
+  profileId?: string | null
+  profileLabel?: string | null
 }
 
 export type BrowserTabListResult = {
@@ -268,6 +270,12 @@ export type BrowserTabListResult = {
 export type BrowserTabSwitchResult = {
   switched: number
   browserPageId: string
+}
+
+export type BrowserTabSetProfileResult = {
+  browserPageId: string
+  profileId: string | null
+  profileLabel: string | null
 }
 
 export type BrowserProfileListResult = {

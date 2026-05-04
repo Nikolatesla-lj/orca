@@ -889,6 +889,7 @@ const api = {
       browserPageId: string
       workspaceId: string
       worktreeId: string
+      sessionProfileId?: string | null
       webContentsId: number
     }): Promise<void> => ipcRenderer.invoke('browser:registerGuest', args),
 
@@ -1504,11 +1505,16 @@ const api = {
       return () => ipcRenderer.removeListener('ui:newBrowserTab', listener)
     },
     onRequestTabCreate: (
-      callback: (data: { requestId: string; url: string; worktreeId?: string }) => void
+      callback: (data: {
+        requestId: string
+        url: string
+        worktreeId?: string
+        sessionProfileId?: string
+      }) => void
     ): (() => void) => {
       const listener = (
         _event: Electron.IpcRendererEvent,
-        data: { requestId: string; url: string; worktreeId?: string }
+        data: { requestId: string; url: string; worktreeId?: string; sessionProfileId?: string }
       ) => callback(data)
       ipcRenderer.on('browser:requestTabCreate', listener)
       return () => ipcRenderer.removeListener('browser:requestTabCreate', listener)
@@ -1519,6 +1525,19 @@ const api = {
       error?: string
     }): void => {
       ipcRenderer.send('browser:tabCreateReply', reply)
+    },
+    onRequestTabSetProfile: (
+      callback: (data: { requestId: string; browserPageId: string; profileId: string }) => void
+    ): (() => void) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        data: { requestId: string; browserPageId: string; profileId: string }
+      ) => callback(data)
+      ipcRenderer.on('browser:requestTabSetProfile', listener)
+      return () => ipcRenderer.removeListener('browser:requestTabSetProfile', listener)
+    },
+    replyTabSetProfile: (reply: { requestId: string; error?: string }): void => {
+      ipcRenderer.send('browser:tabSetProfileReply', reply)
     },
     onRequestTabClose: (
       callback: (data: { requestId: string; tabId: string | null; worktreeId?: string }) => void

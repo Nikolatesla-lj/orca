@@ -90,7 +90,8 @@ export const TabSwitch = BrowserTarget.extend({
 
 export const TabCreate = z.object({
   url: OptionalString,
-  worktree: OptionalString
+  worktree: OptionalString,
+  profileId: OptionalString
 })
 
 export const TabClose = z.object({
@@ -100,6 +101,10 @@ export const TabClose = z.object({
     .pipe(z.number().optional()),
   page: OptionalString,
   worktree: OptionalString
+})
+
+export const TabSetProfile = BrowserTarget.extend({
+  profileId: requiredString('Missing required --profile')
 })
 
 export const Drag = BrowserTarget.extend({

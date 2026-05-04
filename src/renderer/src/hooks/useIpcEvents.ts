@@ -25,6 +25,7 @@ import { isGitRepoKind } from '../../../shared/repo-kind'
 import { focusTerminalTabSurface } from '@/lib/focus-terminal-tab-surface'
 import { setFitOverride, hydrateOverrides } from '@/lib/pane-manager/mobile-fit-overrides'
 import { setDriverForPty } from '@/lib/pane-manager/mobile-driver-state'
+import { destroyPersistentWebview } from '@/components/browser-pane/webview-registry'
 
 export { resolveZoomTarget } from './resolve-zoom-target'
 
@@ -442,7 +443,8 @@ export function useIpcEvents(): void {
 
           const workspace = store.createBrowserTab(worktreeId, data.url, {
             title: data.url,
-            targetGroupId: activeBrowserUnifiedTab?.groupId
+            targetGroupId: activeBrowserUnifiedTab?.groupId,
+            sessionProfileId: data.sessionProfileId
           })
           // Why: registerGuest fires with the page ID (not workspace ID) as
           // browserPageId. Return the page ID so waitForTabRegistration can
@@ -454,6 +456,38 @@ export function useIpcEvents(): void {
           window.api.ui.replyTabCreate({
             requestId: data.requestId,
             error: err instanceof Error ? err.message : 'Tab creation failed'
+          })
+        }
+      })
+    )
+
+    unsubs.push(
+      window.api.ui.onRequestTabSetProfile((data) => {
+        try {
+          const store = useAppStore.getState()
+          const owningWorkspace = Object.values(store.browserTabsByWorktree)
+            .flat()
+            .find((workspace) => {
+              if (workspace.id === data.browserPageId) {
+                return true
+              }
+              const pages = store.browserPagesByWorkspace[workspace.id] ?? []
+              return pages.some((page) => page.id === data.browserPageId)
+            })
+          if (!owningWorkspace) {
+            window.api.ui.replyTabSetProfile({
+              requestId: data.requestId,
+              error: `Browser tab ${data.browserPageId} not found`
+            })
+            return
+          }
+          destroyPersistentWebview(data.browserPageId)
+          store.switchBrowserTabProfile(owningWorkspace.id, data.profileId)
+          window.api.ui.replyTabSetProfile({ requestId: data.requestId })
+        } catch (err) {
+          window.api.ui.replyTabSetProfile({
+            requestId: data.requestId,
+            error: err instanceof Error ? err.message : 'Tab profile update failed'
           })
         }
       })

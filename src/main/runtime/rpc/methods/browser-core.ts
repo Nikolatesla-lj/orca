@@ -22,6 +22,7 @@ import {
   Scroll,
   Select,
   SelectorPath,
+  TabSetProfile,
   TabClose,
   TabCreate,
   TabList,
@@ -101,6 +102,11 @@ export const BROWSER_CORE_METHODS: RpcMethod[] = [
     name: 'browser.tabCreate',
     params: TabCreate,
     handler: async (params, { runtime }) => runtime.browserTabCreate(params)
+  }),
+  defineMethod({
+    name: 'browser.tabSetProfile',
+    params: TabSetProfile,
+    handler: async (params, { runtime }) => runtime.browserTabSetProfile(params)
   }),
   defineMethod({
     name: 'browser.tabClose',

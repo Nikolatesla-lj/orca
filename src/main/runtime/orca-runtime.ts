@@ -56,6 +56,7 @@ import type {
   BrowserScreenshotResult,
   BrowserEvalResult,
   BrowserTabListResult,
+  BrowserTabSetProfileResult,
   BrowserTabSwitchResult,
   BrowserProfileCreateResult,
   BrowserProfileDeleteResult,
@@ -84,6 +85,7 @@ import type {
 } from '../../shared/runtime-types'
 import { BrowserWindow, ipcMain } from 'electron'
 import type { AgentBrowserBridge } from '../browser/agent-browser-bridge'
+import { browserManager } from '../browser/browser-manager'
 import { BrowserError } from '../browser/cdp-bridge'
 import { browserSessionRegistry } from '../browser/browser-session-registry'
 import { waitForTabRegistration } from '../ipc/browser'
@@ -4452,7 +4454,20 @@ export class OrcaRuntimeService {
 
   async browserTabList(params: { worktree?: string }): Promise<BrowserTabListResult> {
     const worktreeId = await this.resolveBrowserWorktreeId(params.worktree)
-    return this.requireAgentBrowserBridge().tabList(worktreeId)
+    const result = this.requireAgentBrowserBridge().tabList(worktreeId)
+    return {
+      tabs: result.tabs.map((tab) => {
+        const rawProfileId = browserManager.getSessionProfileIdForTab(tab.browserPageId)
+        const profile =
+          browserSessionRegistry.getProfile(rawProfileId ?? 'default') ??
+          browserSessionRegistry.getDefaultProfile()
+        return {
+          ...tab,
+          profileId: profile.id,
+          profileLabel: profile.label
+        }
+      })
+    }
   }
 
   async browserTabSwitch(
@@ -5104,6 +5119,7 @@ export class OrcaRuntimeService {
   async browserTabCreate(params: {
     url?: string
     worktree?: string
+    profileId?: string
   }): Promise<{ browserPageId: string }> {
     const win = this.getAuthoritativeWindow()
     const requestId = randomUUID()
@@ -5147,7 +5163,12 @@ export class OrcaRuntimeService {
         }
       }
       ipcMain.on('browser:tabCreateReply', handler)
-      win.webContents.send('browser:requestTabCreate', { requestId, url, worktreeId })
+      win.webContents.send('browser:requestTabCreate', {
+        requestId,
+        url,
+        worktreeId,
+        sessionProfileId: params.profileId
+      })
     })
 
     // Why: the renderer creates the Zustand tab immediately, but the webview must
@@ -5187,6 +5208,59 @@ export class OrcaRuntimeService {
     }
 
     return { browserPageId }
+  }
+
+  async browserTabSetProfile(
+    params: {
+      profileId: string
+    } & BrowserCommandTargetParams
+  ): Promise<BrowserTabSetProfileResult> {
+    const target = await this.resolveBrowserCommandTarget(params)
+    const browserPageId = target.browserPageId ?? this.requireAgentBrowserBridge().getActivePageId(target.worktreeId)
+    if (!browserPageId) {
+      throw new BrowserError('browser_no_tab', 'No browser tab open in this worktree')
+    }
+    const profile = browserSessionRegistry.getProfile(params.profileId)
+    if (!profile) {
+      throw new BrowserError('invalid_argument', `Browser profile ${params.profileId} was not found`)
+    }
+
+    const win = this.getAuthoritativeWindow()
+    const requestId = randomUUID()
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        ipcMain.removeListener('browser:tabSetProfileReply', handler)
+        reject(new Error('Tab profile update timed out'))
+      }, 10_000)
+
+      const handler = (
+        _event: Electron.IpcMainEvent,
+        reply: { requestId: string; error?: string }
+      ): void => {
+        if (reply.requestId !== requestId) {
+          return
+        }
+        clearTimeout(timer)
+        ipcMain.removeListener('browser:tabSetProfileReply', handler)
+        if (reply.error) {
+          reject(new Error(reply.error))
+        } else {
+          resolve()
+        }
+      }
+      ipcMain.on('browser:tabSetProfileReply', handler)
+      win.webContents.send('browser:requestTabSetProfile', {
+        requestId,
+        browserPageId,
+        profileId: profile.id
+      })
+    })
+
+    return {
+      browserPageId,
+      profileId: profile.id,
+      profileLabel: profile.label
+    }
   }
 
   async browserProfileList(): Promise<BrowserProfileListResult> {

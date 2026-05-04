@@ -1,6 +1,10 @@
-import type { BrowserTabListResult, BrowserTabSwitchResult } from '../../shared/runtime-types'
+import type {
+  BrowserTabListResult,
+  BrowserTabSetProfileResult,
+  BrowserTabSwitchResult
+} from '../../shared/runtime-types'
 import type { CommandHandler } from '../dispatch'
-import { formatTabList, printResult } from '../format'
+import { formatTabList, formatTabListWithProfiles, printResult } from '../format'
 import {
   getOptionalNonNegativeIntegerFlag,
   getOptionalStringFlag,
@@ -13,7 +17,10 @@ export const BROWSER_TAB_HANDLERS: Record<string, CommandHandler> = {
   'tab list': async ({ flags, client, cwd, json }) => {
     const worktree = await getBrowserWorktreeSelector(flags, cwd, client)
     const result = await client.call<BrowserTabListResult>('browser.tabList', { worktree })
-    printResult(result, json, formatTabList)
+    const showProfile = flags.has('show-profile')
+    printResult(result, json, (value) =>
+      showProfile ? formatTabListWithProfiles(value, true) : formatTabList(value)
+    )
   },
   'tab switch': async ({ flags, client, cwd, json }) => {
     const index = getOptionalNonNegativeIntegerFlag(flags, 'index')
@@ -34,13 +41,28 @@ export const BROWSER_TAB_HANDLERS: Record<string, CommandHandler> = {
   },
   'tab create': async ({ flags, client, cwd, json }) => {
     const url = getOptionalStringFlag(flags, 'url')
+    const profileId = getOptionalStringFlag(flags, 'profile')
     const worktree = await getBrowserWorktreeSelector(flags, cwd, client)
     const result = await client.call<{ browserPageId: string }>(
       'browser.tabCreate',
-      { url, worktree },
+      { url, worktree, profileId },
       { timeoutMs: 60_000 }
     )
     printResult(result, json, (v) => `Created tab ${v.browserPageId}`)
+  },
+  'tab profile set': async ({ flags, client, cwd, json }) => {
+    const profileId = getRequiredStringFlag(flags, 'profile')
+    const target = await getBrowserCommandTarget(flags, cwd, client)
+    const result = await client.call<BrowserTabSetProfileResult>('browser.tabSetProfile', {
+      ...target,
+      profileId
+    })
+    printResult(
+      result,
+      json,
+      (value) =>
+        `Switched ${value.browserPageId} to ${value.profileLabel ?? value.profileId ?? 'default'}`
+    )
   },
   'tab close': async ({ flags, client, cwd, json }) => {
     const index = getOptionalNonNegativeIntegerFlag(flags, 'index')

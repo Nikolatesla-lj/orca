@@ -154,8 +154,8 @@ export const BROWSER_BASIC_COMMAND_SPECS: CommandSpec[] = [
   {
     path: ['tab', 'list'],
     summary: 'List open browser tabs',
-    usage: 'orca tab list [--worktree <selector|all>] [--json]',
-    allowedFlags: [...GLOBAL_FLAGS, 'worktree']
+    usage: 'orca tab list [--worktree <selector|all>] [--show-profile] [--json]',
+    allowedFlags: [...GLOBAL_FLAGS, 'worktree', 'show-profile']
   },
   {
     path: ['tab', 'switch'],
@@ -166,8 +166,33 @@ export const BROWSER_BASIC_COMMAND_SPECS: CommandSpec[] = [
   {
     path: ['tab', 'create'],
     summary: 'Create a new browser tab in the current worktree',
-    usage: 'orca tab create [--url <url>] [--worktree <selector>] [--json]',
-    allowedFlags: [...GLOBAL_FLAGS, 'url', 'worktree']
+    usage: 'orca tab create [--url <url>] [--worktree <selector>] [--profile <id>] [--json]',
+    allowedFlags: [...GLOBAL_FLAGS, 'url', 'worktree', 'profile']
+  },
+  {
+    path: ['tab', 'profile', 'set'],
+    summary: 'Switch a browser tab to a different browser profile',
+    usage:
+      'orca tab profile set (--page <id> | --worktree <selector>) --profile <id> [--json]',
+    allowedFlags: [...GLOBAL_FLAGS, 'profile', 'worktree']
+  },
+  {
+    path: ['tab', 'profile', 'list'],
+    summary: 'List browser session profiles available to browser tabs',
+    usage: 'orca tab profile list [--json]',
+    allowedFlags: [...GLOBAL_FLAGS]
+  },
+  {
+    path: ['tab', 'profile', 'create'],
+    summary: 'Create a browser session profile for browser tabs',
+    usage: 'orca tab profile create --label <name> [--scope <isolated|imported>] [--json]',
+    allowedFlags: [...GLOBAL_FLAGS, 'label', 'scope']
+  },
+  {
+    path: ['tab', 'profile', 'delete'],
+    summary: 'Delete a browser session profile used by browser tabs',
+    usage: 'orca tab profile delete --profile <id> [--json]',
+    allowedFlags: [...GLOBAL_FLAGS, 'profile']
   },
   {
     path: ['tab', 'profile', 'list'],
