@@ -158,6 +158,18 @@ export const BROWSER_BASIC_COMMAND_SPECS: CommandSpec[] = [
     allowedFlags: [...GLOBAL_FLAGS, 'worktree', 'show-profile']
   },
   {
+    path: ['tab', 'show'],
+    summary: 'Show one browser tab by page id',
+    usage: 'orca tab show --page <id> [--worktree <selector>] [--json]',
+    allowedFlags: [...GLOBAL_FLAGS, 'worktree']
+  },
+  {
+    path: ['tab', 'current'],
+    summary: 'Show the current browser tab',
+    usage: 'orca tab current [--worktree <selector|all>] [--json]',
+    allowedFlags: [...GLOBAL_FLAGS, 'worktree']
+  },
+  {
     path: ['tab', 'switch'],
     summary: 'Switch the active browser tab',
     usage: 'orca tab switch (--index <n> | --page <id>) [--worktree <selector>] [--json]',
@@ -177,6 +189,12 @@ export const BROWSER_BASIC_COMMAND_SPECS: CommandSpec[] = [
     allowedFlags: [...GLOBAL_FLAGS, 'profile', 'worktree']
   },
   {
+    path: ['tab', 'profile', 'show'],
+    summary: 'Show the browser profile bound to a tab',
+    usage: 'orca tab profile show --page <id> [--worktree <selector>] [--json]',
+    allowedFlags: [...GLOBAL_FLAGS, 'worktree']
+  },
+  {
     path: ['tab', 'profile', 'list'],
     summary: 'List browser session profiles available to browser tabs',
     usage: 'orca tab profile list [--json]',
@@ -193,6 +211,19 @@ export const BROWSER_BASIC_COMMAND_SPECS: CommandSpec[] = [
     summary: 'Delete a browser session profile used by browser tabs',
     usage: 'orca tab profile delete --profile <id> [--json]',
     allowedFlags: [...GLOBAL_FLAGS, 'profile']
+  },
+  {
+    path: ['tab', 'profile', 'use-default'],
+    summary: 'Switch a browser tab back to the default browser profile',
+    usage: 'orca tab profile use-default --page <id> [--worktree <selector>] [--json]',
+    allowedFlags: [...GLOBAL_FLAGS, 'worktree']
+  },
+  {
+    path: ['tab', 'profile', 'clone'],
+    summary: 'Clone a browser tab into a different browser profile',
+    usage:
+      'orca tab profile clone --profile <id> [--page <id>] [--worktree <selector>] [--json]',
+    allowedFlags: [...GLOBAL_FLAGS, 'profile', 'worktree']
   },
   {
     path: ['tab', 'close'],

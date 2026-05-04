@@ -59,10 +59,15 @@ Orchestration:
 Browser Automation:
   tab create                Create a new browser tab (navigates to --url)
   tab list                  List open browser tabs
+  tab show                  Show one browser tab by page id
+  tab current               Show the current browser tab
   tab profile list          List browser session profiles
   tab profile create        Create a browser session profile
   tab profile delete        Delete a browser session profile
   tab profile set           Switch a browser tab to a different profile
+  tab profile show          Show the profile bound to a browser tab
+  tab profile use-default   Switch a browser tab back to the default profile
+  tab profile clone         Clone a browser tab into another profile
   tab switch                Switch the active browser tab by --index or --page
   tab close                 Close a browser tab by --index/--page or the current tab
   snapshot                  Accessibility snapshot with element refs (e.g. @e1, @e2)
@@ -187,7 +192,7 @@ Browser Options:
   --amount <pixels>         Scroll distance in pixels (default: viewport height)
   --index <n>               Tab index (from \`tab list\`)
   --page <id>               Stable browser page id (preferred for concurrent workflows)
-  --profile <id>            Browser profile id (see \`orca profile list\`)
+  --profile <id>            Browser profile id (see \`orca tab profile list\`)
   --show-profile            Include the tab's browser profile in text output
   --format <png|jpeg>       Screenshot image format
   --from <ref>              Drag source element ref
@@ -210,7 +215,10 @@ Examples:
   $ orca terminal wait --terminal term_123 --for exit --timeout-ms 60000 --json
   $ orca tab profile list
   $ orca tab profile create --label Work
+  $ orca tab current --json
+  $ orca tab show --page page_123 --json
   $ orca tab create --url https://example.com --profile work
+  $ orca tab profile clone --page page_123 --profile work --json
   $ orca snapshot
   $ orca click --element e3
   $ orca fill --element e5 --value "hello"

@@ -209,6 +209,54 @@ describe('orca cli browser page targeting', () => {
         '  [1] page-2  Mail — https://mail.example.com  [Work]'
     )
   })
+
+  it('shows a single tab by page id', async () => {
+    queueFixtures(
+      callMock,
+      okFixture('req_tab_show', {
+        tab: {
+          browserPageId: 'page-1',
+          index: 0,
+          url: 'https://example.com',
+          title: 'Example',
+          active: true,
+          worktreeId: 'repo::/tmp/repo/feature',
+          profileId: 'work',
+          profileLabel: 'Work'
+        }
+      })
+    )
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await main(['tab', 'show', '--page', 'page-1', '--json'], '/tmp/not-an-orca-worktree')
+
+    expect(callMock).toHaveBeenCalledTimes(1)
+    expect(callMock).toHaveBeenCalledWith('browser.tabShow', { page: 'page-1' })
+  })
+
+  it('resolves the current tab in a worktree', async () => {
+    queueFixtures(
+      callMock,
+      okFixture('req_tab_current', {
+        tab: {
+          browserPageId: 'page-2',
+          index: 1,
+          url: 'https://mail.example.com',
+          title: 'Mail',
+          active: true,
+          worktreeId: 'repo::/tmp/repo/feature',
+          profileId: 'default',
+          profileLabel: 'Default'
+        }
+      })
+    )
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await main(['tab', 'current', '--worktree', 'all', '--json'], '/tmp/not-an-orca-worktree')
+
+    expect(callMock).toHaveBeenCalledTimes(1)
+    expect(callMock).toHaveBeenCalledWith('browser.tabCurrent', { worktree: undefined })
+  })
 })
 
 describe('orca cli browser tab profiles', () => {
@@ -275,6 +323,74 @@ describe('orca cli browser tab profiles', () => {
 
     expect(callMock).toHaveBeenCalledTimes(1)
     expect(callMock).toHaveBeenCalledWith('browser.profileDelete', { profileId: 'work' })
+  })
+
+  it('shows the profile bound to a tab', async () => {
+    queueFixtures(
+      callMock,
+      okFixture('req_profile_show', {
+        browserPageId: 'page-2',
+        worktreeId: 'repo::/tmp/repo/feature',
+        profileId: 'work',
+        profileLabel: 'Work'
+      })
+    )
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await main(
+      ['tab', 'profile', 'show', '--page', 'page-2', '--json'],
+      '/tmp/not-an-orca-worktree'
+    )
+
+    expect(callMock).toHaveBeenCalledTimes(1)
+    expect(callMock).toHaveBeenCalledWith('browser.tabProfileShow', { page: 'page-2' })
+  })
+
+  it('switches a tab back to the default profile', async () => {
+    queueFixtures(
+      callMock,
+      okFixture('req_profile_default', {
+        browserPageId: 'page-2',
+        profileId: 'default',
+        profileLabel: 'Default'
+      })
+    )
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await main(
+      ['tab', 'profile', 'use-default', '--page', 'page-2', '--json'],
+      '/tmp/not-an-orca-worktree'
+    )
+
+    expect(callMock).toHaveBeenCalledTimes(1)
+    expect(callMock).toHaveBeenCalledWith('browser.tabSetProfile', {
+      page: 'page-2',
+      profileId: 'default'
+    })
+  })
+
+  it('clones a tab into a different profile', async () => {
+    queueFixtures(
+      callMock,
+      okFixture('req_profile_clone', {
+        browserPageId: 'page-9',
+        sourceBrowserPageId: 'page-2',
+        profileId: 'work',
+        profileLabel: 'Work'
+      })
+    )
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await main(
+      ['tab', 'profile', 'clone', '--page', 'page-2', '--profile', 'work', '--json'],
+      '/tmp/not-an-orca-worktree'
+    )
+
+    expect(callMock).toHaveBeenCalledTimes(1)
+    expect(callMock).toHaveBeenCalledWith('browser.tabProfileClone', {
+      page: 'page-2',
+      profileId: 'work'
+    })
   })
 })
 

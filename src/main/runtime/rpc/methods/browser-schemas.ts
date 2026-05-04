@@ -94,6 +94,15 @@ export const TabCreate = z.object({
   profileId: OptionalString
 })
 
+export const TabShow = z.object({
+  page: requiredString('Missing required --page'),
+  worktree: OptionalPlainString
+})
+
+export const TabCurrent = z.object({
+  worktree: OptionalString
+})
+
 export const TabClose = z.object({
   index: z
     .unknown()
@@ -104,6 +113,10 @@ export const TabClose = z.object({
 })
 
 export const TabSetProfile = BrowserTarget.extend({
+  profileId: requiredString('Missing required --profile')
+})
+
+export const TabProfileClone = BrowserTarget.extend({
   profileId: requiredString('Missing required --profile')
 })
 

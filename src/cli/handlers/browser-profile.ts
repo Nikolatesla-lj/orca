@@ -1,11 +1,15 @@
 import type {
   BrowserProfileCreateResult,
   BrowserProfileDeleteResult,
-  BrowserProfileListResult
+  BrowserProfileListResult,
+  BrowserTabProfileCloneResult,
+  BrowserTabProfileShowResult,
+  BrowserTabSetProfileResult
 } from '../../shared/runtime-types'
 import type { CommandHandler } from '../dispatch'
 import { getOptionalStringFlag, getRequiredStringFlag } from '../flags'
-import { formatBrowserProfileList, printResult } from '../format'
+import { formatBrowserProfileList, formatTabProfileClone, formatTabProfileShow, printResult } from '../format'
+import { getBrowserCommandTarget } from '../selectors'
 
 export const BROWSER_PROFILE_HANDLERS: Record<string, CommandHandler> = {
   'tab profile list': async ({ client, json }) => {
@@ -31,5 +35,41 @@ export const BROWSER_PROFILE_HANDLERS: Record<string, CommandHandler> = {
       profileId
     })
     printResult(result, json, (value) => (value.deleted ? `Deleted profile ${value.profileId}` : `Profile ${value.profileId} was not deleted`))
+  },
+  'tab profile set': async ({ flags, client, cwd, json }) => {
+    const profileId = getRequiredStringFlag(flags, 'profile')
+    const target = await getBrowserCommandTarget(flags, cwd, client)
+    const result = await client.call<BrowserTabSetProfileResult>('browser.tabSetProfile', {
+      ...target,
+      profileId
+    })
+    printResult(
+      result,
+      json,
+      (value) =>
+        `Switched ${value.browserPageId} to ${value.profileLabel ?? value.profileId ?? 'default'}`
+    )
+  },
+  'tab profile show': async ({ flags, client, cwd, json }) => {
+    const target = await getBrowserCommandTarget(flags, cwd, client)
+    const result = await client.call<BrowserTabProfileShowResult>('browser.tabProfileShow', target)
+    printResult(result, json, formatTabProfileShow)
+  },
+  'tab profile use-default': async ({ flags, client, cwd, json }) => {
+    const target = await getBrowserCommandTarget(flags, cwd, client)
+    const result = await client.call<BrowserTabSetProfileResult>('browser.tabSetProfile', {
+      ...target,
+      profileId: 'default'
+    })
+    printResult(result, json, (value) => `Switched ${value.browserPageId} to Default`)
+  },
+  'tab profile clone': async ({ flags, client, cwd, json }) => {
+    const profileId = getRequiredStringFlag(flags, 'profile')
+    const target = await getBrowserCommandTarget(flags, cwd, client)
+    const result = await client.call<BrowserTabProfileCloneResult>('browser.tabProfileClone', {
+      ...target,
+      profileId
+    })
+    printResult(result, json, formatTabProfileClone)
   }
 }

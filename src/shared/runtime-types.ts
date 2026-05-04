@@ -252,6 +252,7 @@ export type BrowserTabInfo = {
   url: string
   title: string
   active: boolean
+  worktreeId?: string | null
   profileId?: string | null
   profileLabel?: string | null
 }
@@ -267,6 +268,28 @@ export type BrowserTabSwitchResult = {
 
 export type BrowserTabSetProfileResult = {
   browserPageId: string
+  profileId: string | null
+  profileLabel: string | null
+}
+
+export type BrowserTabShowResult = {
+  tab: BrowserTabInfo
+}
+
+export type BrowserTabCurrentResult = {
+  tab: BrowserTabInfo
+}
+
+export type BrowserTabProfileShowResult = {
+  browserPageId: string
+  worktreeId: string | null
+  profileId: string | null
+  profileLabel: string | null
+}
+
+export type BrowserTabProfileCloneResult = {
+  browserPageId: string
+  sourceBrowserPageId: string
   profileId: string | null
   profileLabel: string | null
 }
