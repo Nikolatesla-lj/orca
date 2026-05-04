@@ -67,10 +67,7 @@ export function supportsBrowserPageFlag(commandPath: string[]): boolean {
   return ![
     'tab list',
     'tab create',
-    'tab current',
-    'tab profile list',
-    'tab profile create',
-    'tab profile delete'
+    'tab current'
   ].includes(joined)
 }
 

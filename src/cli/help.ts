@@ -61,9 +61,6 @@ Browser Automation:
   tab list                  List open browser tabs
   tab show                  Show one browser tab by page id
   tab current               Show the current browser tab
-  tab profile list          List browser session profiles
-  tab profile create        Create a browser session profile
-  tab profile delete        Delete a browser session profile
   tab profile set           Switch a browser tab to a different profile
   tab profile show          Show the profile bound to a browser tab
   tab profile use-default   Switch a browser tab back to the default profile
@@ -192,7 +189,7 @@ Browser Options:
   --amount <pixels>         Scroll distance in pixels (default: viewport height)
   --index <n>               Tab index (from \`tab list\`)
   --page <id>               Stable browser page id (preferred for concurrent workflows)
-  --profile <id>            Browser profile id (see \`orca tab profile list\`)
+  --profile <id>            Browser profile id
   --show-profile            Include the tab's browser profile in text output
   --format <png|jpeg>       Screenshot image format
   --from <ref>              Drag source element ref
@@ -213,8 +210,6 @@ Examples:
   $ orca terminal list --worktree path:/Users/me/orca/workspaces/orca/cli-test-1 --json
   $ orca terminal send --terminal term_123 --text "hi" --enter
   $ orca terminal wait --terminal term_123 --for exit --timeout-ms 60000 --json
-  $ orca tab profile list
-  $ orca tab profile create --label Work
   $ orca tab current --json
   $ orca tab show --page page_123 --json
   $ orca tab create --url https://example.com --profile work

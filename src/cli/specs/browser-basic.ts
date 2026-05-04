@@ -195,24 +195,6 @@ export const BROWSER_BASIC_COMMAND_SPECS: CommandSpec[] = [
     allowedFlags: [...GLOBAL_FLAGS, 'worktree']
   },
   {
-    path: ['tab', 'profile', 'list'],
-    summary: 'List browser session profiles available to browser tabs',
-    usage: 'orca tab profile list [--json]',
-    allowedFlags: [...GLOBAL_FLAGS]
-  },
-  {
-    path: ['tab', 'profile', 'create'],
-    summary: 'Create a browser session profile for browser tabs',
-    usage: 'orca tab profile create --label <name> [--scope <isolated|imported>] [--json]',
-    allowedFlags: [...GLOBAL_FLAGS, 'label', 'scope']
-  },
-  {
-    path: ['tab', 'profile', 'delete'],
-    summary: 'Delete a browser session profile used by browser tabs',
-    usage: 'orca tab profile delete --profile <id> [--json]',
-    allowedFlags: [...GLOBAL_FLAGS, 'profile']
-  },
-  {
     path: ['tab', 'profile', 'use-default'],
     summary: 'Switch a browser tab back to the default browser profile',
     usage: 'orca tab profile use-default --page <id> [--worktree <selector>] [--json]',
