@@ -1,15 +1,17 @@
 import type {
+  BrowserTabCurrentResult,
   BrowserTabListResult,
-  BrowserTabSetProfileResult,
+  BrowserTabShowResult,
   BrowserTabSwitchResult
 } from '../../shared/runtime-types'
 import type { CommandHandler } from '../dispatch'
-import { formatTabList, formatTabListWithProfiles, printResult } from '../format'
 import {
-  getOptionalNonNegativeIntegerFlag,
-  getOptionalStringFlag,
-  getRequiredStringFlag
-} from '../flags'
+  formatTabList,
+  formatTabListWithProfiles,
+  formatTabShow,
+  printResult
+} from '../format'
+import { getOptionalNonNegativeIntegerFlag, getOptionalStringFlag, getRequiredStringFlag } from '../flags'
 import { RuntimeClientError } from '../runtime-client'
 import { getBrowserCommandTarget, getBrowserWorktreeSelector } from '../selectors'
 
@@ -21,6 +23,16 @@ export const BROWSER_TAB_HANDLERS: Record<string, CommandHandler> = {
     printResult(result, json, (value) =>
       showProfile ? formatTabListWithProfiles(value, true) : formatTabList(value)
     )
+  },
+  'tab show': async ({ flags, client, cwd, json }) => {
+    const target = await getBrowserCommandTarget(flags, cwd, client)
+    const result = await client.call<BrowserTabShowResult>('browser.tabShow', target)
+    printResult(result, json, formatTabShow)
+  },
+  'tab current': async ({ flags, client, cwd, json }) => {
+    const worktree = await getBrowserWorktreeSelector(flags, cwd, client)
+    const result = await client.call<BrowserTabCurrentResult>('browser.tabCurrent', { worktree })
+    printResult(result, json, formatTabShow)
   },
   'tab switch': async ({ flags, client, cwd, json }) => {
     const index = getOptionalNonNegativeIntegerFlag(flags, 'index')
@@ -49,20 +61,6 @@ export const BROWSER_TAB_HANDLERS: Record<string, CommandHandler> = {
       { timeoutMs: 60_000 }
     )
     printResult(result, json, (v) => `Created tab ${v.browserPageId}`)
-  },
-  'tab profile set': async ({ flags, client, cwd, json }) => {
-    const profileId = getRequiredStringFlag(flags, 'profile')
-    const target = await getBrowserCommandTarget(flags, cwd, client)
-    const result = await client.call<BrowserTabSetProfileResult>('browser.tabSetProfile', {
-      ...target,
-      profileId
-    })
-    printResult(
-      result,
-      json,
-      (value) =>
-        `Switched ${value.browserPageId} to ${value.profileLabel ?? value.profileId ?? 'default'}`
-    )
   },
   'tab close': async ({ flags, client, cwd, json }) => {
     const index = getOptionalNonNegativeIntegerFlag(flags, 'index')

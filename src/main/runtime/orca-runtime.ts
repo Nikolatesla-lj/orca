@@ -55,8 +55,12 @@ import type {
   BrowserReloadResult,
   BrowserScreenshotResult,
   BrowserEvalResult,
+  BrowserTabCurrentResult,
   BrowserTabListResult,
+  BrowserTabProfileCloneResult,
+  BrowserTabProfileShowResult,
   BrowserTabSetProfileResult,
+  BrowserTabShowResult,
   BrowserTabSwitchResult,
   BrowserProfileCreateResult,
   BrowserProfileDeleteResult,
@@ -4456,18 +4460,25 @@ export class OrcaRuntimeService {
     const worktreeId = await this.resolveBrowserWorktreeId(params.worktree)
     const result = this.requireAgentBrowserBridge().tabList(worktreeId)
     return {
-      tabs: result.tabs.map((tab) => {
-        const rawProfileId = browserManager.getSessionProfileIdForTab(tab.browserPageId)
-        const profile =
-          browserSessionRegistry.getProfile(rawProfileId ?? 'default') ??
-          browserSessionRegistry.getDefaultProfile()
-        return {
-          ...tab,
-          profileId: profile.id,
-          profileLabel: profile.label
-        }
-      })
+      tabs: result.tabs.map((tab) => this.enrichBrowserTabInfo(tab))
     }
+  }
+
+  async browserTabShow(params: {
+    page: string
+    worktree?: string
+  }): Promise<BrowserTabShowResult> {
+    const worktreeId = await this.resolveBrowserWorktreeId(params.worktree)
+    return { tab: this.describeBrowserTab(params.page, worktreeId) }
+  }
+
+  async browserTabCurrent(params: { worktree?: string }): Promise<BrowserTabCurrentResult> {
+    const worktreeId = await this.resolveBrowserWorktreeId(params.worktree)
+    const browserPageId = this.requireAgentBrowserBridge().getActivePageId(worktreeId)
+    if (!browserPageId) {
+      throw new BrowserError('browser_no_tab', 'No browser tab open in this worktree')
+    }
+    return { tab: this.describeBrowserTab(browserPageId, worktreeId) }
   }
 
   async browserTabSwitch(
@@ -5121,55 +5132,11 @@ export class OrcaRuntimeService {
     worktree?: string
     profileId?: string
   }): Promise<{ browserPageId: string }> {
-    const win = this.getAuthoritativeWindow()
-    const requestId = randomUUID()
     const url = params.url ?? 'about:blank'
-
-    // Why: the renderer's Zustand store keys browser tabs by worktreeId in
-    // "repoId::path" format. The CLI sends a selector (e.g. "path:/Users/...").
-    // Resolve it here so the renderer receives the store-compatible ID.
     const worktreeId = params.worktree
       ? (await this.resolveWorktreeSelector(params.worktree)).id
       : undefined
-
-    // Why: browser webviews only mount when their worktree is active in the UI.
-    // Switch to it before creating the tab so the webview attaches immediately.
-    if (worktreeId) {
-      await this.ensureBrowserWorktreeActive(worktreeId)
-    }
-
-    // Why: tab creation is a renderer-side Zustand store operation. The main process
-    // sends a request, the renderer creates the tab and replies with the workspace ID
-    // (which is the browserPageId used by registerGuest and the bridge).
-    const browserPageId = await new Promise<string>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        ipcMain.removeListener('browser:tabCreateReply', handler)
-        reject(new Error('Tab creation timed out'))
-      }, 10_000)
-
-      const handler = (
-        _event: Electron.IpcMainEvent,
-        reply: { requestId: string; browserPageId?: string; error?: string }
-      ): void => {
-        if (reply.requestId !== requestId) {
-          return
-        }
-        clearTimeout(timer)
-        ipcMain.removeListener('browser:tabCreateReply', handler)
-        if (reply.error) {
-          reject(new Error(reply.error))
-        } else {
-          resolve(reply.browserPageId!)
-        }
-      }
-      ipcMain.on('browser:tabCreateReply', handler)
-      win.webContents.send('browser:requestTabCreate', {
-        requestId,
-        url,
-        worktreeId,
-        sessionProfileId: params.profileId
-      })
-    })
+    const { browserPageId } = await this.createBrowserTabInRenderer(url, worktreeId, params.profileId)
 
     // Why: the renderer creates the Zustand tab immediately, but the webview must
     // mount and fire dom-ready before registerGuest runs. Waiting here ensures the
@@ -5258,6 +5225,54 @@ export class OrcaRuntimeService {
 
     return {
       browserPageId,
+      profileId: profile.id,
+      profileLabel: profile.label
+    }
+  }
+
+  async browserTabProfileShow(
+    params: {
+      page: string
+      worktree?: string
+    }
+  ): Promise<BrowserTabProfileShowResult> {
+    const worktreeId = await this.resolveBrowserWorktreeId(params.worktree)
+    const tab = this.describeBrowserTab(params.page, worktreeId)
+    return {
+      browserPageId: tab.browserPageId,
+      worktreeId: tab.worktreeId ?? null,
+      profileId: tab.profileId ?? null,
+      profileLabel: tab.profileLabel ?? null
+    }
+  }
+
+  async browserTabProfileClone(
+    params: {
+      profileId: string
+    } & BrowserCommandTargetParams
+  ): Promise<BrowserTabProfileCloneResult> {
+    const target = await this.resolveBrowserCommandTarget(params)
+    const sourceBrowserPageId =
+      target.browserPageId ?? this.requireAgentBrowserBridge().getActivePageId(target.worktreeId)
+    if (!sourceBrowserPageId) {
+      throw new BrowserError('browser_no_tab', 'No browser tab open in this worktree')
+    }
+    const sourceTab = this.describeBrowserTab(sourceBrowserPageId, target.worktreeId)
+    const profile = browserSessionRegistry.getProfile(params.profileId)
+    if (!profile) {
+      throw new BrowserError(
+        'invalid_argument',
+        `Browser profile ${params.profileId} was not found`
+      )
+    }
+    const created = await this.createBrowserTabInRenderer(
+      sourceTab.url,
+      sourceTab.worktreeId ?? target.worktreeId,
+      profile.id
+    )
+    return {
+      browserPageId: created.browserPageId,
+      sourceBrowserPageId,
       profileId: profile.id,
       profileLabel: profile.label
     }
@@ -5353,6 +5368,84 @@ export class OrcaRuntimeService {
     })
 
     return { closed: true }
+  }
+
+  private enrichBrowserTabInfo(
+    tab: BrowserTabListResult['tabs'][number]
+  ): BrowserTabListResult['tabs'][number] {
+    const rawProfileId = browserManager.getSessionProfileIdForTab(tab.browserPageId)
+    const profile =
+      browserSessionRegistry.getProfile(rawProfileId ?? 'default') ??
+      browserSessionRegistry.getDefaultProfile()
+    return {
+      ...tab,
+      worktreeId: browserManager.getWorktreeIdForTab(tab.browserPageId) ?? null,
+      profileId: profile.id,
+      profileLabel: profile.label
+    }
+  }
+
+  private describeBrowserTab(
+    browserPageId: string,
+    explicitWorktreeId?: string
+  ): BrowserTabListResult['tabs'][number] {
+    const worktreeId = explicitWorktreeId ?? browserManager.getWorktreeIdForTab(browserPageId)
+    const tab = this.requireAgentBrowserBridge()
+      .tabList(worktreeId)
+      .tabs.find((entry) => entry.browserPageId === browserPageId)
+    if (!tab) {
+      const scope = worktreeId ? ' in this worktree' : ''
+      throw new BrowserError(
+        'browser_tab_not_found',
+        `Browser page ${browserPageId} was not found${scope}`
+      )
+    }
+    return this.enrichBrowserTabInfo(tab)
+  }
+
+  private async createBrowserTabInRenderer(
+    url: string,
+    worktreeId?: string,
+    profileId?: string
+  ): Promise<{ browserPageId: string }> {
+    const win = this.getAuthoritativeWindow()
+    const requestId = randomUUID()
+
+    if (worktreeId) {
+      await this.ensureBrowserWorktreeActive(worktreeId)
+    }
+
+    const browserPageId = await new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        ipcMain.removeListener('browser:tabCreateReply', handler)
+        reject(new Error('Tab creation timed out'))
+      }, 10_000)
+
+      const handler = (
+        _event: Electron.IpcMainEvent,
+        reply: { requestId: string; browserPageId?: string; error?: string }
+      ): void => {
+        if (reply.requestId !== requestId) {
+          return
+        }
+        clearTimeout(timer)
+        ipcMain.removeListener('browser:tabCreateReply', handler)
+        if (reply.error) {
+          reject(new Error(reply.error))
+        } else {
+          resolve(reply.browserPageId!)
+        }
+      }
+      ipcMain.on('browser:tabCreateReply', handler)
+      win.webContents.send('browser:requestTabCreate', {
+        requestId,
+        url,
+        worktreeId,
+        sessionProfileId: profileId
+      })
+    })
+
+    return { browserPageId }
   }
 
   private getAuthoritativeWindow(): BrowserWindow {

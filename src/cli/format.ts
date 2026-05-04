@@ -1,8 +1,12 @@
 import type {
   BrowserProfileListResult,
+  BrowserTabCurrentResult,
   BrowserScreenshotResult,
   BrowserSnapshotResult,
   BrowserTabListResult,
+  BrowserTabProfileCloneResult,
+  BrowserTabProfileShowResult,
+  BrowserTabShowResult,
   CliStatusResult,
   RuntimeRepoList,
   RuntimeRepoSearchRefs,
@@ -263,21 +267,34 @@ export function formatBrowserProfileList(result: BrowserProfileListResult): stri
   }
   return result.profiles
     .map((profile) => {
-      const source = profile.source?.browserFamily ?? 'none'
-      return `${profile.id}  ${profile.label}  ${profile.scope}  source:${source}`
-    })
-    .join('\n')
-}
-
-export function formatBrowserProfileList(result: BrowserProfileListResult): string {
-  if (result.profiles.length === 0) {
-    return 'No browser profiles found.'
-  }
-  return result.profiles
-    .map((profile) => {
       const marker = profile.scope === 'default' ? '* ' : '  '
       const source = profile.source?.browserFamily ?? 'none'
       return `${marker}${profile.id}  ${profile.label}  ${profile.scope}  source:${source}`
     })
     .join('\n')
+}
+
+export function formatTabShow(result: BrowserTabShowResult | BrowserTabCurrentResult): string {
+  const tab = result.tab
+  return [
+    `page: ${tab.browserPageId}`,
+    `title: ${tab.title}`,
+    `url: ${tab.url}`,
+    `active: ${tab.active}`,
+    `worktree: ${tab.worktreeId ?? 'unknown'}`,
+    `profile: ${tab.profileLabel ?? tab.profileId ?? 'unknown'}`
+  ].join('\n')
+}
+
+export function formatTabProfileShow(result: BrowserTabProfileShowResult): string {
+  return [
+    `page: ${result.browserPageId}`,
+    `worktree: ${result.worktreeId ?? 'unknown'}`,
+    `profileId: ${result.profileId ?? 'default'}`,
+    `profile: ${result.profileLabel ?? result.profileId ?? 'default'}`
+  ].join('\n')
+}
+
+export function formatTabProfileClone(result: BrowserTabProfileCloneResult): string {
+  return `Cloned ${result.sourceBrowserPageId} to ${result.browserPageId} (${result.profileLabel ?? result.profileId ?? 'default'})`
 }
