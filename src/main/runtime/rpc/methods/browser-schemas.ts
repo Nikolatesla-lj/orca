@@ -90,7 +90,8 @@ export const TabSwitch = BrowserTarget.extend({
 
 export const TabCreate = z.object({
   url: OptionalString,
-  worktree: OptionalString
+  worktree: OptionalString,
+  profileId: OptionalString
 })
 
 export const TabClose = z.object({
@@ -100,6 +101,10 @@ export const TabClose = z.object({
     .pipe(z.number().optional()),
   page: OptionalString,
   worktree: OptionalString
+})
+
+export const TabSetProfile = BrowserTarget.extend({
+  profileId: requiredString('Missing required --profile')
 })
 
 export const Drag = BrowserTarget.extend({
@@ -151,6 +156,23 @@ export const Highlight = BrowserTarget.extend({
 
 export const Exec = BrowserTarget.extend({
   command: requiredString('Missing required --command')
+})
+
+export const ProfileCreate = z.object({
+  label: requiredString('Missing required --label'),
+  scope: z
+    .unknown()
+    .transform((value) => {
+      if (value === 'imported') {
+        return 'imported'
+      }
+      return 'isolated'
+    })
+    .pipe(z.enum(['isolated', 'imported']))
+})
+
+export const ProfileDelete = z.object({
+  profileId: requiredString('Missing required --profile')
 })
 
 export const Get = BrowserTarget.extend({
