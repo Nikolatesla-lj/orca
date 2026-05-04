@@ -51,6 +51,9 @@ import type {
   BrowserEvalResult,
   BrowserTabListResult,
   BrowserTabSwitchResult,
+  BrowserProfileCreateResult,
+  BrowserProfileDeleteResult,
+  BrowserProfileListResult,
   BrowserHoverResult,
   BrowserDragResult,
   BrowserUploadResult,
@@ -76,6 +79,7 @@ import type {
 import { BrowserWindow, ipcMain } from 'electron'
 import type { AgentBrowserBridge } from '../browser/agent-browser-bridge'
 import { BrowserError } from '../browser/cdp-bridge'
+import { browserSessionRegistry } from '../browser/browser-session-registry'
 import { waitForTabRegistration } from '../ipc/browser'
 import { getPRForBranch } from '../github/client'
 import {
@@ -2998,7 +3002,11 @@ export class OrcaRuntimeService {
         }
       }
       ipcMain.on('browser:tabCreateReply', handler)
-      win.webContents.send('browser:requestTabCreate', { requestId, url, worktreeId })
+      win.webContents.send('browser:requestTabCreate', {
+        requestId,
+        url,
+        worktreeId
+      })
     })
 
     // Why: the renderer creates the Zustand tab immediately, but the webview must
@@ -3038,6 +3046,26 @@ export class OrcaRuntimeService {
     }
 
     return { browserPageId }
+  }
+
+  async browserProfileList(): Promise<BrowserProfileListResult> {
+    return { profiles: browserSessionRegistry.listProfiles() }
+  }
+
+  async browserProfileCreate(params: {
+    label: string
+    scope: 'isolated' | 'imported'
+  }): Promise<BrowserProfileCreateResult> {
+    return {
+      profile: browserSessionRegistry.createProfile(params.scope, params.label)
+    }
+  }
+
+  async browserProfileDelete(params: { profileId: string }): Promise<BrowserProfileDeleteResult> {
+    return {
+      deleted: await browserSessionRegistry.deleteProfile(params.profileId),
+      profileId: params.profileId
+    }
   }
 
   async browserTabClose(params: {
