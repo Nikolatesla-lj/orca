@@ -96,7 +96,7 @@ export const TabCreate = z.object({
 
 export const TabShow = z.object({
   page: requiredString('Missing required --page'),
-  worktree: OptionalPlainString
+  worktree: OptionalString
 })
 
 export const TabCurrent = z.object({

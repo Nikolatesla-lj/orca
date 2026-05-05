@@ -4461,10 +4461,7 @@ export class OrcaRuntimeService {
     }
   }
 
-  async browserTabShow(params: {
-    page: string
-    worktree?: string
-  }): Promise<BrowserTabShowResult> {
+  async browserTabShow(params: { page: string; worktree?: string }): Promise<BrowserTabShowResult> {
     const worktreeId = await this.resolveBrowserWorktreeId(params.worktree)
     return { tab: this.describeBrowserTab(params.page, worktreeId) }
   }
@@ -5133,7 +5130,11 @@ export class OrcaRuntimeService {
     const worktreeId = params.worktree
       ? (await this.resolveWorktreeSelector(params.worktree)).id
       : undefined
-    const { browserPageId } = await this.createBrowserTabInRenderer(url, worktreeId, params.profileId)
+    const { browserPageId } = await this.createBrowserTabInRenderer(
+      url,
+      worktreeId,
+      params.profileId
+    )
 
     // Why: the renderer creates the Zustand tab immediately, but the webview must
     // mount and fire dom-ready before registerGuest runs. Waiting here ensures the
@@ -5180,13 +5181,28 @@ export class OrcaRuntimeService {
     } & BrowserCommandTargetParams
   ): Promise<BrowserTabSetProfileResult> {
     const target = await this.resolveBrowserCommandTarget(params)
-    const browserPageId = target.browserPageId ?? this.requireAgentBrowserBridge().getActivePageId(target.worktreeId)
+    const browserPageId =
+      target.browserPageId ?? this.requireAgentBrowserBridge().getActivePageId(target.worktreeId)
     if (!browserPageId) {
       throw new BrowserError('browser_no_tab', 'No browser tab open in this worktree')
     }
     const profile = browserSessionRegistry.getProfile(params.profileId)
     if (!profile) {
-      throw new BrowserError('invalid_argument', `Browser profile ${params.profileId} was not found`)
+      throw new BrowserError(
+        'invalid_argument',
+        `Browser profile ${params.profileId} was not found`
+      )
+    }
+
+    // Why: short-circuit no-op switches so the renderer doesn't tear down and
+    // remount the webview when the tab is already on the requested profile.
+    const currentProfileId = browserManager.getSessionProfileIdForTab(browserPageId) ?? 'default'
+    if (currentProfileId === profile.id) {
+      return {
+        browserPageId,
+        profileId: profile.id,
+        profileLabel: profile.label
+      }
     }
 
     const win = this.getAuthoritativeWindow()
@@ -5220,6 +5236,19 @@ export class OrcaRuntimeService {
       })
     })
 
+    // Why: the renderer destroys the old webview and remounts on the new
+    // partition. Wait for the re-register so a follow-up tab list
+    // --show-profile reads the updated sessionProfileId from BrowserManager
+    // instead of stale data, and so subsequent CLI ops (snapshot, click, etc.)
+    // hit a guest that's already attached.
+    try {
+      await waitForTabRegistration(browserPageId)
+    } catch {
+      // Best-effort: re-register won't fire if the worktree is hidden. The
+      // store already reflects the new profile; downstream commands retry
+      // once the pane re-mounts.
+    }
+
     return {
       browserPageId,
       profileId: profile.id,
@@ -5227,12 +5256,10 @@ export class OrcaRuntimeService {
     }
   }
 
-  async browserTabProfileShow(
-    params: {
-      page: string
-      worktree?: string
-    }
-  ): Promise<BrowserTabProfileShowResult> {
+  async browserTabProfileShow(params: {
+    page: string
+    worktree?: string
+  }): Promise<BrowserTabProfileShowResult> {
     const worktreeId = await this.resolveBrowserWorktreeId(params.worktree)
     const tab = this.describeBrowserTab(params.page, worktreeId)
     return {
@@ -5267,6 +5294,13 @@ export class OrcaRuntimeService {
       sourceTab.worktreeId ?? target.worktreeId,
       profile.id
     )
+    // Why: parity with browserTabCreate. Wait for the cloned tab's webview to
+    // register so the returned browserPageId is operable by the next CLI call.
+    try {
+      await waitForTabRegistration(created.browserPageId)
+    } catch {
+      // Best-effort: registration may not fire if the worktree is hidden.
+    }
     return {
       browserPageId: created.browserPageId,
       sourceBrowserPageId,

@@ -133,7 +133,17 @@ describe('orca cli browser page targeting', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
 
     await main(
-      ['tab', 'create', '--url', 'https://example.com', '--profile', 'work', '--worktree', 'all', '--json'],
+      [
+        'tab',
+        'create',
+        '--url',
+        'https://example.com',
+        '--profile',
+        'work',
+        '--worktree',
+        'all',
+        '--json'
+      ],
       '/tmp/not-an-orca-worktree'
     )
 
@@ -201,7 +211,6 @@ describe('orca cli browser page targeting', () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
 
     await main(['tab', 'list', '--show-profile', '--worktree', 'all'], '/tmp/not-an-orca-worktree')
-
 
     expect(callMock).toHaveBeenCalledTimes(1)
     expect(callMock).toHaveBeenCalledWith('browser.tabList', { worktree: undefined })
