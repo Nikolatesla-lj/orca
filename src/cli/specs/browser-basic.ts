@@ -182,10 +182,27 @@ export const BROWSER_BASIC_COMMAND_SPECS: CommandSpec[] = [
     allowedFlags: [...GLOBAL_FLAGS, 'url', 'worktree', 'profile']
   },
   {
+    path: ['tab', 'profile', 'list'],
+    summary: 'List browser session profiles available to browser tabs',
+    usage: 'orca tab profile list [--json]',
+    allowedFlags: [...GLOBAL_FLAGS]
+  },
+  {
+    path: ['tab', 'profile', 'create'],
+    summary: 'Create a browser session profile for browser tabs',
+    usage: 'orca tab profile create --label <name> [--scope <isolated|imported>] [--json]',
+    allowedFlags: [...GLOBAL_FLAGS, 'label', 'scope']
+  },
+  {
+    path: ['tab', 'profile', 'delete'],
+    summary: 'Delete a browser session profile used by browser tabs',
+    usage: 'orca tab profile delete --profile <id> [--json]',
+    allowedFlags: [...GLOBAL_FLAGS, 'profile']
+  },
+  {
     path: ['tab', 'profile', 'set'],
     summary: 'Switch a browser tab to a different browser profile',
-    usage:
-      'orca tab profile set (--page <id> | --worktree <selector>) --profile <id> [--json]',
+    usage: 'orca tab profile set (--page <id> | --worktree <selector>) --profile <id> [--json]',
     allowedFlags: [...GLOBAL_FLAGS, 'profile', 'worktree']
   },
   {
@@ -203,8 +220,7 @@ export const BROWSER_BASIC_COMMAND_SPECS: CommandSpec[] = [
   {
     path: ['tab', 'profile', 'clone'],
     summary: 'Clone a browser tab into a different browser profile',
-    usage:
-      'orca tab profile clone --profile <id> [--page <id>] [--worktree <selector>] [--json]',
+    usage: 'orca tab profile clone --profile <id> [--page <id>] [--worktree <selector>] [--json]',
     allowedFlags: [...GLOBAL_FLAGS, 'profile', 'worktree']
   },
   {

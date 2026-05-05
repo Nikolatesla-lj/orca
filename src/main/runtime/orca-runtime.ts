@@ -53,6 +53,9 @@ import type {
   BrowserScrollResult,
   BrowserBackResult,
   BrowserReloadResult,
+  BrowserProfileCreateResult,
+  BrowserProfileDeleteResult,
+  BrowserProfileListResult,
   BrowserScreenshotResult,
   BrowserEvalResult,
   BrowserTabCurrentResult,
@@ -5306,6 +5309,26 @@ export class OrcaRuntimeService {
       sourceBrowserPageId,
       profileId: profile.id,
       profileLabel: profile.label
+    }
+  }
+
+  async browserProfileList(): Promise<BrowserProfileListResult> {
+    return { profiles: browserSessionRegistry.listProfiles() }
+  }
+
+  async browserProfileCreate(params: {
+    label: string
+    scope: 'isolated' | 'imported'
+  }): Promise<BrowserProfileCreateResult> {
+    return {
+      profile: browserSessionRegistry.createProfile(params.scope, params.label)
+    }
+  }
+
+  async browserProfileDelete(params: { profileId: string }): Promise<BrowserProfileDeleteResult> {
+    return {
+      deleted: await browserSessionRegistry.deleteProfile(params.profileId),
+      profileId: params.profileId
     }
   }
 

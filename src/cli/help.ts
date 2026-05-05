@@ -61,6 +61,9 @@ Browser Automation:
   tab list                  List open browser tabs
   tab show                  Show one browser tab by page id
   tab current               Show the current browser tab
+  tab profile list          List browser session profiles
+  tab profile create        Create a browser session profile
+  tab profile delete        Delete a browser session profile
   tab profile set           Switch a browser tab to a different profile
   tab profile show          Show the profile bound to a browser tab
   tab profile use-default   Switch a browser tab back to the default profile

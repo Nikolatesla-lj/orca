@@ -120,6 +120,23 @@ export const TabProfileClone = BrowserTarget.extend({
   profileId: requiredString('Missing required --profile')
 })
 
+export const ProfileCreate = z.object({
+  label: requiredString('Missing required --label'),
+  scope: z
+    .unknown()
+    .transform((value) => {
+      if (value === 'imported') {
+        return 'imported'
+      }
+      return 'isolated'
+    })
+    .pipe(z.enum(['isolated', 'imported']))
+})
+
+export const ProfileDelete = z.object({
+  profileId: requiredString('Missing required --profile')
+})
+
 export const Drag = BrowserTarget.extend({
   from: requiredString('Missing required --from and --to element refs'),
   to: requiredString('Missing required --from and --to element refs')
