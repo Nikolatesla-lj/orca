@@ -504,7 +504,7 @@ export type BrowserSitePermissionRule = {
   profileId: string
   origin: string
   permission: string
-  action: Exclude<BrowserPermissionAction, 'prompt'>
+  action: BrowserPermissionAction
 }
 export type BrowserPermissionNoticePolicy = 'all' | 'important-only' | 'silent-auto-deny'
 

@@ -206,6 +206,27 @@ describe('browser permission policy', () => {
     ])
   })
 
+  it('can remember prompt rules for a specific profile', () => {
+    const next = upsertSitePermissionRule([], {
+      profileId: 'profile-1',
+      origin: 'https://example.com/path',
+      permission: 'notifications',
+      action: 'prompt'
+    })
+
+    expect(
+      resolveBrowserPermissionDecision({
+        origin: 'https://example.com/other',
+        permission: 'notifications',
+        profileId: 'profile-1',
+        settings: settings({
+          browserInteractionMode: 'agent',
+          browserSitePermissionRules: next
+        })
+      })
+    ).toBe('prompt')
+  })
+
   it('suppresses low-signal notices when policy is important-only', () => {
     expect(shouldNotifyPermissionDenied('notifications', 'important-only')).toBe(true)
     expect(shouldNotifyPermissionDenied('pointerLock', 'important-only')).toBe(false)

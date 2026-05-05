@@ -176,7 +176,7 @@ export function BrowserPermissionsPane({
           <div className="space-y-0.5">
             <Label>Remembered Site Rules</Label>
             <p className="text-xs text-muted-foreground">
-              Human-mode prompts can remember a site-specific allow or deny decision here.
+              Human-mode prompts and CLI rules can remember site-specific decisions here.
             </p>
           </div>
           <Button

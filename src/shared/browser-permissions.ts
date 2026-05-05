@@ -185,7 +185,7 @@ export function upsertSitePermissionRule(
   return [...remaining, { ...nextRule, profileId, origin: normalizedOrigin }]
 }
 
-function normalizeProfileId(profileId: string | null | undefined): string {
+export function normalizeProfileId(profileId: string | null | undefined): string {
   const trimmed = profileId?.trim()
   return trimmed || DEFAULT_BROWSER_PROFILE_ID
 }
@@ -196,8 +196,6 @@ function isBrowserPermissionAction(action: unknown): action is BrowserPermission
   )
 }
 
-function isRememberedPermissionAction(
-  action: unknown
-): action is Exclude<BrowserPermissionAction, 'prompt'> {
-  return action === 'allow' || action === 'deny'
+function isRememberedPermissionAction(action: unknown): action is BrowserPermissionAction {
+  return isBrowserPermissionAction(action)
 }
