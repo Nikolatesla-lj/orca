@@ -255,8 +255,9 @@ export function formatBrowserProfileList(result: BrowserProfileListResult): stri
   }
   return result.profiles
     .map((profile) => {
+      const marker = profile.scope === 'default' ? '* ' : '  '
       const source = profile.source?.browserFamily ?? 'none'
-      return `${profile.id}  ${profile.label}  ${profile.scope}  source:${source}`
+      return `${marker}${profile.id}  ${profile.label}  ${profile.scope}  source:${source}`
     })
     .join('\n')
 }

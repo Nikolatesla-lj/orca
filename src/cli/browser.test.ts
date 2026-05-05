@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Why: this file groups every CLI browser-command test (page targeting, profiles, waits, viewport) so test-fixture imports and the runtime-client mock stay shared in one place. */
 import path from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -143,7 +144,12 @@ describe('orca cli browser tab profiles', () => {
       okFixture('req_profiles', {
         profiles: [
           { id: 'default', scope: 'default', label: 'Default', partition: 'persist:orca-browser' },
-          { id: 'work', scope: 'isolated', label: 'Work', partition: 'persist:orca-browser-session-work' }
+          {
+            id: 'work',
+            scope: 'isolated',
+            label: 'Work',
+            partition: 'persist:orca-browser-session-work'
+          }
         ]
       })
     )
@@ -153,6 +159,17 @@ describe('orca cli browser tab profiles', () => {
 
     expect(callMock).toHaveBeenCalledTimes(1)
     expect(callMock).toHaveBeenCalledWith('browser.profileList')
+  })
+
+  it('reports an empty browser tab profile list with a friendly message', async () => {
+    queueFixtures(callMock, okFixture('req_profiles', { profiles: [] }))
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await main(['tab', 'profile', 'list'], '/tmp/not-an-orca-worktree')
+
+    expect(callMock).toHaveBeenCalledTimes(1)
+    expect(callMock).toHaveBeenCalledWith('browser.profileList')
+    expect(logSpy).toHaveBeenCalledWith('No browser profiles found.')
   })
 
   it('creates isolated browser tab profiles by default', async () => {
@@ -181,6 +198,55 @@ describe('orca cli browser tab profiles', () => {
     })
   })
 
+  it('forwards --scope imported through to the runtime', async () => {
+    queueFixtures(
+      callMock,
+      okFixture('req_profile_create', {
+        profile: {
+          id: 'imp',
+          scope: 'imported',
+          label: 'From Chrome',
+          partition: 'persist:orca-browser-session-imp'
+        }
+      })
+    )
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await main(
+      ['tab', 'profile', 'create', '--label', 'From Chrome', '--scope', 'imported', '--json'],
+      '/tmp/not-an-orca-worktree'
+    )
+
+    expect(callMock).toHaveBeenCalledWith('browser.profileCreate', {
+      label: 'From Chrome',
+      scope: 'imported'
+    })
+  })
+
+  it('rejects unknown --scope values instead of silently defaulting to isolated', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await main(
+      ['tab', 'profile', 'create', '--label', 'Work', '--scope', 'isloated'],
+      '/tmp/not-an-orca-worktree'
+    )
+
+    expect(callMock).not.toHaveBeenCalled()
+    expect(errorSpy).toHaveBeenCalledWith('--scope must be "isolated" or "imported"')
+  })
+
+  it('surfaces a runtime error if the registry refuses to create a profile', async () => {
+    queueFixtures(callMock, okFixture('req_profile_create', { profile: null }))
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await main(['tab', 'profile', 'create', '--label', 'Bogus'], '/tmp/not-an-orca-worktree')
+
+    expect(callMock).toHaveBeenCalledTimes(1)
+    expect(errorSpy).toHaveBeenCalledWith(
+      'Failed to create browser profile (label=Bogus, scope=isolated)'
+    )
+  })
+
   it('deletes browser tab profiles by id', async () => {
     queueFixtures(callMock, okFixture('req_profile_delete', { deleted: true, profileId: 'work' }))
     vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -192,6 +258,19 @@ describe('orca cli browser tab profiles', () => {
 
     expect(callMock).toHaveBeenCalledTimes(1)
     expect(callMock).toHaveBeenCalledWith('browser.profileDelete', { profileId: 'work' })
+  })
+
+  it('reports a not-deleted profile in text mode without throwing', async () => {
+    queueFixtures(
+      callMock,
+      okFixture('req_profile_delete', { deleted: false, profileId: 'default' })
+    )
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await main(['tab', 'profile', 'delete', '--profile', 'default'], '/tmp/not-an-orca-worktree')
+
+    expect(callMock).toHaveBeenCalledWith('browser.profileDelete', { profileId: 'default' })
+    expect(logSpy).toHaveBeenCalledWith('Profile default was not deleted')
   })
 })
 

@@ -3002,11 +3002,7 @@ export class OrcaRuntimeService {
         }
       }
       ipcMain.on('browser:tabCreateReply', handler)
-      win.webContents.send('browser:requestTabCreate', {
-        requestId,
-        url,
-        worktreeId
-      })
+      win.webContents.send('browser:requestTabCreate', { requestId, url, worktreeId })
     })
 
     // Why: the renderer creates the Zustand tab immediately, but the webview must
