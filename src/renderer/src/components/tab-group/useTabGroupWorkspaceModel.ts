@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { useShallow } from 'zustand/react/shallow'
 import type { OpenFile } from '@/store/slices/editor'
 import type {
+  ArchitectureWorkspace,
   BrowserTab as BrowserTabState,
   Tab,
   TabGroup,
@@ -22,10 +23,12 @@ import { focusTerminalTabSurface } from '../../lib/focus-terminal-tab-surface'
 
 export type GroupEditorItem = OpenFile & { tabId: string }
 export type GroupBrowserItem = BrowserTabState & { tabId: string }
+export type GroupArchitectureItem = ArchitectureWorkspace & { tabId: string }
 
 const EMPTY_GROUPS: readonly TabGroup[] = []
 const EMPTY_UNIFIED_TABS: readonly Tab[] = []
 const EMPTY_BROWSER_TABS: readonly BrowserTabState[] = []
+const EMPTY_ARCHITECTURE_TABS: readonly ArchitectureWorkspace[] = []
 const EMPTY_RUNTIME_TERMINAL_TABS: readonly TerminalTab[] = []
 
 type TerminalTabItem = {
@@ -59,6 +62,7 @@ export function useTabGroupWorkspaceModel({
       unifiedTabs: state.unifiedTabsByWorktree[worktreeId] ?? EMPTY_UNIFIED_TABS,
       openFiles: state.openFiles,
       browserTabs: state.browserTabsByWorktree[worktreeId] ?? EMPTY_BROWSER_TABS,
+      architectureTabs: state.architectureTabsByWorktree[worktreeId] ?? EMPTY_ARCHITECTURE_TABS,
       runtimeTerminalTabs: state.tabsByWorktree[worktreeId] ?? EMPTY_RUNTIME_TERMINAL_TABS,
       expandedPaneByTabId: state.expandedPaneByTabId
     }))
@@ -74,10 +78,13 @@ export function useTabGroupWorkspaceModel({
   const setActiveFile = useAppStore((state) => state.setActiveFile)
   const setActiveTabType = useAppStore((state) => state.setActiveTabType)
   const createBrowserTab = useAppStore((state) => state.createBrowserTab)
+  const createArchitectureTab = useAppStore((state) => state.createArchitectureTab)
   const closeFile = useAppStore((state) => state.closeFile)
   const pinFile = useAppStore((state) => state.pinFile)
   const closeBrowserTab = useAppStore((state) => state.closeBrowserTab)
+  const closeArchitectureTab = useAppStore((state) => state.closeArchitectureTab)
   const setActiveBrowserTab = useAppStore((state) => state.setActiveBrowserTab)
+  const setActiveArchitectureTab = useAppStore((state) => state.setActiveArchitectureTab)
   const setActiveWorktree = useAppStore((state) => state.setActiveWorktree)
   const dropUnifiedTab = useAppStore((state) => state.dropUnifiedTab)
   const createEmptySplitGroup = useAppStore((state) => state.createEmptySplitGroup)
@@ -148,6 +155,20 @@ export function useTabGroupWorkspaceModel({
     [groupTabs, worktreeState.browserTabs]
   )
 
+  const architectureItems = useMemo<GroupArchitectureItem[]>(
+    () =>
+      groupTabs
+        .filter((item) => item.contentType === 'architecture')
+        .map((item) => {
+          const tab = worktreeState.architectureTabs.find(
+            (candidate) => candidate.id === item.entityId
+          )
+          return tab ? { ...tab, tabId: item.id } : null
+        })
+        .filter((item): item is GroupArchitectureItem => item !== null),
+    [groupTabs, worktreeState.architectureTabs]
+  )
+
   const runtimeTerminalTabById = useMemo(
     () => new Map(worktreeState.runtimeTerminalTabs.map((tab) => [tab.id, tab])),
     [worktreeState.runtimeTerminalTabs]
@@ -206,6 +227,8 @@ export function useTabGroupWorkspaceModel({
       } else if (item.contentType === 'browser') {
         destroyWorkspaceWebviews(useAppStore.getState().browserPagesByWorkspace, item.entityId)
         closeBrowserTab(item.entityId)
+      } else if (item.contentType === 'architecture') {
+        closeArchitectureTab(item.entityId)
       } else {
         const canCloseTab = closeEditorIfUnreferenced(item.entityId, item.id)
         if (!canCloseTab) {
@@ -218,6 +241,7 @@ export function useTabGroupWorkspaceModel({
       }
     },
     [
+      closeArchitectureTab,
       closeBrowserTab,
       closeEditorIfUnreferenced,
       closeTab,
@@ -239,6 +263,8 @@ export function useTabGroupWorkspaceModel({
         } else if (item.contentType === 'browser') {
           destroyWorkspaceWebviews(useAppStore.getState().browserPagesByWorkspace, item.entityId)
           closeBrowserTab(item.entityId)
+        } else if (item.contentType === 'architecture') {
+          closeArchitectureTab(item.entityId)
         } else {
           const canCloseTab = closeEditorIfUnreferenced(item.entityId, item.id)
           if (canCloseTab) {
@@ -247,7 +273,14 @@ export function useTabGroupWorkspaceModel({
         }
       }
     },
-    [closeBrowserTab, closeEditorIfUnreferenced, closeTab, closeUnifiedTab, groupTabs]
+    [
+      closeArchitectureTab,
+      closeBrowserTab,
+      closeEditorIfUnreferenced,
+      closeTab,
+      closeUnifiedTab,
+      groupTabs
+    ]
   )
 
   const activateTerminal = useCallback(
@@ -296,11 +329,38 @@ export function useTabGroupWorkspaceModel({
     [activateTab, focusGroup, groupId, groupTabs, setActiveBrowserTab, setActiveTabType, worktreeId]
   )
 
+  const activateArchitecture = useCallback(
+    (architectureTabId: string) => {
+      const item = groupTabs.find(
+        (candidate) =>
+          candidate.entityId === architectureTabId && candidate.contentType === 'architecture'
+      )
+      if (!item) {
+        return
+      }
+      focusGroup(worktreeId, groupId)
+      activateTab(item.id)
+      setActiveArchitectureTab(architectureTabId)
+      setActiveTabType('architecture')
+    },
+    [
+      activateTab,
+      focusGroup,
+      groupId,
+      groupTabs,
+      setActiveArchitectureTab,
+      setActiveTabType,
+      worktreeId
+    ]
+  )
+
   const createSplitGroup = useCallback(
     (direction: 'left' | 'right' | 'up' | 'down', sourceVisibleTabId?: string) => {
       const sourceTab =
         groupTabs.find((candidate) =>
-          candidate.contentType === 'terminal' || candidate.contentType === 'browser'
+          candidate.contentType === 'terminal' ||
+          candidate.contentType === 'browser' ||
+          candidate.contentType === 'architecture'
             ? candidate.entityId === sourceVisibleTabId
             : candidate.id === sourceVisibleTabId
         ) ?? activeTab
@@ -422,7 +482,9 @@ export function useTabGroupWorkspaceModel({
         if (!item) {
           return itemId
         }
-        return item.contentType === 'terminal' || item.contentType === 'browser'
+        return item.contentType === 'terminal' ||
+          item.contentType === 'browser' ||
+          item.contentType === 'architecture'
           ? item.entityId
           : item.id
       }),
@@ -432,6 +494,7 @@ export function useTabGroupWorkspaceModel({
   return {
     group,
     activeTab,
+    architectureItems,
     browserItems,
     editorItems,
     terminalTabs,
@@ -446,6 +509,7 @@ export function useTabGroupWorkspaceModel({
       },
       activateBrowser,
       activateEditor,
+      activateArchitecture,
       activateTerminal,
       closeAllEditorTabsInGroup,
       closeGroup,
@@ -460,6 +524,15 @@ export function useTabGroupWorkspaceModel({
           title: 'New Browser Tab',
           focusAddressBar: true
         })
+      },
+      newArchitectureTab: () => {
+        const path = worktree?.path ?? null
+        createArchitectureTab(worktreeId, {
+          targetGroupId: groupId,
+          projectPath: path,
+          title: 'Architecture'
+        })
+        setActiveTabType('architecture')
       },
       duplicateBrowserTab: (browserTabId: string) => {
         const state = useAppStore.getState()

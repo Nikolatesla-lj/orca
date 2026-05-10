@@ -58,12 +58,18 @@ function hydrateUnifiedFormat(
       continue
     }
     const persistedEditFileIds = persistedEditFileIdsByWorktree[worktreeId] ?? new Set<string>()
+    const persistedArchitectureIds = new Set(
+      (session.architectureTabsByWorktree?.[worktreeId] ?? []).map((tab) => tab.id)
+    )
     tabsByWorktree[worktreeId] = [...tabs]
       .map((tab) => ({
         ...tab,
         entityId: tab.entityId ?? tab.id
       }))
       .filter((tab) => {
+        if (tab.contentType === 'architecture') {
+          return persistedArchitectureIds.has(tab.entityId)
+        }
         if (!isTransientEditorContentType(tab.contentType)) {
           return true
         }

@@ -85,3 +85,4 @@ playwright-report/
 /.claude/skills/
 /.agents/skills/
 /skills-lock.json
+.gitnexus

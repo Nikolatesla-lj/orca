@@ -110,6 +110,7 @@ import { createAgentStatusSlice } from './agent-status'
 import { createDiffCommentsSlice } from './diffComments'
 import { createDetectedAgentsSlice } from './detected-agents'
 import { createWorktreeNavHistorySlice } from './worktree-nav-history'
+import { createArchitectureSlice } from './architecture'
 
 function createTestStore() {
   return create<AppState>()((...a) => ({
@@ -133,7 +134,8 @@ function createTestStore() {
     ...createAgentStatusSlice(...a),
     ...createDiffCommentsSlice(...a),
     ...createDetectedAgentsSlice(...a),
-    ...createWorktreeNavHistorySlice(...a)
+    ...createWorktreeNavHistorySlice(...a),
+    ...createArchitectureSlice(...a)
   }))
 }
 

@@ -936,6 +936,39 @@ const api = {
       ipcRenderer.invoke('agentTrust:markTrusted', args)
   },
 
+  architecture: {
+    readModel: (args: { projectPath: string }): Promise<unknown> =>
+      ipcRenderer.invoke('architecture:readModel', args),
+    writeModel: (args: { projectPath: string; model: unknown }): Promise<void> =>
+      ipcRenderer.invoke('architecture:writeModel', args),
+    checkDrift: (args: { projectPath: string }): Promise<unknown> =>
+      ipcRenderer.invoke('architecture:checkDrift', args),
+    markSynced: (args: { projectPath: string }): Promise<void> =>
+      ipcRenderer.invoke('architecture:markSynced', args),
+    isSyncing: (args: { projectPath: string }): Promise<boolean> =>
+      ipcRenderer.invoke('architecture:isSyncing', args),
+    beginSync: (args: { projectPath: string; modelName?: string }): Promise<unknown> =>
+      ipcRenderer.invoke('architecture:beginSync', args),
+    cancelSync: (args: { projectPath: string }): Promise<unknown> =>
+      ipcRenderer.invoke('architecture:cancelSync', args),
+    finishSync: (args: { projectPath: string }): Promise<void> =>
+      ipcRenderer.invoke('architecture:finishSync', args),
+    callTool: (args: { projectPath: string; call: unknown }): Promise<unknown> =>
+      ipcRenderer.invoke('architecture:callTool', args),
+    watchModel: (args: { projectPath: string }): Promise<void> =>
+      ipcRenderer.invoke('architecture:watchModel', args),
+    onModelChanged: (
+      callback: (event: { projectPath: string; fileName: string }) => void
+    ): (() => void) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        payload: { projectPath: string; fileName: string }
+      ): void => callback(payload)
+      ipcRenderer.on('architecture:modelChanged', listener)
+      return () => ipcRenderer.removeListener('architecture:modelChanged', listener)
+    }
+  },
+
   preflight: {
     check: (args?: {
       force?: boolean

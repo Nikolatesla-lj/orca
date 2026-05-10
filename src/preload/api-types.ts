@@ -159,6 +159,12 @@ import type {
 } from '../shared/codex-usage-types'
 import type { TelemetryConsentState } from '../shared/telemetry-consent-types'
 import type { AgentKind, LaunchSource, RequestKind } from '../shared/telemetry-events'
+import type {
+  C4ModelData,
+  DriftReport,
+  ScryerToolCall,
+  ScryerToolResult
+} from '../shared/scryer/model-types'
 
 export type BrowserApi = {
   registerGuest: (args: {
@@ -374,6 +380,25 @@ export type AppApi = {
   getKeyboardInputSourceId: () => Promise<string | null>
   /** Updates the macOS Dock unread badge. No-op on Windows/Linux. */
   setUnreadDockBadgeCount: (count: number) => Promise<void>
+}
+
+export type ArchitectureApi = {
+  readModel: (args: { projectPath: string }) => Promise<C4ModelData>
+  writeModel: (args: { projectPath: string; model: C4ModelData }) => Promise<void>
+  checkDrift: (args: { projectPath: string }) => Promise<DriftReport>
+  markSynced: (args: { projectPath: string }) => Promise<void>
+  isSyncing: (args: { projectPath: string }) => Promise<boolean>
+  beginSync: (args: {
+    projectPath: string
+    modelName?: string
+  }) => Promise<{ prompt: string; drift: DriftReport; snapshot: C4ModelData }>
+  cancelSync: (args: { projectPath: string }) => Promise<C4ModelData>
+  finishSync: (args: { projectPath: string }) => Promise<void>
+  callTool: (args: { projectPath: string; call: ScryerToolCall }) => Promise<ScryerToolResult>
+  watchModel: (args: { projectPath: string }) => Promise<void>
+  onModelChanged: (
+    callback: (event: { projectPath: string; fileName: string }) => void
+  ) => () => void
 }
 
 export type PreloadApi = {
@@ -825,6 +850,7 @@ export type PreloadApi = {
     read: (id: string, fileName: string, kind?: 'image' | 'bundle') => Promise<ArrayBuffer | null>
     delete: (id: string, fileName: string, kind?: 'image' | 'bundle') => Promise<void>
   }
+  architecture: ArchitectureApi
   browser: BrowserApi
   hooks: {
     check: (args: {

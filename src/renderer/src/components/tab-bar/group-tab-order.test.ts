@@ -48,6 +48,21 @@ function browserTab(id: string, groupId: string, entityId: string, sortOrder: nu
   }
 }
 
+function architectureTab(id: string, groupId: string, entityId: string, sortOrder: number): Tab {
+  return {
+    id,
+    entityId,
+    groupId,
+    worktreeId: 'wt',
+    contentType: 'architecture',
+    label: entityId,
+    customLabel: null,
+    color: null,
+    sortOrder,
+    createdAt: sortOrder
+  }
+}
+
 describe('getGroupVisibleTabOrder', () => {
   it('returns active-group refs with backing ids plus unified tab ids', () => {
     const group: TabGroup = {
@@ -67,6 +82,7 @@ describe('getGroupVisibleTabOrder', () => {
         tabs,
         new Set(['term-1', 'term-2']),
         new Set(['/repo/file.md']),
+        new Set(),
         new Set()
       )
     ).toEqual([
@@ -98,6 +114,7 @@ describe('getGroupVisibleTabOrder', () => {
         tabs,
         new Set(['term-1', 'term-2', 'term-3']),
         new Set(),
+        new Set(),
         new Set()
       ).map((t) => t.id)
     ).toEqual(['term-2', 'term-3', 'term-1'])
@@ -114,9 +131,9 @@ describe('getGroupVisibleTabOrder', () => {
       terminalTab('tab-t1', 'g1', 'term-1', 0),
       terminalTab('tab-t2', 'g1', 'term-zombie', 1)
     ]
-    expect(getGroupVisibleTabOrder(group, tabs, new Set(['term-1']), new Set(), new Set())).toEqual(
-      [{ type: 'terminal', id: 'term-1', tabId: 'tab-t1' }]
-    )
+    expect(
+      getGroupVisibleTabOrder(group, tabs, new Set(['term-1']), new Set(), new Set(), new Set())
+    ).toEqual([{ type: 'terminal', id: 'term-1', tabId: 'tab-t1' }])
   })
 
   it('includes browser tabs keyed by entityId in the declared group order', () => {
@@ -137,11 +154,40 @@ describe('getGroupVisibleTabOrder', () => {
         tabs,
         new Set(['term-1']),
         new Set(['/repo/file.md']),
-        new Set(['browser-1'])
+        new Set(['browser-1']),
+        new Set()
       )
     ).toEqual([
       { type: 'terminal', id: 'term-1', tabId: 'tab-t1' },
       { type: 'browser', id: 'browser-1', tabId: 'tab-b1' },
+      { type: 'editor', id: '/repo/file.md', tabId: 'tab-e1' }
+    ])
+  })
+
+  it('includes architecture tabs keyed by entityId in the declared group order', () => {
+    const group: TabGroup = {
+      id: 'g1',
+      worktreeId: 'wt',
+      activeTabId: 'tab-a1',
+      tabOrder: ['tab-t1', 'tab-a1', 'tab-e1']
+    }
+    const tabs: Tab[] = [
+      terminalTab('tab-t1', 'g1', 'term-1', 0),
+      architectureTab('tab-a1', 'g1', 'architecture-1', 1),
+      editorTab('tab-e1', 'g1', '/repo/file.md', 2)
+    ]
+    expect(
+      getGroupVisibleTabOrder(
+        group,
+        tabs,
+        new Set(['term-1']),
+        new Set(['/repo/file.md']),
+        new Set(),
+        new Set(['architecture-1'])
+      )
+    ).toEqual([
+      { type: 'terminal', id: 'term-1', tabId: 'tab-t1' },
+      { type: 'architecture', id: 'architecture-1', tabId: 'tab-a1' },
       { type: 'editor', id: '/repo/file.md', tabId: 'tab-e1' }
     ])
   })
@@ -156,6 +202,7 @@ type NavState = Pick<
   | 'tabsByWorktree'
   | 'openFiles'
   | 'browserTabsByWorktree'
+  | 'architectureTabsByWorktree'
 >
 
 function makeState(overrides: Partial<NavState>): NavState {
@@ -167,6 +214,7 @@ function makeState(overrides: Partial<NavState>): NavState {
     tabsByWorktree: {},
     openFiles: [],
     browserTabsByWorktree: {},
+    architectureTabsByWorktree: {},
     ...overrides
   }
 }
