@@ -461,33 +461,36 @@ function CodexSwitcherMenu({
     })
   }, [loadAccounts, open, codexAccountSyncKey])
 
-  const handleSelectAccount = async (accountId: string | null): Promise<void> => {
-    if (isSwitching) {
-      return
-    }
-    const previousActiveAccountId = accounts.activeAccountId
-    setIsSwitching(true)
-    try {
-      const next = await window.api.codexAccounts.select({ accountId })
-      setAccounts(next)
-      await fetchSettings()
-      if (previousActiveAccountId !== next.activeAccountId) {
-        await markLiveCodexSessionsForRestart({
-          previousAccountLabel: getCodexAccountLabel(accounts, previousActiveAccountId),
-          nextAccountLabel: getCodexAccountLabel(next, next.activeAccountId)
-        })
-        // Why: account switching can require a second explicit recovery step
-        // for live Codex terminals. Keeping the switcher open and collapsing
-        // back to the summary row lets the follow-up "restart open tabs"
-        // prompt appear in the same flow instead of feeling detached.
-        setAccountsExpanded(false)
+  const handleSelectAccount = useCallback(
+    async (accountId: string | null): Promise<void> => {
+      if (isSwitching) {
+        return
       }
-    } catch (error) {
-      console.error('Failed to switch Codex account from status bar:', error)
-    } finally {
-      setIsSwitching(false)
-    }
-  }
+      const previousActiveAccountId = accounts.activeAccountId
+      setIsSwitching(true)
+      try {
+        const next = await window.api.codexAccounts.select({ accountId })
+        setAccounts(next)
+        await fetchSettings()
+        if (previousActiveAccountId !== next.activeAccountId) {
+          await markLiveCodexSessionsForRestart({
+            previousAccountLabel: getCodexAccountLabel(accounts, previousActiveAccountId),
+            nextAccountLabel: getCodexAccountLabel(next, next.activeAccountId)
+          })
+          // Why: account switching can require a second explicit recovery step
+          // for live Codex terminals. Keeping the switcher open and collapsing
+          // back to the summary row lets the follow-up "restart open tabs"
+          // prompt appear in the same flow instead of feeling detached.
+          setAccountsExpanded(false)
+        }
+      } catch (error) {
+        console.error('Failed to switch Codex account from status bar:', error)
+      } finally {
+        setIsSwitching(false)
+      }
+    },
+    [accounts, fetchSettings, isSwitching]
+  )
 
   const autoFailoverAccountId = chooseCodexFailoverAccount({
     activeAccountId: accounts.activeAccountId,
