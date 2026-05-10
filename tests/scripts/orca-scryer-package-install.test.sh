@@ -12,6 +12,8 @@ release_dir="$tmp_dir/releases"
 install_path="$tmp_dir/local/Orca.AppImage"
 bin_dir="$tmp_dir/bin"
 symlink_path="$bin_dir/orca"
+desktop_launcher="$bin_dir/orca-app"
+desktop_file="$tmp_dir/applications/orca-appimage.desktop"
 build_log="$tmp_dir/build.log"
 
 git init -q "$repo_dir"
@@ -33,6 +35,8 @@ printf 'appimage:%s\n' "$ORCA_SCRYER_RELEASE_COMMIT" > "$ORCA_SCRYER_ARTIFACT_DI
 printf 'deb:%s\n' "$ORCA_SCRYER_RELEASE_COMMIT" > "$ORCA_SCRYER_ARTIFACT_DIR/orca-linux-amd64.deb"
 BUILD
 chmod +x "$fake_build"
+mkdir -p "$(dirname "$desktop_file")"
+printf '[Desktop Entry]\nName=Orca AppImage\nExec=/old/orca-app %%U\nType=Application\n' > "$desktop_file"
 
 ORCA_SCRYER_REPO_DIR="$repo_dir" \
   ORCA_SCRYER_PACKAGE_COMMAND="$fake_build" \
@@ -41,6 +45,8 @@ ORCA_SCRYER_REPO_DIR="$repo_dir" \
   ORCA_SCRYER_AUTO_INSTALL=1 \
   ORCA_SCRYER_APPIMAGE_INSTALL_PATH="$install_path" \
   ORCA_SCRYER_APPIMAGE_SYMLINK="$symlink_path" \
+  ORCA_SCRYER_APPIMAGE_DESKTOP_LAUNCHER="$desktop_launcher" \
+  ORCA_SCRYER_APPIMAGE_DESKTOP_FILE="$desktop_file" \
   BUILD_LOG="$build_log" \
   "$PACKAGE_SCRIPT"
 
@@ -60,6 +66,9 @@ test -x "$install_path"
 grep -qx "appimage:$expected_commit" "$install_path"
 test -L "$symlink_path"
 test "$(readlink "$symlink_path")" = "$install_path"
+test -x "$desktop_launcher"
+grep -Fqx "exec \"$install_path\" --no-sandbox \"\$@\"" "$desktop_launcher"
+grep -Fqx "Exec=$desktop_launcher %U" "$desktop_file"
 
 shim_repo="$tmp_dir/shim-repo"
 shim_release_dir="$tmp_dir/shim-releases"

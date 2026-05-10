@@ -96,13 +96,27 @@ install_appimage() {
   local artifact="$1"
   local install_path="${ORCA_SCRYER_APPIMAGE_INSTALL_PATH:-$HOME/.local/share/orca-scryer/orca-linux.AppImage}"
   local symlink_path="${ORCA_SCRYER_APPIMAGE_SYMLINK:-$HOME/.local/bin/orca}"
+  local desktop_launcher="${ORCA_SCRYER_APPIMAGE_DESKTOP_LAUNCHER:-$HOME/.local/bin/orca-app}"
+  local desktop_file="${ORCA_SCRYER_APPIMAGE_DESKTOP_FILE:-$HOME/.local/share/applications/orca-appimage.desktop}"
 
-  run mkdir -p "$(dirname "$install_path")" "$(dirname "$symlink_path")"
+  run mkdir -p "$(dirname "$install_path")" "$(dirname "$symlink_path")" "$(dirname "$desktop_launcher")"
   run cp -f "$artifact" "$install_path"
   run chmod 0755 "$install_path"
   run ln -sfn "$install_path" "$symlink_path"
+  cat > "$desktop_launcher" <<LAUNCHER
+#!/usr/bin/env bash
+set -euo pipefail
+exec "$install_path" --no-sandbox "\$@"
+LAUNCHER
+  run chmod 0755 "$desktop_launcher"
   echo "Installed Orca AppImage at $install_path"
   echo "Updated launcher symlink at $symlink_path"
+
+  if [[ -f "$desktop_file" ]]; then
+    sed -i "s|^Exec=.*|Exec=$desktop_launcher %U|" "$desktop_file"
+    echo "Updated desktop launcher at $desktop_launcher"
+    echo "Updated desktop file at $desktop_file"
+  fi
 }
 
 install_deb() {
