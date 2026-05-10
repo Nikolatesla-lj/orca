@@ -13,6 +13,9 @@ install_path="$tmp_dir/local/Orca.AppImage"
 bin_dir="$tmp_dir/bin"
 symlink_path="$bin_dir/orca"
 desktop_launcher="$bin_dir/orca-app"
+appdir_root="$tmp_dir/Applications/Orca"
+current_appdir="$appdir_root/current.AppDir"
+appdir_name="orca-scryer-test.AppDir"
 desktop_file="$tmp_dir/applications/orca-appimage.desktop"
 build_log="$tmp_dir/build.log"
 
@@ -31,7 +34,20 @@ cat > "$fake_build" <<'BUILD'
 set -euo pipefail
 printf 'branch=%s\ncommit=%s\n' "$ORCA_SCRYER_RELEASE_BRANCH" "$ORCA_SCRYER_RELEASE_COMMIT" > "$BUILD_LOG"
 mkdir -p "$ORCA_SCRYER_ARTIFACT_DIR"
-printf 'appimage:%s\n' "$ORCA_SCRYER_RELEASE_COMMIT" > "$ORCA_SCRYER_ARTIFACT_DIR/orca-linux.AppImage"
+cat > "$ORCA_SCRYER_ARTIFACT_DIR/orca-linux.AppImage" <<'APPIMAGE'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "--appimage-extract" ]]; then
+  mkdir -p squashfs-root/resources/bin
+  printf '#!/usr/bin/env bash\nprintf app-cli\n' > squashfs-root/resources/bin/orca
+  chmod +x squashfs-root/resources/bin/orca
+  printf '#!/usr/bin/env bash\nprintf app-gui\n' > squashfs-root/orca
+  chmod +x squashfs-root/orca
+  exit 0
+fi
+printf 'appimage\n'
+APPIMAGE
+chmod +x "$ORCA_SCRYER_ARTIFACT_DIR/orca-linux.AppImage"
 printf 'deb:%s\n' "$ORCA_SCRYER_RELEASE_COMMIT" > "$ORCA_SCRYER_ARTIFACT_DIR/orca-linux-amd64.deb"
 BUILD
 chmod +x "$fake_build"
@@ -46,6 +62,9 @@ ORCA_SCRYER_REPO_DIR="$repo_dir" \
   ORCA_SCRYER_APPIMAGE_INSTALL_PATH="$install_path" \
   ORCA_SCRYER_APPIMAGE_SYMLINK="$symlink_path" \
   ORCA_SCRYER_APPIMAGE_DESKTOP_LAUNCHER="$desktop_launcher" \
+  ORCA_SCRYER_APPDIR_ROOT="$appdir_root" \
+  ORCA_SCRYER_CURRENT_APPDIR="$current_appdir" \
+  ORCA_SCRYER_APPDIR_NAME="$appdir_name" \
   ORCA_SCRYER_APPIMAGE_DESKTOP_FILE="$desktop_file" \
   BUILD_LOG="$build_log" \
   "$PACKAGE_SCRIPT"
@@ -60,14 +79,18 @@ grep -qx "ORCA_SCRYER_RELEASE_COMMIT=$expected_commit" "$release_manifest"
 
 release_appimage="$(find "$release_dir" -name 'orca-linux.AppImage' -print -quit)"
 test -f "$release_appimage"
-grep -qx "appimage:$expected_commit" "$release_appimage"
+test -x "$release_appimage"
 
 test -x "$install_path"
-grep -qx "appimage:$expected_commit" "$install_path"
 test -L "$symlink_path"
 test "$(readlink "$symlink_path")" = "$install_path"
+test -L "$current_appdir"
+test "$(readlink "$current_appdir")" = "$appdir_root/$appdir_name"
+test -x "$current_appdir/orca"
+test -x "$current_appdir/resources/bin/orca"
 test -x "$desktop_launcher"
-grep -Fqx "exec \"$install_path\" --no-sandbox \"\$@\"" "$desktop_launcher"
+grep -Fqx "APPDIR=\"$current_appdir\"" "$desktop_launcher"
+grep -Fqx 'exec "$APPDIR/orca" --no-sandbox "$@"' "$desktop_launcher"
 grep -Fqx "Exec=$desktop_launcher %U" "$desktop_file"
 
 shim_repo="$tmp_dir/shim-repo"
