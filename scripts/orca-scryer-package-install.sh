@@ -97,19 +97,38 @@ install_appimage() {
   local install_path="${ORCA_SCRYER_APPIMAGE_INSTALL_PATH:-$HOME/.local/share/orca-scryer/orca-linux.AppImage}"
   local symlink_path="${ORCA_SCRYER_APPIMAGE_SYMLINK:-$HOME/.local/bin/orca}"
   local desktop_launcher="${ORCA_SCRYER_APPIMAGE_DESKTOP_LAUNCHER:-$HOME/.local/bin/orca-app}"
+  local appdir_root="${ORCA_SCRYER_APPDIR_ROOT:-$HOME/Applications/Orca}"
+  local current_appdir="${ORCA_SCRYER_CURRENT_APPDIR:-$appdir_root/current.AppDir}"
+  local appdir_name="${ORCA_SCRYER_APPDIR_NAME:-orca-scryer-$short_commit.AppDir}"
+  local appdir_path="$appdir_root/$appdir_name"
   local desktop_file="${ORCA_SCRYER_APPIMAGE_DESKTOP_FILE:-$HOME/.local/share/applications/orca-appimage.desktop}"
 
-  run mkdir -p "$(dirname "$install_path")" "$(dirname "$symlink_path")" "$(dirname "$desktop_launcher")"
+  run mkdir -p "$(dirname "$install_path")" "$(dirname "$symlink_path")" "$(dirname "$desktop_launcher")" "$appdir_root"
   run cp -f "$artifact" "$install_path"
   run chmod 0755 "$install_path"
   run ln -sfn "$install_path" "$symlink_path"
+
+  local extract_dir
+  extract_dir="$(mktemp -d)"
+  (
+    cd "$extract_dir"
+    "$install_path" --appimage-extract >/dev/null
+  )
+  run rm -rf "$appdir_path"
+  run mv "$extract_dir/squashfs-root" "$appdir_path"
+  run rm -rf "$extract_dir"
+  run ln -sfn "$appdir_path" "$current_appdir"
+
   cat > "$desktop_launcher" <<LAUNCHER
 #!/usr/bin/env bash
 set -euo pipefail
-exec "$install_path" --no-sandbox "\$@"
+APPDIR="$current_appdir"
+exec "\$APPDIR/orca" --no-sandbox "\$@"
 LAUNCHER
   run chmod 0755 "$desktop_launcher"
   echo "Installed Orca AppImage at $install_path"
+  echo "Extracted Orca AppDir at $appdir_path"
+  echo "Updated current AppDir symlink at $current_appdir"
   echo "Updated launcher symlink at $symlink_path"
 
   if [[ -f "$desktop_file" ]]; then
