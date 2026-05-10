@@ -1,10 +1,8 @@
-/* eslint-disable max-lines -- Why: this first real architecture surface keeps load/save, canvas interaction, and inspector state together so the Scryer model loop is auditable while the migration is still narrow. */
+/* eslint-disable max-lines -- Why: this migration surface keeps load/save, ReactFlow canvas, and inspector state together until Scryer panels are split across smaller Orca-native modules. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Boxes,
   CheckCircle2,
   GitCompareArrows,
-  Link,
   Network,
   Play,
   Plus,
@@ -20,7 +18,6 @@ import { useAppStore } from '../../store'
 import type { ArchitectureWorkspace, TuiAgent } from '../../../../shared/types'
 import type {
   C4Edge,
-  C4Kind,
   C4ModelData,
   C4Node,
   DriftReport,
@@ -29,14 +26,13 @@ import type {
 } from '../../../../shared/scryer/model-types'
 import { resolveSourceLocationTarget } from '../../../../shared/scryer/source-map-paths'
 import { Button } from '../ui/button'
-
-type DragState = {
-  nodeId: string
-  startX: number
-  startY: number
-  originX: number
-  originY: number
-}
+import { ArchitectureCanvas, type ModelUpdater } from './ArchitectureCanvas'
+import {
+  createNodeForParent,
+  deleteNodesFromModel,
+  isExpandableKind,
+  reconcileExpandedPath
+} from './c4-model'
 
 const STATUS_OPTIONS: Status[] = ['proposed', 'implemented', 'verified', 'vagrant']
 
@@ -53,85 +49,6 @@ function createEmptyModel(projectPath: string): C4ModelData {
   }
 }
 
-function nextKind(parent?: C4Node | null): C4Kind {
-  if (!parent) {
-    return 'system'
-  }
-  if (parent.data.kind === 'system') {
-    return 'container'
-  }
-  if (parent.data.kind === 'container') {
-    return 'component'
-  }
-  return 'operation'
-}
-
-function nodeTypeForKind(kind: C4Kind): C4Node['type'] {
-  if (kind === 'operation' || kind === 'process' || kind === 'model') {
-    return kind
-  }
-  return 'c4'
-}
-
-function nodeWidth(node: C4Node): number {
-  return node.data.kind === 'system' ? 220 : node.data.kind === 'container' ? 200 : 180
-}
-
-function nodeHeight(node: C4Node): number {
-  return node.data.kind === 'operation' ? 78 : 96
-}
-
-function defaultPosition(kind: C4Kind, index: number): { x: number; y: number } {
-  const y = kind === 'system' ? 80 : kind === 'container' ? 230 : kind === 'component' ? 380 : 520
-  return { x: 80 + (index % 4) * 250, y }
-}
-
-function edgeCenter(node: C4Node): { x: number; y: number } {
-  const position = node.position ?? { x: 0, y: 0 }
-  return {
-    x: position.x + nodeWidth(node) / 2,
-    y: position.y + nodeHeight(node) / 2
-  }
-}
-
-function statusClass(status?: Status): string {
-  if (status === 'implemented') {
-    return 'border-emerald-500/70 bg-emerald-500/10 text-emerald-100'
-  }
-  if (status === 'verified') {
-    return 'border-sky-500/70 bg-sky-500/10 text-sky-100'
-  }
-  if (status === 'vagrant') {
-    return 'border-zinc-500/70 bg-zinc-500/10 text-zinc-200'
-  }
-  return 'border-amber-500/70 bg-amber-500/10 text-amber-100'
-}
-
-function makeNode(model: C4ModelData, parent: C4Node | null): C4Node {
-  const kind = nextKind(parent)
-  const sameKindCount = model.nodes.filter((node) => node.data.kind === kind).length
-  const id = `node-${Date.now().toString(36)}-${sameKindCount + 1}`
-  return {
-    id,
-    type: nodeTypeForKind(kind),
-    parentId: parent?.id,
-    position: defaultPosition(kind, sameKindCount),
-    data: {
-      name: `${kind[0].toUpperCase()}${kind.slice(1)} ${sameKindCount + 1}`,
-      description: '',
-      kind,
-      status:
-        kind === 'person' || (kind === 'system' && parent?.data.external) ? undefined : 'proposed',
-      contract: { expect: [], ask: [], never: [] },
-      notes: []
-    }
-  }
-}
-
-function modelWithNode(model: C4ModelData, node: C4Node): C4ModelData {
-  return { ...model, nodes: [...model.nodes, node] }
-}
-
 export default function ArchitecturePanel({
   workspace
 }: {
@@ -143,35 +60,45 @@ export default function ArchitecturePanel({
   const settingsDefaultAgent = useAppStore((state) => state.settings?.defaultTuiAgent)
   const detectedAgentIds = useAppStore((state) => state.detectedAgentIds)
   const [model, setModel] = useState<C4ModelData | null>(null)
+  const modelRef = useRef<C4ModelData | null>(null)
+  const sourcePatternSyncRef = useRef<{ nodeId: string | null; pattern: string } | null>(null)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [expandedPath, setExpandedPath] = useState<string[]>([])
   const [targetNodeId, setTargetNodeId] = useState<string>('')
   const [sourcePattern, setSourcePattern] = useState('')
   const [drift, setDrift] = useState<DriftReport | null>(null)
   const [syncing, setSyncing] = useState(false)
   const [message, setMessage] = useState<string>('')
   const [error, setError] = useState<string>('')
-  const dragRef = useRef<DragState | null>(null)
 
   const selectedNode = useMemo(
     () => model?.nodes.find((node) => node.id === selectedNodeId) ?? null,
     [model, selectedNodeId]
   )
 
-  const nodeById = useMemo(
-    () => new Map((model?.nodes ?? []).map((node) => [node.id, node])),
-    [model]
+  const selectedSourcePattern = selectedNode
+    ? (model?.sourceMap?.[selectedNode.id]?.[0]?.pattern ?? '')
+    : ''
+
+  const driftedNodeIds = useMemo(
+    () => new Set((drift?.nodes ?? []).map((node) => node.nodeId)),
+    [drift]
   )
 
   const loadModel = useCallback(async () => {
     if (!projectPath) {
-      setModel(createEmptyModel(''))
+      const emptyModel = createEmptyModel('')
+      modelRef.current = emptyModel
+      setModel(emptyModel)
       setError('Architecture tabs need a worktree path.')
       return
     }
     try {
       setError('')
       const loaded = await window.api.architecture.readModel({ projectPath })
+      modelRef.current = loaded
       setModel(loaded)
+      setExpandedPath((current) => reconcileExpandedPath(loaded, current))
       setSelectedNodeId((current) =>
         current && loaded.nodes.some((node) => node.id === current)
           ? current
@@ -189,11 +116,27 @@ export default function ArchitecturePanel({
       if (!projectPath) {
         return
       }
+      modelRef.current = nextModel
       setModel(nextModel)
       await window.api.architecture.writeModel({ projectPath, model: nextModel })
       setMessage(nextMessage)
     },
     [projectPath]
+  )
+
+  const applyModelChange = useCallback(
+    async (change: C4ModelData | ModelUpdater, nextMessage: string) => {
+      const current = modelRef.current
+      if (!current) {
+        return
+      }
+      const nextModel = typeof change === 'function' ? change(current) : change
+      if (!nextModel) {
+        return
+      }
+      await persist(nextModel, nextMessage)
+    },
+    [persist]
   )
 
   useEffect(() => {
@@ -213,22 +156,39 @@ export default function ArchitecturePanel({
   }, [loadModel, projectPath])
 
   useEffect(() => {
-    if (!selectedNode || !model) {
+    if (!selectedNode) {
       setSourcePattern('')
+      sourcePatternSyncRef.current = { nodeId: null, pattern: '' }
       return
     }
-    setSourcePattern(model.sourceMap?.[selectedNode.id]?.[0]?.pattern ?? '')
+    const lastSynced = sourcePatternSyncRef.current
+    if (lastSynced?.nodeId === selectedNode.id && lastSynced.pattern === selectedSourcePattern) {
+      return
+    }
+    setSourcePattern(selectedSourcePattern)
+    sourcePatternSyncRef.current = {
+      nodeId: selectedNode.id,
+      pattern: selectedSourcePattern
+    }
+  }, [selectedNode, selectedSourcePattern])
+
+  useEffect(() => {
     setTargetNodeId('')
-  }, [model, selectedNode])
+  }, [selectedNodeId])
 
   const addNode = useCallback(async () => {
     if (!model || syncing) {
       return
     }
-    const node = makeNode(model, selectedNode)
-    const nextModel = modelWithNode(model, node)
+    const node = createNodeForParent(model, selectedNode)
+    const nextModel = { ...model, nodes: [...model.nodes, node] }
     await persist(nextModel, `Added ${node.data.name}`)
     setSelectedNodeId(node.id)
+    if (selectedNode && !selectedNode.data.external && isExpandableKind(selectedNode.data.kind)) {
+      setExpandedPath((current) =>
+        current.at(-1) === selectedNode.id ? current : [...current, selectedNode.id]
+      )
+    }
   }, [model, persist, selectedNode, syncing])
 
   const updateSelectedNode = useCallback(
@@ -247,18 +207,23 @@ export default function ArchitecturePanel({
     [model, persist, selectedNode, syncing]
   )
 
-  const saveSourcePattern = useCallback(async () => {
-    if (!model || !selectedNode || syncing) {
-      return
-    }
-    const sourceMap = { ...model.sourceMap }
-    if (sourcePattern.trim()) {
-      sourceMap[selectedNode.id] = [{ pattern: sourcePattern.trim() }]
-    } else {
-      delete sourceMap[selectedNode.id]
-    }
-    await persist({ ...model, sourceMap }, `Saved source map for ${selectedNode.data.name}`)
-  }, [model, persist, selectedNode, sourcePattern, syncing])
+  const saveSourcePattern = useCallback(
+    async (rawPattern: string) => {
+      const current = modelRef.current ?? model
+      if (!current || !selectedNode || syncing) {
+        return
+      }
+      const sourceMap = { ...current.sourceMap }
+      const pattern = rawPattern.trim()
+      if (pattern) {
+        sourceMap[selectedNode.id] = [{ pattern }]
+      } else {
+        delete sourceMap[selectedNode.id]
+      }
+      await persist({ ...current, sourceMap }, `Saved source map for ${selectedNode.data.name}`)
+    },
+    [model, persist, selectedNode, syncing]
+  )
 
   const addEdge = useCallback(async () => {
     if (!model || !selectedNode || !targetNodeId || selectedNode.id === targetNodeId || syncing) {
@@ -282,27 +247,7 @@ export default function ArchitecturePanel({
     if (!model || !selectedNode || syncing) {
       return
     }
-    const toDelete = new Set<string>([selectedNode.id])
-    let changed = true
-    while (changed) {
-      changed = false
-      for (const node of model.nodes) {
-        if (node.parentId && toDelete.has(node.parentId) && !toDelete.has(node.id)) {
-          toDelete.add(node.id)
-          changed = true
-        }
-      }
-    }
-    const sourceMap = { ...model.sourceMap }
-    for (const id of toDelete) {
-      delete sourceMap[id]
-    }
-    const nextModel = {
-      ...model,
-      nodes: model.nodes.filter((node) => !toDelete.has(node.id)),
-      edges: model.edges.filter((edge) => !toDelete.has(edge.source) && !toDelete.has(edge.target)),
-      sourceMap
-    }
+    const nextModel = deleteNodesFromModel(model, [selectedNode.id])
     await persist(nextModel, `Deleted ${selectedNode.data.name}`)
     setSelectedNodeId(nextModel.nodes[0]?.id ?? null)
   }, [model, persist, selectedNode, syncing])
@@ -425,6 +370,7 @@ export default function ArchitecturePanel({
     }
     try {
       const restored = await window.api.architecture.cancelSync({ projectPath })
+      modelRef.current = restored
       setModel(restored)
       setSelectedNodeId((current) =>
         current && restored.nodes.some((node) => node.id === current)
@@ -455,45 +401,6 @@ export default function ArchitecturePanel({
       toast.error(text)
     }
   }, [projectPath])
-
-  const onPointerMove = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      if (!dragRef.current || !model || syncing) {
-        return
-      }
-      const drag = dragRef.current
-      const dx = event.clientX - drag.startX
-      const dy = event.clientY - drag.startY
-      setModel({
-        ...model,
-        nodes: model.nodes.map((node) =>
-          node.id === drag.nodeId
-            ? { ...node, position: { x: drag.originX + dx, y: drag.originY + dy } }
-            : node
-        )
-      })
-    },
-    [model, syncing]
-  )
-
-  const onPointerUp = useCallback(() => {
-    const drag = dragRef.current
-    dragRef.current = null
-    if (drag && model) {
-      void persist(model, 'Saved canvas layout')
-    }
-  }, [model, persist])
-
-  const canvasSize = useMemo(() => {
-    const nodes = model?.nodes ?? []
-    return {
-      width: Math.max(900, ...nodes.map((node) => (node.position?.x ?? 0) + nodeWidth(node) + 160)),
-      height: Math.max(
-        620,
-        ...nodes.map((node) => (node.position?.y ?? 0) + nodeHeight(node) + 160)
-      )
-    }
-  }, [model])
 
   return (
     <div
@@ -549,121 +456,21 @@ export default function ArchitecturePanel({
 
         {error ? (
           <div className="p-4 text-sm text-destructive">{error}</div>
+        ) : model ? (
+          <ArchitectureCanvas
+            model={model}
+            syncing={syncing}
+            expandedPath={expandedPath}
+            selectedNodeId={selectedNodeId}
+            driftedNodeIds={driftedNodeIds}
+            onExpandedPathChange={setExpandedPath}
+            onSelectedNodeChange={setSelectedNodeId}
+            onModelChange={applyModelChange}
+            onOpenSourceLocation={openSourceLocation}
+          />
         ) : (
-          <div
-            className="relative flex-1 overflow-auto bg-[radial-gradient(circle_at_1px_1px,rgba(148,163,184,0.18)_1px,transparent_0)] [background-size:24px_24px]"
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            data-testid="architecture-canvas"
-          >
-            <div
-              className="relative"
-              style={{ width: canvasSize.width, height: canvasSize.height }}
-            >
-              <svg className="absolute inset-0 size-full" aria-hidden="true">
-                {(model?.edges ?? []).map((edge) => {
-                  const source = nodeById.get(edge.source)
-                  const target = nodeById.get(edge.target)
-                  if (!source || !target) {
-                    return null
-                  }
-                  const a = edgeCenter(source)
-                  const b = edgeCenter(target)
-                  return (
-                    <g key={edge.id}>
-                      <line
-                        x1={a.x}
-                        y1={a.y}
-                        x2={b.x}
-                        y2={b.y}
-                        stroke="rgba(148,163,184,0.65)"
-                        strokeWidth="2"
-                      />
-                      <text
-                        x={(a.x + b.x) / 2}
-                        y={(a.y + b.y) / 2 - 6}
-                        className="fill-muted-foreground text-[11px]"
-                      >
-                        {edge.data?.label ?? ''}
-                      </text>
-                    </g>
-                  )
-                })}
-              </svg>
-              {(model?.nodes ?? []).map((node) => {
-                const position = node.position ?? { x: 0, y: 0 }
-                const selected = selectedNodeId === node.id
-                return (
-                  <div
-                    key={node.id}
-                    className={`absolute rounded-md border bg-background/95 p-3 shadow-sm transition ${selected ? 'border-emerald-400 ring-1 ring-emerald-400/60' : 'border-border'}`}
-                    style={{
-                      width: nodeWidth(node),
-                      minHeight: nodeHeight(node),
-                      transform: `translate(${position.x}px, ${position.y}px)`
-                    }}
-                    data-testid="architecture-node"
-                    data-node-id={node.id}
-                    onPointerDown={(event) => {
-                      setSelectedNodeId(node.id)
-                      if (syncing) {
-                        return
-                      }
-                      dragRef.current = {
-                        nodeId: node.id,
-                        startX: event.clientX,
-                        startY: event.clientY,
-                        originX: position.x,
-                        originY: position.y
-                      }
-                      event.currentTarget.setPointerCapture(event.pointerId)
-                    }}
-                  >
-                    <div className="flex items-center gap-2">
-                      <Boxes className="size-3.5 text-emerald-400" />
-                      <span className="truncate text-sm font-medium">{node.data.name}</span>
-                    </div>
-                    <div className="mt-1 text-[11px] uppercase text-muted-foreground">
-                      {node.data.kind}
-                    </div>
-                    {node.data.status ? (
-                      <div
-                        className={`mt-2 inline-flex rounded border px-1.5 py-0.5 text-[11px] ${statusClass(node.data.status)}`}
-                      >
-                        {node.data.status}
-                      </div>
-                    ) : null}
-                    {node.data.description ? (
-                      <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
-                        {node.data.description}
-                      </p>
-                    ) : null}
-                    {(model?.sourceMap?.[node.id] ?? []).length > 0 ? (
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        {(model?.sourceMap?.[node.id] ?? []).map((location, index) => (
-                          <Button
-                            key={`${location.pattern}-${index}`}
-                            variant="outline"
-                            size="xs"
-                            className="h-6 max-w-full justify-start px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              void openSourceLocation(location)
-                            }}
-                            onPointerDown={(event) => event.stopPropagation()}
-                            data-testid="architecture-source-link"
-                            title={location.pattern}
-                          >
-                            <Link className="size-3" />
-                            <span className="truncate">{location.pattern}</span>
-                          </Button>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                )
-              })}
-            </div>
+          <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+            Loading architecture model...
           </div>
         )}
       </section>
@@ -770,7 +577,7 @@ export default function ArchitecturePanel({
                 className="rounded border border-border bg-background px-2 py-1"
                 value={sourcePattern}
                 onChange={(event) => setSourcePattern(event.target.value)}
-                onBlur={() => void saveSourcePattern()}
+                onBlur={(event) => void saveSourcePattern(event.currentTarget.value)}
                 placeholder="src/**/*.ts"
                 data-testid="architecture-source-pattern"
                 disabled={syncing}
@@ -801,6 +608,7 @@ export default function ArchitecturePanel({
                   size="sm"
                   onClick={() => void addEdge()}
                   disabled={syncing}
+                  data-testid="architecture-add-edge"
                 >
                   Add
                 </Button>

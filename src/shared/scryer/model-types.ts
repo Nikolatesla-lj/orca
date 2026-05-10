@@ -89,7 +89,10 @@ export type C4Edge = {
   id: string
   source: string
   target: string
+  sourceHandle?: string
+  targetHandle?: string
   data?: C4EdgeData
+  selected?: boolean
 }
 
 export type Group = {

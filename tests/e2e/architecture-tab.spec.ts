@@ -76,16 +76,40 @@ test.describe('Architecture tab live Scryer sync', () => {
     await expect(
       orcaPage.getByTestId('architecture-node').filter({ hasText: 'API Container' })
     ).toBeVisible()
+    await expect(
+      orcaPage.locator('[data-testid="architecture-node"][data-node-kind="container"]')
+    ).toBeVisible()
+    await expect(orcaPage.getByTestId('architecture-node-shape')).toBeVisible()
 
     await orcaPage.getByTestId('architecture-source-pattern').fill('src/**/*.ts')
     await orcaPage.keyboard.press('Tab')
 
+    await orcaPage.getByTestId('architecture-canvas-add-node').click()
+    await expect(nameInput).toHaveValue('Container 2')
+    await nameInput.fill('Worker Container')
+    await orcaPage.keyboard.press('Tab')
+    await orcaPage.getByTestId('architecture-edge-target').selectOption({ label: 'API Container' })
+    await orcaPage.getByTestId('architecture-add-edge').click()
+    await expect(
+      orcaPage.getByTestId('architecture-edge-label').filter({ hasText: 'depends on' })
+    ).toBeVisible()
+    await expect(orcaPage.getByTestId('architecture-edge-path')).toHaveCount(1)
+
     const apiNode = orcaPage.getByTestId('architecture-node').filter({ hasText: 'API Container' })
+    const dragTitle = apiNode.getByTestId('architecture-node-title').filter({
+      hasText: 'API Container'
+    })
     const box = await apiNode.boundingBox()
+    const titleBox = await dragTitle.boundingBox()
     expect(box).not.toBeNull()
-    await orcaPage.mouse.move(box!.x + 12, box!.y + 12)
+    expect(titleBox).not.toBeNull()
+    const dragStart = {
+      x: titleBox!.x + titleBox!.width / 2,
+      y: titleBox!.y + titleBox!.height / 2
+    }
+    await orcaPage.mouse.move(dragStart.x, dragStart.y)
     await orcaPage.mouse.down()
-    await orcaPage.mouse.move(box!.x + 92, box!.y + 52)
+    await orcaPage.mouse.move(dragStart.x + 80, dragStart.y + 40, { steps: 12 })
     await orcaPage.mouse.up()
     await expect
       .poll(async () => (await apiNode.boundingBox())?.x ?? 0, {

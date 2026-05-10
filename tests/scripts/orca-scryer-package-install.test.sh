@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+PACKAGE_SCRIPT="$ROOT_DIR/scripts/orca-scryer-package-install.sh"
+
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "$tmp_dir"' EXIT
+
+repo_dir="$tmp_dir/repo"
+release_dir="$tmp_dir/releases"
+install_path="$tmp_dir/local/Orca.AppImage"
+bin_dir="$tmp_dir/bin"
+symlink_path="$bin_dir/orca"
+build_log="$tmp_dir/build.log"
+
+git init -q "$repo_dir"
+git -C "$repo_dir" config user.name "Test User"
+git -C "$repo_dir" config user.email "test@example.com"
+git -C "$repo_dir" checkout -q -b orca-scryer
+printf '{"name":"orca","version":"9.9.9-test"}\n' > "$repo_dir/package.json"
+git -C "$repo_dir" add package.json
+git -C "$repo_dir" commit -q -m "test package seed"
+expected_commit="$(git -C "$repo_dir" rev-parse HEAD)"
+
+fake_build="$tmp_dir/fake-build.sh"
+cat > "$fake_build" <<'BUILD'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'branch=%s\ncommit=%s\n' "$ORCA_SCRYER_RELEASE_BRANCH" "$ORCA_SCRYER_RELEASE_COMMIT" > "$BUILD_LOG"
+mkdir -p "$ORCA_SCRYER_ARTIFACT_DIR"
+printf 'appimage:%s\n' "$ORCA_SCRYER_RELEASE_COMMIT" > "$ORCA_SCRYER_ARTIFACT_DIR/orca-linux.AppImage"
+printf 'deb:%s\n' "$ORCA_SCRYER_RELEASE_COMMIT" > "$ORCA_SCRYER_ARTIFACT_DIR/orca-linux-amd64.deb"
+BUILD
+chmod +x "$fake_build"
+
+ORCA_SCRYER_REPO_DIR="$repo_dir" \
+  ORCA_SCRYER_PACKAGE_COMMAND="$fake_build" \
+  ORCA_SCRYER_ARTIFACT_DIR="$repo_dir/dist" \
+  ORCA_SCRYER_RELEASE_DIR="$release_dir" \
+  ORCA_SCRYER_AUTO_INSTALL=1 \
+  ORCA_SCRYER_APPIMAGE_INSTALL_PATH="$install_path" \
+  ORCA_SCRYER_APPIMAGE_SYMLINK="$symlink_path" \
+  BUILD_LOG="$build_log" \
+  "$PACKAGE_SCRIPT"
+
+grep -qx 'branch=orca-scryer' "$build_log"
+grep -qx "commit=$expected_commit" "$build_log"
+
+release_manifest="$(find "$release_dir" -name manifest.env -print -quit)"
+test -n "$release_manifest"
+grep -qx "ORCA_SCRYER_RELEASE_BRANCH=orca-scryer" "$release_manifest"
+grep -qx "ORCA_SCRYER_RELEASE_COMMIT=$expected_commit" "$release_manifest"
+
+release_appimage="$(find "$release_dir" -name 'orca-linux.AppImage' -print -quit)"
+test -f "$release_appimage"
+grep -qx "appimage:$expected_commit" "$release_appimage"
+
+test -x "$install_path"
+grep -qx "appimage:$expected_commit" "$install_path"
+test -L "$symlink_path"
+test "$(readlink "$symlink_path")" = "$install_path"
+
+shim_repo="$tmp_dir/shim-repo"
+shim_release_dir="$tmp_dir/shim-releases"
+shim_bin="$tmp_dir/corepack-bin"
+shim_log="$tmp_dir/corepack.log"
+
+git init -q "$shim_repo"
+git -C "$shim_repo" config user.name "Test User"
+git -C "$shim_repo" config user.email "test@example.com"
+git -C "$shim_repo" checkout -q -b orca-scryer
+printf '{"name":"orca","version":"9.9.9-test"}\n' > "$shim_repo/package.json"
+git -C "$shim_repo" add package.json
+git -C "$shim_repo" commit -q -m "test corepack seed"
+shim_commit="$(git -C "$shim_repo" rev-parse HEAD)"
+
+mkdir -p "$shim_bin"
+cat > "$shim_bin/corepack" <<'COREPACK'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" != "pnpm" ]]; then
+  echo "unexpected corepack command: $*" >&2
+  exit 3
+fi
+shift
+case "$*" in
+  "run build:linux")
+    pnpm run build
+    ;;
+  "run build")
+    printf 'nested-pnpm-ok\n' > "$COREPACK_LOG"
+    mkdir -p "$ORCA_SCRYER_ARTIFACT_DIR"
+    printf 'appimage:%s\n' "$ORCA_SCRYER_RELEASE_COMMIT" > "$ORCA_SCRYER_ARTIFACT_DIR/orca-linux.AppImage"
+    ;;
+  *)
+    echo "unexpected corepack pnpm command: $*" >&2
+    exit 4
+    ;;
+esac
+COREPACK
+chmod +x "$shim_bin/corepack"
+
+PATH="$shim_bin:/usr/bin:/bin" \
+  ORCA_SCRYER_REPO_DIR="$shim_repo" \
+  ORCA_SCRYER_ARTIFACT_DIR="$shim_repo/dist" \
+  ORCA_SCRYER_RELEASE_DIR="$shim_release_dir" \
+  COREPACK_LOG="$shim_log" \
+  "$PACKAGE_SCRIPT"
+
+grep -qx 'nested-pnpm-ok' "$shim_log"
+shim_appimage="$(find "$shim_release_dir" -name 'orca-linux.AppImage' -print -quit)"
+test -f "$shim_appimage"
+grep -qx "appimage:$shim_commit" "$shim_appimage"
