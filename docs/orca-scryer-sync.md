@@ -4,6 +4,7 @@
 
 - `scripts/orca-scryer-watch.sh`：轻量检查官方 `origin/main` 是否有新提交。
 - `scripts/orca-scryer-sync.sh`：发现更新后执行完整同步、rebase、测试和推送。
+- `scripts/orca-scryer-package-install.sh`：可选的 Ubuntu AppImage/deb 打包和本机更新步骤。
 
 ## 关键分支
 
@@ -54,7 +55,9 @@ orca-scryer = 最新 main + Scryer 集成功能
    - `oxfmt --check .`
    - architecture live e2e
 9. 全部通过后，用 `git push --force-with-lease fork orca-scryer` 更新远端功能分支。
-10. 最后同步本地状态，让本地 `main`、本地 `orca-scryer` 和 GitHub 远端一致。
+10. 如果设置 `ORCA_SCRYER_AUTO_PACKAGE=1`，从 rebase 后的功能分支运行 Ubuntu 打包。
+11. 如果同时设置 `ORCA_SCRYER_AUTO_INSTALL=1`，把最新 AppImage 安装到本机路径并更新 `orca` 启动 symlink。
+12. 最后同步本地状态，让本地 `main`、本地 `orca-scryer` 和 GitHub 远端一致。
 
 如果本地 `orca-scryer` 有未提交改动，脚本会先用 `git stash` 临时保存，完成同步后再恢复。`stash` 可以理解成“先把没提交的改动临时收起来”。
 
@@ -80,6 +83,68 @@ scripts/orca-scryer-sync.sh
 bash tests/scripts/orca-scryer-watch.test.sh
 ```
 
+测试打包/安装脚本自身逻辑：
+
+```bash
+bash tests/scripts/orca-scryer-package-install.test.sh
+```
+
+测试 cron 安装脚本会写入自动打包/安装环境变量：
+
+```bash
+bash tests/scripts/orca-scryer-install-cron.test.sh
+```
+
+## 可选：同步后自动打包并更新本机 Orca
+
+默认情况下，`sync` 不会自动替换本机 Orca。要开启它，运行同步或安装 cron 时显式传入：
+
+```bash
+ORCA_SCRYER_AUTO_PACKAGE=1 \
+ORCA_SCRYER_AUTO_INSTALL=1 \
+scripts/orca-scryer-sync.sh
+```
+
+默认打包命令是：
+
+```bash
+corepack pnpm run build:linux
+```
+
+它会使用 Electron Builder 生成 Ubuntu 可运行的 `AppImage` 和 `.deb`。脚本会把本次构建产物复制到：
+
+```text
+.git/orca-scryer-sync/releases/
+```
+
+默认本机安装方式是 AppImage：
+
+```text
+~/.local/share/orca-scryer/orca-linux.AppImage
+~/.local/bin/orca -> ~/.local/share/orca-scryer/orca-linux.AppImage
+```
+
+可以用环境变量改路径：
+
+```bash
+ORCA_SCRYER_APPIMAGE_INSTALL_PATH="$HOME/Apps/Orca.AppImage" \
+ORCA_SCRYER_APPIMAGE_SYMLINK="$HOME/.local/bin/orca" \
+ORCA_SCRYER_AUTO_PACKAGE=1 \
+ORCA_SCRYER_AUTO_INSTALL=1 \
+scripts/orca-scryer-sync.sh
+```
+
+如果要用 `.deb` 安装：
+
+```bash
+ORCA_SCRYER_INSTALL_KIND=deb \
+ORCA_SCRYER_AUTO_PACKAGE=1 \
+ORCA_SCRYER_AUTO_INSTALL=1 \
+scripts/orca-scryer-sync.sh
+```
+
+`.deb` 安装可能需要 `sudo`。cron 环境里如果不能交互输入密码，建议继续用默认 AppImage。
+
 ## 安装每 12 小时自动检查
 
 运行：
@@ -92,6 +157,14 @@ scripts/orca-scryer-install-cron.sh
 
 ```cron
 0 */12 * * * /home/ljian/wspace/orca-scryer/orca/scripts/orca-scryer-watch.sh
+```
+
+如果安装 cron 时带上自动打包变量，安装脚本会把这些变量写进 crontab：
+
+```bash
+ORCA_SCRYER_AUTO_PACKAGE=1 \
+ORCA_SCRYER_AUTO_INSTALL=1 \
+scripts/orca-scryer-install-cron.sh
 ```
 
 查看已安装任务：

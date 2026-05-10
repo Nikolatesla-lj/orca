@@ -9,6 +9,7 @@ feature_branch="${ORCA_SCRYER_FEATURE_BRANCH:-orca-scryer}"
 state_dir="${ORCA_SCRYER_STATE_DIR:-$repo_dir/.git/orca-scryer-sync}"
 skip_tests="${ORCA_SCRYER_SKIP_TESTS:-0}"
 skip_push="${ORCA_SCRYER_SKIP_PUSH:-0}"
+auto_package="${ORCA_SCRYER_AUTO_PACKAGE:-0}"
 
 mkdir -p "$state_dir"
 
@@ -197,6 +198,12 @@ if [[ "$skip_push" != "1" ]]; then
   run git -C "$repo_dir" push --force-with-lease "$fork_remote" "$feature_branch"
 else
   echo "Skipping push because ORCA_SCRYER_SKIP_PUSH=1."
+fi
+
+if [[ "$auto_package" == "1" ]]; then
+  run "$repo_dir/scripts/orca-scryer-package-install.sh"
+else
+  echo "Skipping Ubuntu package/install because ORCA_SCRYER_AUTO_PACKAGE is not 1."
 fi
 
 run git -C "$repo_dir" fetch --prune "$fork_remote" "$main_branch" "$feature_branch"

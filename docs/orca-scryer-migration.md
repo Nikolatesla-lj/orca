@@ -9,7 +9,7 @@
 - 功能来源：`scryer/`，来源仓库 `https://github.com/aklos/scryer`
 - GitNexus 索引结果：
   - `scryer`：3,011 个节点，4,681 条关系，61 个功能区，175 条流程
-  - 当前 workspace 的 `orca`：28,382 个节点，52,281 条关系，1,125 个功能区，300 条流程
+  - 当前 workspace 的 `orca`：29,012 个节点，53,419 条关系，1,144 个功能区，300 条流程
 
 ## 总结结论
 
@@ -256,14 +256,17 @@ GitNexus 和源码确认的关键位置：
 - [x] 迁移并改写第一版可用画布：
   - `scryer/src/App.tsx` -> `ArchitecturePanel.tsx`，只保留 tab 内需要的部分
 - [ ] 仍需做完整视觉等价迁移：
-  - `scryer/src/C4Canvas.tsx`
   - `scryer/src/ContextPanel.tsx`
   - `scryer/src/FlowScriptView.tsx`
   - `scryer/src/GroupsView.tsx`
   - `scryer/src/SyncBar.tsx`
-  - `scryer/src/nodes/*`
-  - `scryer/src/edges/*`
-  - `scryer/src/layout*`
+- [x] 已迁移并适配 Orca：
+  - `scryer/src/C4Canvas.tsx` 的 ReactFlow 核心画布、面包屑、MiniMap、Controls、snap grid、auto layout 入口
+  - `scryer/src/nodes/*` 的节点形状、person 节点、reference 节点、contract badge、hint badge、source link、component member chips
+  - `scryer/src/edges/*` 的 relationship edge、状态颜色、双向边偏移、route waypoint、label/method 渲染
+  - `scryer/src/edgeRouting.ts` 的 handle 分配逻辑
+  - `scryer/src/edgeBundling.ts` 的 hub edge bundling 逻辑
+  - `scryer/src/layout.ts` 的 code-level grid layout 和 d3-force auto layout
 - [x] 删除/替换：
   - `@tauri-apps/api` 调用
   - Scryer 自带 settings panel
@@ -273,11 +276,11 @@ GitNexus 和源码确认的关键位置：
   - [x] 使用 Orca 的 `Button/DropdownMenu` 组件
   - [x] 使用 Orca 主题变量
   - [x] 禁止把 Scryer app 外壳嵌成“套娃页面”
-- [ ] 增加依赖：
-  - `@xyflow/react`
-  - `d3-force`
-  - `bubblesets-js`
-  - `@types/d3-force`
+- [x] 增加依赖：
+  - [x] `@xyflow/react`
+  - [x] `d3-force`
+  - [x] `@types/d3-force`
+  - [ ] `bubblesets-js`：等迁移 Scryer group bubble 视觉时再确认是否需要
 - [x] 测试
   - 架构图 tab 首屏不是空白
   - 可以新增节点
@@ -285,7 +288,18 @@ GitNexus 和源码确认的关键位置：
   - 可以连线
   - 可以保存并重开
 
-本轮已完成第一版真实画布：节点新增、C4 父子层级、节点编辑、source pattern、边关系、删除子树、拖动画布位置、drift 检查、mark synced。它不是骨架代码，但视觉和交互复杂度尚未达到 Scryer 原 ReactFlow 画布的完整等价。
+Phase 2 第一轮已完成 ReactFlow 核心画布迁移：`ArchitectureCanvas.tsx` 使用 `@xyflow/react` 渲染 C4 节点和关系边，支持 root/子层级 drilldown、单根系统自动钻入、面包屑返回、节点拖拽保存、ReactFlow 连线、删除、source map 链接、MiniMap/Controls。`c4-model.ts` 承担可见节点计算、引用节点、删除级联、布局位置写回、C4 下一层级推导等纯逻辑，并有独立单元测试。
+
+Phase 2 第二轮已继续补齐 Scryer 视觉和布局链：节点组件已从画布内联实现拆到 `nodes/*`，边组件拆到 `edges/*`，布局和边路由拆到 `layout/*`。当前实现不是静态壳：auto layout 会真实写回当前层节点坐标；edge routing 会按节点方向和拥挤度选择 handle；edge bundling 会给 hub 节点多条同向边写入 `_route` waypoint；RelationshipEdge 会按 `_route/_biPair/_status` 渲染折线、双向偏移、状态色、箭头和 label。
+
+本轮还修复了第一阶段 live e2e 暴露出的真实交互问题：
+
+- ReactFlow selection 不能反向控制 Orca inspector 选中状态，否则会在 `null/id` 之间循环触发最大更新深度错误。
+- 画布拖拽保存必须基于最新模型更新位置，避免覆盖刚保存的 source map。
+- `Source pattern` blur 时必须读输入框当前值，不能依赖可能滞后的 React state。
+- 模型 reload 不能无条件清空正在输入的 source pattern 草稿。
+
+仍未完成完整视觉等价：Scryer 的 `CodeLevelRack`、`ContextPanel`、`GroupsView`、`FlowScriptView` 和完整 `SyncBar` 还需要后续逐项迁移；group bubble 视觉是否引入 `bubblesets-js` 仍需单独确认。
 
 ### 5. 接 source map 和 Orca 文件打开
 
@@ -391,7 +405,7 @@ GitNexus 和源码确认的关键位置：
 
 ### 9. 验证
 
-- [x] 本轮未新增 package 依赖，因此无需重新 `pnpm install`
+- [x] 本轮新增 package 依赖，并已更新 `pnpm-lock.yaml`
 - [x] `pnpm run tc:web`
 - [x] `pnpm run tc:node`
 - [x] 改动文件 `oxlint`
