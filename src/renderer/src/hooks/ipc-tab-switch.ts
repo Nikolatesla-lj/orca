@@ -67,6 +67,12 @@ export function activateCyclableTab(store: AppStoreState, next: TypeCyclableTab)
       store.activateTab?.(next.tabId)
     }
     store.setActiveTabType('browser')
+  } else if (next.type === 'architecture') {
+    store.setActiveArchitectureTab(next.id)
+    if (next.tabId) {
+      store.activateTab?.(next.tabId)
+    }
+    store.setActiveTabType('architecture')
   } else {
     // Why: `setActiveFile` targets the file entity (its implicit activateTab
     // picks the first matching tab in the active group); `activateTab(tabId)`
@@ -96,6 +102,7 @@ export function handleSwitchTab(direction: number): boolean {
     activeTabId: store.activeTabId,
     activeFileId: store.activeFileId,
     activeBrowserTabId: store.activeBrowserTabId,
+    activeArchitectureTabId: store.activeArchitectureTabId,
     activeGroupTabId: groupTabIdInNav,
     direction
   })
@@ -128,6 +135,7 @@ export function handleSwitchTabAcrossAllTypes(direction: number): boolean {
     activeTabId: store.activeTabId,
     activeFileId: store.activeFileId,
     activeBrowserTabId: store.activeBrowserTabId,
+    activeArchitectureTabId: store.activeArchitectureTabId,
     activeGroupTabId: groupTabIdInNav,
     direction
   })
@@ -160,7 +168,8 @@ export function handleSwitchTerminalTab(direction: number): boolean {
     store.activeTabType,
     store.activeTabId,
     store.activeFileId,
-    store.activeBrowserTabId
+    store.activeBrowserTabId,
+    store.activeArchitectureTabId
   )
   // Why: when an editor/browser tab is active, jump to the first terminal on
   // forward navigation instead of skipping to index 1.

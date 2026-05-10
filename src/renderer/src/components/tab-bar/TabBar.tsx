@@ -5,8 +5,9 @@
  * more clarity than the ~5 lines of bloat is worth. */
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { SortableContext } from '@dnd-kit/sortable'
-import { FilePlus, FileText, Globe, Plus, TerminalSquare } from 'lucide-react'
+import { FilePlus, FileText, Globe, Network, Plus, TerminalSquare } from 'lucide-react'
 import type {
+  ArchitectureWorkspace,
   BrowserTab as BrowserTabState,
   TerminalTab,
   WorkspaceVisibleTabType
@@ -17,6 +18,7 @@ import type { OpenFile } from '../../store/slices/editor'
 import SortableTab from './SortableTab'
 import EditorFileTab from './EditorFileTab'
 import BrowserTab, { getBrowserTabLabel } from './BrowserTab'
+import ArchitectureTab, { getArchitectureTabLabel } from './ArchitectureTab'
 import { QuickLaunchAgentMenuItems } from './QuickLaunchButton'
 import type { DropIndicator } from './drop-indicator'
 import { reconcileTabOrder } from './reconcile-order'
@@ -60,19 +62,24 @@ type TabBarProps = {
   showAgentLaunchItems?: boolean
   onNewFileTab?: () => void
   onOpenFileTab?: () => void
+  onNewArchitectureTab?: () => void
   onSetCustomTitle: (tabId: string, title: string | null) => void
   onSetTabColor: (tabId: string, color: string | null) => void
   onTogglePaneExpand: (tabId: string) => void
   editorFiles?: (OpenFile & { tabId?: string })[]
   browserTabs?: (BrowserTabState & { tabId?: string })[]
+  architectureTabs?: (ArchitectureWorkspace & { tabId?: string })[]
   activeFileId?: string | null
   activeBrowserTabId?: string | null
+  activeArchitectureTabId?: string | null
   activeTabType?: WorkspaceVisibleTabType
   onActivateFile?: (fileId: string) => void
   onCloseFile?: (fileId: string) => void
   onActivateBrowserTab?: (tabId: string) => void
   onCloseBrowserTab?: (tabId: string) => void
   onDuplicateBrowserTab?: (tabId: string) => void
+  onActivateArchitectureTab?: (tabId: string) => void
+  onCloseArchitectureTab?: (tabId: string) => void
   onCloseAllFiles?: () => void
   onPinFile?: (fileId: string, tabId?: string) => void
   tabBarOrder?: string[]
@@ -97,6 +104,12 @@ type TabItem =
       unifiedTabId: string
       data: BrowserTabState & { tabId?: string }
     }
+  | {
+      type: 'architecture'
+      id: string
+      unifiedTabId: string
+      data: ArchitectureWorkspace & { tabId?: string }
+    }
 
 function getTabDragLabel(item: TabItem): string {
   if (item.type === 'terminal') {
@@ -104,6 +117,9 @@ function getTabDragLabel(item: TabItem): string {
   }
   if (item.type === 'browser') {
     return getBrowserTabLabel(item.data)
+  }
+  if (item.type === 'architecture') {
+    return getArchitectureTabLabel(item.data)
   }
   return getEditorDisplayLabel(item.data)
 }
@@ -125,19 +141,24 @@ function TabBarInner({
   showAgentLaunchItems = true,
   onNewFileTab,
   onOpenFileTab,
+  onNewArchitectureTab,
   onSetCustomTitle,
   onSetTabColor,
   onTogglePaneExpand,
   editorFiles,
   browserTabs,
+  architectureTabs,
   activeFileId,
   activeBrowserTabId,
+  activeArchitectureTabId,
   activeTabType,
   onActivateFile,
   onCloseFile,
   onActivateBrowserTab,
   onCloseBrowserTab,
   onDuplicateBrowserTab,
+  onActivateArchitectureTab,
+  onCloseArchitectureTab,
   onCloseAllFiles,
   onPinFile,
   tabBarOrder,
@@ -183,14 +204,28 @@ function TabBarInner({
     () => new Map((browserTabs ?? []).map((t) => [t.id, t])),
     [browserTabs]
   )
+  const architectureMap = useMemo(
+    () => new Map((architectureTabs ?? []).map((t) => [t.id, t])),
+    [architectureTabs]
+  )
 
   const terminalIds = useMemo(() => tabs.map((t) => t.id), [tabs])
   const editorFileIds = useMemo(() => editorFiles?.map((f) => f.tabId ?? f.id) ?? [], [editorFiles])
   const browserTabIds = useMemo(() => browserTabs?.map((tab) => tab.id) ?? [], [browserTabs])
+  const architectureTabIds = useMemo(
+    () => architectureTabs?.map((tab) => tab.id) ?? [],
+    [architectureTabs]
+  )
 
   // Build the unified ordered list, reconciling stored order with current items
   const orderedItems = useMemo(() => {
-    const ids = reconcileTabOrder(tabBarOrder, terminalIds, editorFileIds, browserTabIds)
+    const ids = reconcileTabOrder(
+      tabBarOrder,
+      terminalIds,
+      editorFileIds,
+      browserTabIds,
+      architectureTabIds
+    )
     const items: TabItem[] = []
     for (const id of ids) {
       const terminal = terminalMap.get(id)
@@ -218,9 +253,28 @@ function TabBarInner({
         })
         continue
       }
+      const architectureTab = architectureMap.get(id)
+      if (architectureTab) {
+        items.push({
+          type: 'architecture',
+          id,
+          unifiedTabId: architectureTab.tabId ?? architectureTab.id,
+          data: architectureTab
+        })
+      }
     }
     return items
-  }, [tabBarOrder, terminalIds, editorFileIds, browserTabIds, terminalMap, editorMap, browserMap])
+  }, [
+    tabBarOrder,
+    terminalIds,
+    editorFileIds,
+    browserTabIds,
+    architectureTabIds,
+    terminalMap,
+    editorMap,
+    browserMap,
+    architectureMap
+  ])
 
   const sortableIds = useMemo(() => orderedItems.map((item) => item.id), [orderedItems])
 
@@ -420,6 +474,24 @@ function TabBarInner({
                 />
               )
             }
+            if (item.type === 'architecture') {
+              return (
+                <ArchitectureTab
+                  key={item.id}
+                  tab={item.data}
+                  isActive={activeTabType === 'architecture' && activeArchitectureTabId === item.id}
+                  hasTabsToRight={index < orderedItems.length - 1}
+                  onActivate={() => onActivateArchitectureTab?.(item.id)}
+                  onClose={() => onCloseArchitectureTab?.(item.id)}
+                  onCloseToRight={() => onCloseToRight(item.id)}
+                  onSplitGroup={(direction, sourceVisibleTabId) =>
+                    onCreateSplitGroup?.(direction, sourceVisibleTabId)
+                  }
+                  dragData={dragData}
+                  dropIndicator={dropIndicatorByVisibleId.get(item.id) ?? null}
+                />
+              )
+            }
             return (
               <EditorFileTab
                 key={item.id}
@@ -567,6 +639,15 @@ function TabBarInner({
             >
               <FileText className="size-4 text-muted-foreground" />
               Open Markdown...
+            </DropdownMenuItem>
+          )}
+          {!terminalOnly && onNewArchitectureTab && (
+            <DropdownMenuItem
+              onSelect={onNewArchitectureTab}
+              className="gap-2 rounded-[7px] px-2 py-1.5 text-[12px] leading-5 font-medium"
+            >
+              <Network className="size-4 text-muted-foreground" />
+              New Architecture
             </DropdownMenuItem>
           )}
           {showAgentLaunchItems ? (

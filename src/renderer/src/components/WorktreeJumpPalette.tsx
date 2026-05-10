@@ -40,7 +40,12 @@ import {
   ORCA_BROWSER_FOCUS_REQUEST_EVENT,
   queueBrowserFocusRequest
 } from '@/components/browser-pane/browser-focus'
-import type { BrowserPage, BrowserWorkspace, Worktree } from '../../../shared/types'
+import type {
+  BrowserPage,
+  BrowserWorkspace,
+  Worktree,
+  WorkspaceVisibleTabType
+} from '../../../shared/types'
 import { isGitRepoKind } from '../../../shared/repo-kind'
 
 type WorktreePaletteItem = {
@@ -178,7 +183,7 @@ export default function WorktreeJumpPalette(): React.JSX.Element | null {
   const deferredQuery = useDeferredValue(query)
   const [selectedItemId, setSelectedItemId] = useState('')
   const previousWorktreeIdRef = useRef<string | null>(null)
-  const previousActiveTabTypeRef = useRef<'browser' | 'editor' | 'terminal'>('terminal')
+  const previousActiveTabTypeRef = useRef<WorkspaceVisibleTabType>('terminal')
   const previousBrowserPageIdRef = useRef<string | null>(null)
   const previousBrowserFocusTargetRef = useRef<'webview' | 'address-bar'>('webview')
   const wasVisibleRef = useRef(false)

@@ -312,9 +312,15 @@ export type TabGroupLayoutNode =
     }
 
 // ─── Unified Tab ────────────────────────────────────────────────────
-export type TabContentType = 'terminal' | 'editor' | 'diff' | 'conflict-review' | 'browser'
+export type TabContentType =
+  | 'terminal'
+  | 'editor'
+  | 'diff'
+  | 'conflict-review'
+  | 'browser'
+  | 'architecture'
 
-export type WorkspaceVisibleTabType = 'terminal' | 'editor' | 'browser'
+export type WorkspaceVisibleTabType = 'terminal' | 'editor' | 'browser' | 'architecture'
 export type CtrlTabOrderMode = 'mru' | 'sequential'
 
 export type Tab = {
@@ -457,6 +463,16 @@ export type BrowserWorkspace = {
 
 export type BrowserTab = BrowserWorkspace
 
+export type ArchitectureWorkspace = {
+  id: string
+  worktreeId: string
+  label?: string
+  modelRef?: string | null
+  projectPath?: string | null
+  title: string
+  createdAt: number
+}
+
 export type BrowserSessionProfileScope = 'default' | 'isolated' | 'imported'
 
 export type BrowserSessionProfileSource = {
@@ -548,6 +564,10 @@ export type WorkspaceSessionState = {
   browserPagesByWorkspace?: Record<string, BrowserPage[]>
   /** Per-worktree active browser workspace ID at shutdown. */
   activeBrowserTabIdByWorktree?: Record<string, string | null>
+  /** Persisted architecture model workspaces, keyed by worktree ID. */
+  architectureTabsByWorktree?: Record<string, ArchitectureWorkspace[]>
+  /** Per-worktree active architecture workspace ID at shutdown. */
+  activeArchitectureTabIdByWorktree?: Record<string, string | null>
   /** Per-worktree active tab type (terminal vs editor vs browser) at shutdown. */
   activeTabTypeByWorktree?: Record<string, WorkspaceVisibleTabType>
   /** Global browser URL history for address bar autocomplete. */

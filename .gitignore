@@ -103,3 +103,5 @@ playwright-report/
 
 # Agent hook runtime endpoints (machine-local secrets)
 /agent-hooks/
+
+.gitnexus

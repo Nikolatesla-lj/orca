@@ -45,6 +45,7 @@ import { registerCodexAccountHandlers } from './codex-accounts'
 import { registerAgentHookHandlers } from './agent-hooks'
 import { registerAgentTrustHandlers } from './agent-trust'
 import { registerClaudeAccountHandlers } from './claude-accounts'
+import { registerArchitectureHandlers } from './architecture'
 import { warmSystemFontFamilies } from '../system-fonts'
 import { registerUpdaterHandlers } from '../window/attach-main-window-services'
 import { registerClipboardHandlers } from '../window/clipboard-ipc-handlers'
@@ -121,6 +122,7 @@ export function registerCoreHandlers(
   }
   registerTelemetryHandlers(store)
   registerBrowserHandlers()
+  registerArchitectureHandlers()
   // Why: applyPendingCookieImport MUST run before restorePersistedUserAgent
   // because the latter calls session.fromPartition() which initializes
   // CookieMonster. The pending import replaces the live DB file so
