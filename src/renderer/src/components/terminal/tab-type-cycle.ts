@@ -1,4 +1,4 @@
-export type TabCycleType = 'terminal' | 'editor' | 'browser'
+export type TabCycleType = 'terminal' | 'editor' | 'browser' | 'architecture'
 
 export type TypeCyclableTab = {
   type: TabCycleType
@@ -12,6 +12,7 @@ type GetNextTabWithinActiveTypeParams = {
   activeTabId: string | null
   activeFileId: string | null
   activeBrowserTabId: string | null
+  activeArchitectureTabId?: string | null
   activeGroupTabId?: string | null
   direction: number
 }
@@ -20,13 +21,17 @@ export function getActiveEntityIdForTabType(
   activeTabType: TabCycleType,
   activeTabId: string | null,
   activeFileId: string | null,
-  activeBrowserTabId: string | null
+  activeBrowserTabId: string | null,
+  activeArchitectureTabId?: string | null
 ): string | null {
   if (activeTabType === 'editor') {
     return activeFileId
   }
   if (activeTabType === 'browser') {
     return activeBrowserTabId
+  }
+  if (activeTabType === 'architecture') {
+    return activeArchitectureTabId ?? null
   }
   return activeTabId
 }
@@ -37,6 +42,7 @@ type GetNextTabAcrossAllTypesParams = {
   activeTabId: string | null
   activeFileId: string | null
   activeBrowserTabId: string | null
+  activeArchitectureTabId?: string | null
   activeGroupTabId?: string | null
   direction: number
 }
@@ -51,6 +57,7 @@ export function getNextTabAcrossAllTypes({
   activeTabId,
   activeFileId,
   activeBrowserTabId,
+  activeArchitectureTabId,
   activeGroupTabId,
   direction
 }: GetNextTabAcrossAllTypesParams): TypeCyclableTab | null {
@@ -66,7 +73,8 @@ export function getNextTabAcrossAllTypes({
     activeTabType,
     activeTabId,
     activeFileId,
-    activeBrowserTabId
+    activeBrowserTabId,
+    activeArchitectureTabId
   )
   const currentIndex = groupTabIdInNav
     ? tabs.findIndex((tab) => tab.tabId === groupTabIdInNav)
@@ -85,6 +93,7 @@ export function getNextTabWithinActiveType({
   activeTabId,
   activeFileId,
   activeBrowserTabId,
+  activeArchitectureTabId,
   activeGroupTabId,
   direction
 }: GetNextTabWithinActiveTypeParams): TypeCyclableTab | null {
@@ -101,7 +110,8 @@ export function getNextTabWithinActiveType({
     activeTabType,
     activeTabId,
     activeFileId,
-    activeBrowserTabId
+    activeBrowserTabId,
+    activeArchitectureTabId
   )
   const currentIndex = groupTabIdInNav
     ? tabsOfActiveType.findIndex((tab) => tab.tabId === groupTabIdInNav)

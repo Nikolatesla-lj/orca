@@ -292,6 +292,12 @@ import type {
   WorkspaceCleanupScanResult
 } from '../shared/workspace-cleanup'
 import type { KeybindingActionId, KeybindingFileSnapshot } from '../shared/keybindings'
+import type {
+  C4ModelData,
+  DriftReport,
+  ScryerToolCall,
+  ScryerToolResult
+} from '../shared/scryer/model-types'
 
 export type BrowserApi = {
   registerGuest: (args: {
@@ -596,6 +602,25 @@ export type AppApi = {
   /** Opens a native directory picker and authorizes the selected directory
    *  for Floating Workspace markdown file creation. */
   pickFloatingWorkspaceDirectory: () => Promise<string | null>
+}
+
+export type ArchitectureApi = {
+  readModel: (args: { projectPath: string }) => Promise<C4ModelData>
+  writeModel: (args: { projectPath: string; model: C4ModelData }) => Promise<void>
+  checkDrift: (args: { projectPath: string }) => Promise<DriftReport>
+  markSynced: (args: { projectPath: string }) => Promise<void>
+  isSyncing: (args: { projectPath: string }) => Promise<boolean>
+  beginSync: (args: {
+    projectPath: string
+    modelName?: string
+  }) => Promise<{ prompt: string; drift: DriftReport; snapshot: C4ModelData }>
+  cancelSync: (args: { projectPath: string }) => Promise<C4ModelData>
+  finishSync: (args: { projectPath: string }) => Promise<void>
+  callTool: (args: { projectPath: string; call: ScryerToolCall }) => Promise<ScryerToolResult>
+  watchModel: (args: { projectPath: string }) => Promise<void>
+  onModelChanged: (
+    callback: (event: { projectPath: string; fileName: string }) => void
+  ) => () => void
 }
 
 export type PreloadApi = {
@@ -1356,6 +1381,7 @@ export type PreloadApi = {
     read: (id: string, fileName: string, kind?: 'image' | 'bundle') => Promise<ArrayBuffer | null>
     delete: (id: string, fileName: string, kind?: 'image' | 'bundle') => Promise<void>
   }
+  architecture: ArchitectureApi
   browser: BrowserApi
   hooks: {
     check: (args: {

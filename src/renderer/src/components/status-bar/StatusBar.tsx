@@ -32,6 +32,7 @@ import { ProviderIcon, ProviderPanel, barColor } from './tooltip'
 import { ClaudeIcon, GeminiIcon, OpenAIIcon, OpenCodeGoIcon } from './icons'
 import { formatWindowLabel } from '@/lib/window-label-formatter'
 import { markLiveCodexSessionsForRestart } from '@/lib/codex-session-restart'
+import { chooseCodexFailoverAccount } from '@/lib/codex-account-failover'
 import { SshStatusSegment } from './SshStatusSegment'
 import { UpdateStatusSegment } from './UpdateStatusSegment'
 import { ResourceUsageStatusSegment } from './ResourceUsageStatusSegment'
@@ -480,6 +481,7 @@ function CodexSwitcherMenu({
     activeAccountId: null
   })
   const [isSwitching, setIsSwitching] = useState(false)
+  const autoFailoverKeyRef = useRef<string | null>(null)
   const openSettingsPage = useAppStore((s) => s.openSettingsPage)
   const openSettingsTarget = useAppStore((s) => s.openSettingsTarget)
   const fetchSettings = useAppStore((s) => s.fetchSettings)
@@ -535,6 +537,36 @@ function CodexSwitcherMenu({
       setIsSwitching(false)
     }
   }
+
+  const autoFailoverAccountId = chooseCodexFailoverAccount({
+    activeAccountId: accounts.activeAccountId,
+    activeCodexUsage: codex,
+    accounts: accounts.accounts,
+    inactiveCodexAccounts
+  })
+
+  useEffect(() => {
+    if (!autoFailoverAccountId) {
+      autoFailoverKeyRef.current = null
+      return
+    }
+
+    const signature = `${accounts.activeAccountId ?? 'system'}:${codex.updatedAt}:${codex.status}:${codex.error ?? ''}:${autoFailoverAccountId}`
+    if (autoFailoverKeyRef.current === signature || isSwitching) {
+      return
+    }
+
+    autoFailoverKeyRef.current = signature
+    void handleSelectAccount(autoFailoverAccountId)
+  }, [
+    accounts.activeAccountId,
+    autoFailoverAccountId,
+    codex.error,
+    codex.status,
+    codex.updatedAt,
+    handleSelectAccount,
+    isSwitching
+  ])
 
   useEffect(() => {
     if (!open) {

@@ -10,6 +10,7 @@
  */
 import { z } from 'zod'
 import type {
+  ArchitectureWorkspace,
   BrowserWorkspace,
   TabGroupLayoutNode,
   TerminalPaneLayoutNode,
@@ -70,9 +71,16 @@ const terminalTabSchema = z.object({
 
 // ─── Unified tab model ──────────────────────────────────────────────
 
-const tabContentTypeSchema = z.enum(['terminal', 'editor', 'diff', 'conflict-review', 'browser'])
+const tabContentTypeSchema = z.enum([
+  'terminal',
+  'editor',
+  'diff',
+  'conflict-review',
+  'browser',
+  'architecture'
+])
 
-const workspaceVisibleTabTypeSchema = z.enum(['terminal', 'editor', 'browser'])
+const workspaceVisibleTabTypeSchema = z.enum(['terminal', 'editor', 'browser', 'architecture'])
 
 const tabSchema = z.object({
   id: z.string(),
@@ -193,6 +201,18 @@ const browserHistoryEntriesSchema = z
   .array(browserHistoryEntrySchema)
   .transform((entries) => normalizeBrowserHistoryEntries(entries))
 
+// ─── Architecture ──────────────────────────────────────────────────
+
+const architectureWorkspaceSchema: z.ZodType<ArchitectureWorkspace> = z.object({
+  id: z.string(),
+  worktreeId: z.string(),
+  label: z.string().optional(),
+  modelRef: z.string().nullable().optional(),
+  projectPath: z.string().nullable().optional(),
+  title: z.string(),
+  createdAt: z.number()
+})
+
 // ─── Workspace session ──────────────────────────────────────────────
 
 export const workspaceSessionStateSchema: z.ZodType<WorkspaceSessionState> = z.object({
@@ -207,6 +227,8 @@ export const workspaceSessionStateSchema: z.ZodType<WorkspaceSessionState> = z.o
   browserTabsByWorktree: z.record(z.string(), z.array(browserWorkspaceSchema)).optional(),
   browserPagesByWorkspace: z.record(z.string(), z.array(browserPageSchema)).optional(),
   activeBrowserTabIdByWorktree: z.record(z.string(), z.string().nullable()).optional(),
+  architectureTabsByWorktree: z.record(z.string(), z.array(architectureWorkspaceSchema)).optional(),
+  activeArchitectureTabIdByWorktree: z.record(z.string(), z.string().nullable()).optional(),
   activeTabTypeByWorktree: z.record(z.string(), workspaceVisibleTabTypeSchema).optional(),
   browserUrlHistory: browserHistoryEntriesSchema.optional(),
   activeTabIdByWorktree: z.record(z.string(), z.string().nullable()).optional(),

@@ -12,6 +12,7 @@ import {
 import TabBar from '../tab-bar/TabBar'
 import { useTabGroupWorkspaceModel } from './useTabGroupWorkspaceModel'
 import TabGroupDropOverlay from './TabGroupDropOverlay'
+import ArchitecturePanel from '../architecture/ArchitecturePanel'
 import { resolveGroupTabFromVisibleId } from './tab-group-visible-id'
 import {
   getTabPaneBodyDroppableId,
@@ -51,7 +52,15 @@ export default function TabGroupPanel({
   const sidebarOpen = useAppStore((state) => state.sidebarOpen)
 
   const model = useTabGroupWorkspaceModel({ groupId, worktreeId })
-  const { activeTab, browserItems, commands, editorItems, tabBarOrder, terminalTabs } = model
+  const {
+    activeTab,
+    architectureItems,
+    browserItems,
+    commands,
+    editorItems,
+    tabBarOrder,
+    terminalTabs
+  } = model
   const { setNodeRef: setBodyDropRef } = useDroppable({
     id: getTabPaneBodyDroppableId(groupId),
     data: {
@@ -113,27 +122,37 @@ export default function TabGroupPanel({
       onNewTerminalWithShell={commands.newTerminalWithShell}
       onNewBrowserTab={commands.newBrowserTab}
       onNewFileTab={commands.newFileTab}
+      onNewArchitectureTab={commands.newArchitectureTab}
       onSetCustomTitle={commands.setTabCustomTitle}
       onSetTabColor={commands.setTabColor}
       onTogglePaneExpand={() => {}}
       editorFiles={editorItems}
       browserTabs={browserItems}
+      architectureTabs={architectureItems}
       activeFileId={
-        activeTab?.contentType === 'terminal' || activeTab?.contentType === 'browser'
+        activeTab?.contentType === 'terminal' ||
+        activeTab?.contentType === 'browser' ||
+        activeTab?.contentType === 'architecture'
           ? null
           : activeTab?.id
       }
       activeBrowserTabId={activeTab?.contentType === 'browser' ? activeTab.entityId : null}
+      activeArchitectureTabId={
+        activeTab?.contentType === 'architecture' ? activeTab.entityId : null
+      }
       activeTabType={
         activeTab?.contentType === 'terminal'
           ? 'terminal'
           : activeTab?.contentType === 'browser'
             ? 'browser'
-            : 'editor'
+            : activeTab?.contentType === 'architecture'
+              ? 'architecture'
+              : 'editor'
       }
       onActivateFile={commands.activateEditor}
       onCloseFile={commands.closeItem}
       onActivateBrowserTab={commands.activateBrowser}
+      onActivateArchitectureTab={commands.activateArchitecture}
       onCloseBrowserTab={(browserTabId) => {
         const item = model.groupTabs.find(
           (candidate) => candidate.entityId === browserTabId && candidate.contentType === 'browser'
@@ -143,6 +162,15 @@ export default function TabGroupPanel({
         }
       }}
       onDuplicateBrowserTab={commands.duplicateBrowserTab}
+      onCloseArchitectureTab={(architectureTabId) => {
+        const item = model.groupTabs.find(
+          (candidate) =>
+            candidate.entityId === architectureTabId && candidate.contentType === 'architecture'
+        )
+        if (item) {
+          commands.closeItem(item.id)
+        }
+      }}
       onCloseAllFiles={commands.closeAllEditorTabsInGroup}
       onPinFile={(_fileId, tabId) => {
         if (!tabId) {
@@ -333,8 +361,16 @@ export default function TabGroupPanel({
       >
         {activeDropZone ? <TabGroupDropOverlay zone={activeDropZone} /> : null}
         {activeTab &&
+          activeTab.contentType === 'architecture' &&
+          (() => {
+            const workspace = architectureItems.find((item) => item.id === activeTab.entityId)
+            return workspace ? <ArchitecturePanel workspace={workspace} /> : null
+          })()}
+
+        {activeTab &&
           activeTab.contentType !== 'terminal' &&
-          activeTab.contentType !== 'browser' && (
+          activeTab.contentType !== 'browser' &&
+          activeTab.contentType !== 'architecture' && (
             <div className="absolute inset-0 flex min-h-0 min-w-0">
               {/* Why: split groups render editor/browser content inside a
                   plain relative pane body instead of the legacy flex column in

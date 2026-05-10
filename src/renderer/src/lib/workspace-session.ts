@@ -42,6 +42,8 @@ export type WorkspaceSessionSnapshot = Pick<
   | 'browserTabsByWorktree'
   | 'browserPagesByWorkspace'
   | 'activeBrowserTabIdByWorktree'
+  | 'architectureTabsByWorktree'
+  | 'activeArchitectureTabIdByWorktree'
   | 'browserUrlHistory'
   | 'unifiedTabsByWorktree'
   | 'groupsByWorktree'
@@ -74,6 +76,8 @@ export const SESSION_RELEVANT_FIELDS = [
   'browserTabsByWorktree',
   'browserPagesByWorkspace',
   'activeBrowserTabIdByWorktree',
+  'architectureTabsByWorktree',
+  'activeArchitectureTabIdByWorktree',
   'browserUrlHistory',
   'unifiedTabsByWorktree',
   'groupsByWorktree',
@@ -297,6 +301,8 @@ export function buildWorkspaceSessionPayload(
       snapshot.browserPagesByWorkspace,
       snapshot.activeBrowserTabIdByWorktree
     ),
+    architectureTabsByWorktree: snapshot.architectureTabsByWorktree,
+    activeArchitectureTabIdByWorktree: snapshot.activeArchitectureTabIdByWorktree,
     // Why: browser history is user-lifetime state. Enforce the storage cap at
     // the payload boundary so stale renderer state cannot make every session
     // write stringify an oversized legacy history array.

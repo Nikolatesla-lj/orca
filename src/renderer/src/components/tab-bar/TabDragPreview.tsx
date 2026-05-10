@@ -1,4 +1,4 @@
-import { Globe, Terminal as TerminalIcon } from 'lucide-react'
+import { Globe, Network, Terminal as TerminalIcon } from 'lucide-react'
 import { getFileTypeIcon } from '@/lib/file-type-icons'
 import type { TabDragItemData } from '../tab-group/useTabDragSplit'
 
@@ -12,6 +12,8 @@ export default function TabDragPreview({ drag }: { drag: TabDragItemData }): Rea
   const Icon =
     drag.tabType === 'browser'
       ? Globe
+      : drag.tabType === 'architecture'
+        ? Network
       : drag.tabType === 'editor'
         ? getFileTypeIcon(drag.iconPath ?? drag.label)
         : TerminalIcon

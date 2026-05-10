@@ -3,7 +3,7 @@ import type { AppState } from '../../store/types'
 import { reconcileTabOrder } from './reconcile-order'
 
 export type VisibleTabRef = {
-  type: 'terminal' | 'editor' | 'browser'
+  type: 'terminal' | 'editor' | 'browser' | 'architecture'
   id: string
   tabId?: string
 }
@@ -12,6 +12,7 @@ export type ActiveTabNavOrderIds = {
   terminalIds?: string[]
   editorIds?: string[]
   browserIds?: string[]
+  architectureIds?: string[]
 }
 
 /**
@@ -51,7 +52,8 @@ export function getGroupVisibleTabOrder(
   groupTabs: readonly Tab[],
   terminalEntityIds: ReadonlySet<string>,
   editorEntityIds: ReadonlySet<string>,
-  browserEntityIds: ReadonlySet<string>
+  browserEntityIds: ReadonlySet<string>,
+  architectureEntityIds: ReadonlySet<string>
 ): VisibleTabRef[] {
   const tabsById = new Map(groupTabs.map((t) => [t.id, t]))
   const result: VisibleTabRef[] = []
@@ -61,6 +63,7 @@ export function getGroupVisibleTabOrder(
   // collision from dropping a legitimate tab.
   const seenTerminals = new Set<string>()
   const seenBrowsers = new Set<string>()
+  const seenArchitecture = new Set<string>()
   const seenEditors = new Set<string>()
   for (const unifiedId of group.tabOrder) {
     const tab = tabsById.get(unifiedId)
@@ -79,6 +82,12 @@ export function getGroupVisibleTabOrder(
       }
       seenBrowsers.add(tab.entityId)
       result.push({ type: 'browser', id: tab.entityId, tabId: tab.id })
+    } else if (tab.contentType === 'architecture') {
+      if (!architectureEntityIds.has(tab.entityId) || seenArchitecture.has(tab.entityId)) {
+        continue
+      }
+      seenArchitecture.add(tab.entityId)
+      result.push({ type: 'architecture', id: tab.entityId, tabId: tab.id })
     } else {
       if (!editorEntityIds.has(tab.entityId) || seenEditors.has(tab.id)) {
         continue
@@ -114,6 +123,7 @@ export function getActiveTabNavOrder(
     | 'tabsByWorktree'
     | 'openFiles'
     | 'browserTabsByWorktree'
+    | 'architectureTabsByWorktree'
   >,
   worktreeId: string,
   ids: ActiveTabNavOrderIds = {}
@@ -123,6 +133,8 @@ export function getActiveTabNavOrder(
     ids.editorIds ?? state.openFiles.filter((f) => f.worktreeId === worktreeId).map((f) => f.id)
   const browserIds =
     ids.browserIds ?? (state.browserTabsByWorktree?.[worktreeId] ?? []).map((t) => t.id)
+  const architectureIds =
+    ids.architectureIds ?? (state.architectureTabsByWorktree?.[worktreeId] ?? []).map((t) => t.id)
 
   const activeGroupId = state.activeGroupIdByWorktree[worktreeId]
   const group = activeGroupId
@@ -138,7 +150,8 @@ export function getActiveTabNavOrder(
       groupTabs,
       new Set(terminalIds),
       new Set(editorIds),
-      new Set(browserIds)
+      new Set(browserIds),
+      new Set(architectureIds)
     )
   }
 
@@ -147,11 +160,13 @@ export function getActiveTabNavOrder(
     state.tabBarOrderByWorktree[worktreeId],
     terminalIds,
     editorIds,
-    browserIds
+    browserIds,
+    architectureIds
   )
   const terminalIdSet = new Set(terminalIds)
   const editorIdSet = new Set(editorIds)
   const browserIdSet = new Set(browserIds)
+  const architectureIdSet = new Set(architectureIds)
   const result: VisibleTabRef[] = []
   for (const id of visibleIds) {
     if (terminalIdSet.has(id)) {
@@ -160,6 +175,8 @@ export function getActiveTabNavOrder(
       result.push({ type: 'editor', id })
     } else if (browserIdSet.has(id)) {
       result.push({ type: 'browser', id })
+    } else if (architectureIdSet.has(id)) {
+      result.push({ type: 'architecture', id })
     }
   }
   return result

@@ -111,7 +111,13 @@ function areWorktreesEqual(current: Worktree[] | undefined, next: Worktree[]): b
 }
 
 function toVisibleTabType(contentType: string): WorkspaceVisibleTabType {
-  return contentType === 'browser' ? 'browser' : contentType === 'terminal' ? 'terminal' : 'editor'
+  return contentType === 'browser'
+    ? 'browser'
+    : contentType === 'terminal'
+      ? 'terminal'
+      : contentType === 'architecture'
+        ? 'architecture'
+        : 'editor'
 }
 
 function toRuntimeWorktreeIdSelector(worktreeId: string): string {
@@ -1416,6 +1422,7 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
       // Restore per-worktree editor state
       const restoredFileId = s.activeFileIdByWorktree[worktreeId] ?? null
       const restoredBrowserTabId = s.activeBrowserTabIdByWorktree[worktreeId] ?? null
+      const restoredArchitectureTabId = s.activeArchitectureTabIdByWorktree[worktreeId] ?? null
       const restoredTabType = s.activeTabTypeByWorktree[worktreeId] ?? 'terminal'
       const restoredRightSidebarTab = s.rightSidebarTabByWorktree[worktreeId] ?? 'explorer'
       const activeGroupId =
@@ -1440,6 +1447,10 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
       const browserTabStillOpen = restoredBrowserTabId
         ? browserTabs.some((tab) => tab.id === restoredBrowserTabId)
         : false
+      const architectureTabs = s.architectureTabsByWorktree[worktreeId] ?? []
+      const architectureTabStillOpen = restoredArchitectureTabId
+        ? architectureTabs.some((tab) => tab.id === restoredArchitectureTabId)
+        : false
       const hasGroupOwnedSurface =
         (s.groupsByWorktree[worktreeId]?.length ?? 0) > 0 || Boolean(s.layoutByWorktree[worktreeId])
 
@@ -1450,6 +1461,7 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
       // has no backing unified tab and show a blank worktree.
       let activeFileId: string | null
       let activeBrowserTabId: string | null
+      let activeArchitectureTabId: string | null
       let activeTabType: WorkspaceVisibleTabType
       if (activeUnifiedTab) {
         activeFileId =
@@ -1466,45 +1478,89 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
             : browserTabStillOpen
               ? restoredBrowserTabId
               : (browserTabs[0]?.id ?? null)
+        activeArchitectureTabId =
+          activeUnifiedTab.contentType === 'architecture'
+            ? activeUnifiedTab.entityId
+            : architectureTabStillOpen
+              ? restoredArchitectureTabId
+              : (architectureTabs[0]?.id ?? null)
         activeTabType = toVisibleTabType(activeUnifiedTab.contentType)
       } else if (hasGroupOwnedSurface) {
         activeFileId = fileStillOpen ? restoredFileId : null
         activeBrowserTabId = browserTabStillOpen
           ? restoredBrowserTabId
           : (browserTabs[0]?.id ?? null)
+        activeArchitectureTabId = architectureTabStillOpen
+          ? restoredArchitectureTabId
+          : (architectureTabs[0]?.id ?? null)
         activeTabType = 'terminal'
       } else if (restoredTabType === 'terminal') {
         activeFileId = fileStillOpen ? restoredFileId : null
         activeBrowserTabId = browserTabStillOpen
           ? restoredBrowserTabId
           : (browserTabs[0]?.id ?? null)
+        activeArchitectureTabId = architectureTabStillOpen
+          ? restoredArchitectureTabId
+          : (architectureTabs[0]?.id ?? null)
         activeTabType = 'terminal'
       } else if (restoredTabType === 'browser' && browserTabStillOpen) {
         activeFileId = fileStillOpen ? restoredFileId : null
         activeBrowserTabId = restoredBrowserTabId
+        activeArchitectureTabId = architectureTabStillOpen
+          ? restoredArchitectureTabId
+          : (architectureTabs[0]?.id ?? null)
         activeTabType = 'browser'
+      } else if (restoredTabType === 'architecture' && architectureTabStillOpen) {
+        activeFileId = fileStillOpen ? restoredFileId : null
+        activeBrowserTabId = browserTabStillOpen
+          ? restoredBrowserTabId
+          : (browserTabs[0]?.id ?? null)
+        activeArchitectureTabId = restoredArchitectureTabId
+        activeTabType = 'architecture'
       } else if (restoredTabType === 'editor' && fileStillOpen) {
         activeFileId = restoredFileId
         activeBrowserTabId = browserTabStillOpen
           ? restoredBrowserTabId
           : (browserTabs[0]?.id ?? null)
+        activeArchitectureTabId = architectureTabStillOpen
+          ? restoredArchitectureTabId
+          : (architectureTabs[0]?.id ?? null)
         activeTabType = 'editor'
       } else if (browserTabStillOpen) {
         activeFileId = null
         activeBrowserTabId = restoredBrowserTabId
+        activeArchitectureTabId = architectureTabStillOpen
+          ? restoredArchitectureTabId
+          : (architectureTabs[0]?.id ?? null)
         activeTabType = 'browser'
+      } else if (architectureTabStillOpen) {
+        activeFileId = fileStillOpen ? restoredFileId : null
+        activeBrowserTabId = browserTabs[0]?.id ?? null
+        activeArchitectureTabId = restoredArchitectureTabId
+        activeTabType = 'architecture'
       } else if (fileStillOpen) {
         activeFileId = restoredFileId
         activeBrowserTabId = browserTabs[0]?.id ?? null
+        activeArchitectureTabId = architectureTabs[0]?.id ?? null
         activeTabType = 'editor'
       } else {
         const fallbackFile = s.openFiles.find((f) => f.worktreeId === worktreeId)
         const fallbackBrowserTab = browserTabs[0] ?? null
+        const fallbackArchitectureTab = architectureTabs[0] ?? null
         activeFileId = fallbackFile?.id ?? null
         activeBrowserTabId = browserTabStillOpen
           ? restoredBrowserTabId
           : (fallbackBrowserTab?.id ?? null)
-        activeTabType = fallbackFile ? 'editor' : fallbackBrowserTab ? 'browser' : 'terminal'
+        activeArchitectureTabId = architectureTabStillOpen
+          ? restoredArchitectureTabId
+          : (fallbackArchitectureTab?.id ?? null)
+        activeTabType = fallbackFile
+          ? 'editor'
+          : fallbackBrowserTab
+            ? 'browser'
+            : fallbackArchitectureTab
+              ? 'architecture'
+              : 'terminal'
       }
 
       // Why: restore the last-active terminal tab for this worktree so the
@@ -1580,6 +1636,7 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
         activeWorktreeId: worktreeId,
         activeFileId,
         activeBrowserTabId,
+        activeArchitectureTabId,
         activeTabType,
         rightSidebarTab: restoredRightSidebarTab,
         activeTabTypeByWorktree: { ...s.activeTabTypeByWorktree, [worktreeId]: activeTabType },
