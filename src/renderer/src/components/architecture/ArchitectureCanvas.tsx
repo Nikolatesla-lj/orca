@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- Why: this canvas still owns selection, drill-in, edge editing, and layout wiring until the remaining Scryer panel logic is split out. */
-import { useCallback, useMemo, useRef } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import {
   Background,
   BackgroundVariant,
@@ -7,6 +7,7 @@ import {
   Panel,
   ReactFlow,
   ReactFlowProvider,
+  useReactFlow,
   ViewportPortal
 } from '@xyflow/react'
 import type {
@@ -16,7 +17,7 @@ import type {
   OnConnect,
   OnNodesChange
 } from '@xyflow/react'
-import { ChevronRight, LayoutGrid, Plus, Trash2 } from 'lucide-react'
+import { Bot, ChevronRight, LayoutGrid, Maximize, Minus, Plus, Trash2, ZoomIn } from 'lucide-react'
 import '@xyflow/react/dist/style.css'
 import type {
   C4Edge,
@@ -53,6 +54,9 @@ type ArchitectureCanvasProps = {
   onMultiSelectionChange: (nodeIds: string[], totalSelected: number) => void
   onModelChange: (change: C4ModelData | ModelUpdater, message: string) => void | Promise<void>
   onOpenSourceLocation: (location: SourceLocation) => void | Promise<void>
+  onFillNodeWithAi?: (nodeId: string) => void | Promise<void>
+  onCreateGroupFromSelection?: (name: string) => void | Promise<void>
+  onAddSelectionToGroup?: (groupId: string) => void | Promise<void>
 }
 
 export type ModelUpdater = (current: C4ModelData) => C4ModelData | null
@@ -83,9 +87,20 @@ function ArchitectureCanvasInner({
   onSelectedEdgeChange,
   onMultiSelectionChange,
   onModelChange,
-  onOpenSourceLocation
+  onOpenSourceLocation,
+  onFillNodeWithAi,
+  onCreateGroupFromSelection,
+  onAddSelectionToGroup
 }: ArchitectureCanvasProps): React.JSX.Element {
   const suppressNativeSelectionRef = useRef(false)
+  const reactFlow = useReactFlow<ArchitectureFlowNode, ArchitectureFlowEdge>()
+  const [contextMenu, setContextMenu] = useState<{
+    x: number
+    y: number
+    type: 'canvas' | 'node' | 'edge'
+    nodeId?: string
+    edgeId?: string
+  } | null>(null)
   const view = useMemo(
     () => getVisibleArchitectureView({ model, expandedPath, changedNodeIds, driftedNodeIds }),
     [changedNodeIds, driftedNodeIds, expandedPath, model]
@@ -142,6 +157,17 @@ function ArchitectureCanvasInner({
     () => getVisibleGroupBubbles(model, view.visibleNodes),
     [model, view.visibleNodes]
   )
+  const showFillWithAi =
+    !!view.currentParentId &&
+    !syncing &&
+    !!onFillNodeWithAi &&
+    view.visibleNodes.every((node) => node.data._reference)
+  const fillLabel =
+    view.currentParentKind === 'system'
+      ? 'containers'
+      : view.currentParentKind === 'container'
+        ? 'components'
+        : 'children'
 
   const onNodesChange = useCallback<OnNodesChange<ArchitectureFlowNode>>(
     (changes) => {
@@ -249,6 +275,54 @@ function ArchitectureCanvasInner({
     void onModelChange({ ...model, nodes: [...model.nodes, node] }, `Added ${node.data.name}`)
     onSelectedNodeChange(node.id)
   }, [model, onModelChange, onSelectedNodeChange, syncing, view.currentParentId])
+
+  const addNodeAtCanvasPoint = useCallback(
+    (clientX: number, clientY: number) => {
+      if (syncing) {
+        return
+      }
+      const parent = view.currentParentId
+        ? (model.nodes.find((node) => node.id === view.currentParentId) ?? null)
+        : null
+      const flowPoint = reactFlow.screenToFlowPosition({ x: clientX, y: clientY })
+      const node = {
+        ...createNodeForParent(model, parent),
+        position: {
+          x: Math.round(flowPoint.x / 20) * 20,
+          y: Math.round(flowPoint.y / 20) * 20
+        }
+      }
+      void onModelChange({ ...model, nodes: [...model.nodes, node] }, `Added ${node.data.name}`)
+      onSelectedNodeChange(node.id)
+      setContextMenu(null)
+    },
+    [model, onModelChange, onSelectedNodeChange, reactFlow, syncing, view.currentParentId]
+  )
+
+  const deleteNodeFromMenu = useCallback(
+    (nodeId: string) => {
+      if (syncing) {
+        return
+      }
+      const nextModel = deleteNodesFromModel(model, [nodeId])
+      void onModelChange(nextModel, 'Deleted architecture node')
+      onSelectedNodeChange(null)
+      setContextMenu(null)
+    },
+    [model, onModelChange, onSelectedNodeChange, syncing]
+  )
+
+  const deleteEdgeFromMenu = useCallback(
+    (edgeId: string) => {
+      if (syncing) {
+        return
+      }
+      void onModelChange(deleteEdgesFromModel(model, [edgeId]), 'Deleted architecture edge')
+      onSelectedEdgeChange(null)
+      setContextMenu(null)
+    },
+    [model, onModelChange, onSelectedEdgeChange, syncing]
+  )
 
   const deleteSelected = useCallback(() => {
     if (syncing) {
@@ -374,6 +448,7 @@ function ArchitectureCanvasInner({
           }
         }}
         onNodeClick={(event, node) => {
+          setContextMenu(null)
           if (event.shiftKey) {
             suppressNativeSelectionRef.current = true
             window.setTimeout(() => {
@@ -405,8 +480,23 @@ function ArchitectureCanvasInner({
         onEdgeClick={(_, edge) => onSelectedEdgeChange(edge.id)}
         onEdgeDoubleClick={(_, edge) => onSelectedEdgeChange(edge.id)}
         onPaneClick={() => {
+          setContextMenu(null)
           onSelectedNodeChange(null)
           onSelectedEdgeChange(null)
+        }}
+        onPaneContextMenu={(event) => {
+          event.preventDefault()
+          setContextMenu({ x: event.clientX, y: event.clientY, type: 'canvas' })
+        }}
+        onNodeContextMenu={(event, node) => {
+          event.preventDefault()
+          onSelectedNodeChange(node.id)
+          setContextMenu({ x: event.clientX, y: event.clientY, type: 'node', nodeId: node.id })
+        }}
+        onEdgeContextMenu={(event, edge) => {
+          event.preventDefault()
+          onSelectedEdgeChange(edge.id)
+          setContextMenu({ x: event.clientX, y: event.clientY, type: 'edge', edgeId: edge.id })
         }}
         connectionMode={ConnectionMode.Loose}
         defaultEdgeOptions={defaultEdgeOptions}
@@ -420,6 +510,7 @@ function ArchitectureCanvasInner({
         snapGrid={[20, 20]}
         proOptions={{ hideAttribution: true }}
       >
+        <div className="pointer-events-none absolute inset-0 bg-[var(--architecture-canvas-bg)]" />
         <Background gap={20} variant={BackgroundVariant.Dots} size={1} color="var(--grid-color)" />
         <ViewportPortal>
           {groupBubbles.map((bubble) => (
@@ -508,6 +599,149 @@ function ArchitectureCanvasInner({
             </Button>
           </div>
         </Panel>
+        <Panel position="bottom-right" className="!m-3">
+          <div className="flex items-center gap-1 rounded-md border border-border bg-background/95 px-1 py-1 shadow-sm">
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              title="Zoom in"
+              onClick={() => void reactFlow.zoomIn()}
+              data-testid="architecture-zoom-in"
+            >
+              <ZoomIn className="size-3" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              title="Zoom out"
+              onClick={() => void reactFlow.zoomOut()}
+              data-testid="architecture-zoom-out"
+            >
+              <Minus className="size-3" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              title="Fit view"
+              onClick={() => void reactFlow.fitView({ padding: 0.2 })}
+              data-testid="architecture-zoom-fit"
+            >
+              <Maximize className="size-3" />
+            </Button>
+          </div>
+        </Panel>
+        {contextMenu ? (
+          <div
+            className="fixed z-50 grid min-w-40 gap-1 rounded-md border border-border bg-popover p-1 text-xs text-popover-foreground shadow-lg"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+            data-testid="architecture-canvas-context-menu"
+          >
+            {contextMenu.type === 'canvas' ? (
+              <>
+                <button
+                  type="button"
+                  className="rounded px-2 py-1 text-left hover:bg-accent"
+                  onClick={() => addNodeAtCanvasPoint(contextMenu.x, contextMenu.y)}
+                  data-testid="architecture-context-add-node"
+                >
+                  Add node here
+                </button>
+                {multiSelectedNodeIds.length >= 2 && onCreateGroupFromSelection ? (
+                  <button
+                    type="button"
+                    className="rounded px-2 py-1 text-left hover:bg-accent"
+                    onClick={() => {
+                      void onCreateGroupFromSelection('New group')
+                      setContextMenu(null)
+                    }}
+                    data-testid="architecture-context-create-group"
+                  >
+                    Create group
+                  </button>
+                ) : null}
+                {multiSelectedNodeIds.length >= 2 && onAddSelectionToGroup
+                  ? (model.groups ?? []).map((group) => (
+                      <button
+                        key={group.id}
+                        type="button"
+                        className="rounded px-2 py-1 text-left hover:bg-accent"
+                        onClick={() => {
+                          void onAddSelectionToGroup(group.id)
+                          setContextMenu(null)
+                        }}
+                        data-testid="architecture-context-add-to-group"
+                      >
+                        Add to {group.name}
+                      </button>
+                    ))
+                  : null}
+              </>
+            ) : null}
+            {contextMenu.type === 'node' && contextMenu.nodeId ? (
+              <>
+                <button
+                  type="button"
+                  className="rounded px-2 py-1 text-left hover:bg-accent"
+                  onClick={() => {
+                    onSelectedNodeChange(contextMenu.nodeId ?? null)
+                    setContextMenu(null)
+                  }}
+                >
+                  Edit node
+                </button>
+                <button
+                  type="button"
+                  className="rounded px-2 py-1 text-left text-destructive hover:bg-accent"
+                  onClick={() => contextMenu.nodeId && deleteNodeFromMenu(contextMenu.nodeId)}
+                  data-testid="architecture-context-delete-node"
+                >
+                  Delete node
+                </button>
+              </>
+            ) : null}
+            {contextMenu.type === 'edge' && contextMenu.edgeId ? (
+              <>
+                <button
+                  type="button"
+                  className="rounded px-2 py-1 text-left hover:bg-accent"
+                  onClick={() => {
+                    onSelectedEdgeChange(contextMenu.edgeId ?? null)
+                    setContextMenu(null)
+                  }}
+                  data-testid="architecture-context-edit-edge"
+                >
+                  Edit relationship
+                </button>
+                <button
+                  type="button"
+                  className="rounded px-2 py-1 text-left text-destructive hover:bg-accent"
+                  onClick={() => contextMenu.edgeId && deleteEdgeFromMenu(contextMenu.edgeId)}
+                  data-testid="architecture-context-delete-edge"
+                >
+                  Delete relationship
+                </button>
+              </>
+            ) : null}
+          </div>
+        ) : null}
+        {showFillWithAi ? (
+          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+            <button
+              type="button"
+              className="pointer-events-auto flex items-center gap-3 rounded border border-border bg-background px-4 py-3 text-left shadow hover:bg-accent"
+              onClick={() => view.currentParentId && void onFillNodeWithAi?.(view.currentParentId)}
+              data-testid="architecture-fill-ai"
+            >
+              <Bot className="size-4 text-violet-500" />
+              <span className="grid gap-0.5">
+                <span className="text-sm font-medium">Fill with AI</span>
+                <span className="text-[11px] text-muted-foreground">
+                  Scan the codebase and add {fillLabel}
+                </span>
+              </span>
+            </button>
+          </div>
+        ) : null}
       </ReactFlow>
     </div>
   )

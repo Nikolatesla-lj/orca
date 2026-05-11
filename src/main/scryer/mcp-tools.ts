@@ -186,6 +186,43 @@ function validateNoExternalChildren(model: C4ModelData): string[] {
   return errors
 }
 
+const MENTION_RE = /@\[([^\]]+)\]/g
+
+function validateMentionEdges(model: C4ModelData): string[] {
+  const errors: string[] = []
+  const siblingsByParent = new Map<string, C4Node[]>()
+  for (const node of model.nodes) {
+    const key = node.parentId ?? ''
+    siblingsByParent.set(key, [...(siblingsByParent.get(key) ?? []), node])
+  }
+  const edgeKeys = new Set<string>()
+  for (const edge of model.edges) {
+    edgeKeys.add(`${edge.source}->${edge.target}`)
+    edgeKeys.add(`${edge.target}->${edge.source}`)
+  }
+  for (const node of model.nodes) {
+    const siblings = siblingsByParent.get(node.parentId ?? '') ?? []
+    for (const match of node.data.description.matchAll(MENTION_RE)) {
+      const mention = match[1]
+      const target = siblings.find(
+        (candidate) =>
+          candidate.id === mention ||
+          candidate.data.name === mention ||
+          candidate.data.name.toLowerCase() === mention.toLowerCase()
+      )
+      if (!target || target.id === node.id) {
+        continue
+      }
+      if (!edgeKeys.has(`${node.id}->${target.id}`)) {
+        errors.push(
+          `${node.data.name} mentions ${target.data.name} but no relationship edge connects them`
+        )
+      }
+    }
+  }
+  return errors
+}
+
 function inheritedExpectItems(
   model: C4ModelData,
   node: C4Node,
@@ -1545,7 +1582,8 @@ export async function callScryerTool(
     case 'get_rules':
       return ok(SCRYER_RULES)
     case 'validate_model': {
-      const errors = validateModelShape(await readModel(projectPath))
+      const model = await readModel(projectPath)
+      const errors = [...validateModelShape(model), ...validateMentionEdges(model)]
       return errors.length === 0 ? ok('Model is valid') : fail(errors.join('\n'))
     }
     case 'get_task':

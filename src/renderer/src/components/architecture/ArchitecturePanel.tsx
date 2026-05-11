@@ -1,10 +1,25 @@
 /* eslint-disable max-lines -- Why: this panel still composes the migrated C4 canvas, flow, group, sync, and inspector surfaces while controller logic now lives in useArchitectureModelController. */
+import { useEffect, useMemo, useState } from 'react'
 import type React from 'react'
-import { Boxes, GitBranch, Network, Plus, Redo2, RefreshCw, Undo2 } from 'lucide-react'
+import {
+  Bot,
+  Boxes,
+  Command,
+  GitBranch,
+  Network,
+  Plug,
+  Plus,
+  Redo2,
+  RefreshCw,
+  Undo2
+} from 'lucide-react'
 import type { ArchitectureWorkspace } from '../../../../shared/types'
 import { Button } from '../ui/button'
 import { ArchitectureCanvas } from './ArchitectureCanvas'
+import { ArchitectureCommandPalette } from './ArchitectureCommandPalette'
 import { ArchitectureContextPanel } from './ArchitectureContextPanel'
+import { ArchitectureModelTree } from './ArchitectureModelTree'
+import { ArchitectureThemeEditor } from './ArchitectureThemeEditor'
 import { CodeLevelRack } from './CodeLevelRack'
 import { FlowScriptView } from './FlowScriptView'
 import { GroupsDndProvider, GroupsMain } from './GroupsView'
@@ -13,6 +28,32 @@ import {
   type ArchitectureMode,
   useArchitectureModelController
 } from './useArchitectureModelController'
+import {
+  createScryerThemeStyle,
+  normalizeScryerTheme,
+  type ScryerThemeSettings
+} from '../../../../shared/scryer/theme'
+
+const ARCHITECTURE_THEME_STORAGE_KEY = 'orca-scryer:architecture-theme'
+
+function readArchitectureTheme(): ScryerThemeSettings {
+  try {
+    const raw = window.localStorage.getItem(ARCHITECTURE_THEME_STORAGE_KEY)
+    return normalizeScryerTheme(raw ? JSON.parse(raw) : null)
+  } catch {
+    return normalizeScryerTheme(null)
+  }
+}
+
+function resolveArchitectureThemeDark(theme: ScryerThemeSettings): boolean {
+  if (theme.mode === 'dark') {
+    return true
+  }
+  if (theme.mode === 'light') {
+    return false
+  }
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false
+}
 
 function modeButtonClass(activeMode: ArchitectureMode, mode: ArchitectureMode): string {
   return `inline-flex h-7 items-center gap-1 rounded px-2 text-xs font-medium transition-colors ${
@@ -30,9 +71,13 @@ export default function ArchitecturePanel({
   const {
     projectPath,
     model,
+    activeModelName,
+    projectModels,
+    templates,
     architectureMode,
     setArchitectureMode,
     activeFlow,
+    activeFlowId,
     setActiveFlowId,
     selectedNode,
     selectedEdge,
@@ -73,6 +118,12 @@ export default function ArchitecturePanel({
     followExternalChanges,
     setFollowExternalChanges,
     loadModel,
+    refreshProjectModels,
+    createBlankProjectModel,
+    createModelFromTemplate,
+    openProjectModel,
+    saveCurrentModelAs,
+    deleteProjectModelByName,
     persist,
     applyModelChange,
     undoModelChange,
@@ -85,6 +136,7 @@ export default function ArchitecturePanel({
     selectManyNodes,
     updateSelectedEdge,
     saveSourcePattern,
+    saveSourceLocations,
     addEdge,
     deleteSelected,
     deleteSelectedEdge,
@@ -104,12 +156,57 @@ export default function ArchitecturePanel({
     deleteSelectedGroup,
     toggleLock,
     openSourceLocation,
+    startInitialModel,
+    fillNodeWithAi,
+    startAdvisorReview,
+    writeMcpConfig,
     startSync,
     cancelSync,
     finishSync,
     dismissSyncMessage,
     dismissNodeDiff
   } = useArchitectureModelController({ workspace })
+  const [commandOpen, setCommandOpen] = useState(false)
+  const [themeOpen, setThemeOpen] = useState(false)
+  const [architectureTheme, setArchitectureTheme] = useState(readArchitectureTheme)
+  const architectureThemeStyle = useMemo(() => {
+    const style = createScryerThemeStyle(
+      architectureTheme,
+      resolveArchitectureThemeDark(architectureTheme)
+    )
+    return {
+      ...style,
+      '--scryer-node-bg': 'var(--architecture-node-fill)',
+      '--scryer-outline-stroke': 'var(--architecture-node-border)',
+      '--grid-color': 'color-mix(in srgb, var(--architecture-role-muted) 34%, transparent)',
+      backgroundColor: 'var(--architecture-role-background)',
+      color: 'var(--architecture-role-foreground)'
+    } as React.CSSProperties
+  }, [architectureTheme])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(ARCHITECTURE_THEME_STORAGE_KEY, JSON.stringify(architectureTheme))
+    } catch {
+      // Local storage may be unavailable in constrained windows; the live state still applies.
+    }
+  }, [architectureTheme])
+
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'k') {
+        return
+      }
+      event.preventDefault()
+      void refreshProjectModels()
+      setCommandOpen(true)
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [refreshProjectModels])
+
+  const showBuildWithAi =
+    architectureMode === 'topology' && !!model && model.nodes.length === 0 && !!projectPath
 
   const mainContent = error ? (
     <div className="flex-1 p-4 text-sm text-destructive">{error}</div>
@@ -161,6 +258,7 @@ export default function ArchitecturePanel({
             onNavigateToNode={navigateToNode}
             onSwitchToTopology={() => setArchitectureMode('topology')}
             onOpenSourceLocation={openSourceLocation}
+            onUpdateSourceMap={saveSourceLocations}
           />
         ) : (
           <div className="flex flex-1 items-center justify-center">
@@ -212,6 +310,9 @@ export default function ArchitecturePanel({
         onMultiSelectionChange={selectManyNodes}
         onModelChange={applyModelChange}
         onOpenSourceLocation={openSourceLocation}
+        onFillNodeWithAi={fillNodeWithAi}
+        onCreateGroupFromSelection={createGroupFromSelection}
+        onAddSelectionToGroup={addSelectionToGroup}
       />
     )
   ) : (
@@ -225,6 +326,12 @@ export default function ArchitecturePanel({
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
         <Network className="size-4 text-emerald-500" />
         <span className="truncate text-sm font-medium">{workspace.title}</span>
+        <span
+          className="rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+          data-testid="architecture-active-model"
+        >
+          {activeModelName}.scry
+        </span>
         {message ? (
           <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{message}</span>
         ) : (
@@ -306,9 +413,94 @@ export default function ArchitecturePanel({
           <RefreshCw className="size-3" />
           Reload
         </Button>
+        <ArchitectureThemeEditor
+          open={themeOpen}
+          theme={architectureTheme}
+          onOpenChange={setThemeOpen}
+          onThemeChange={setArchitectureTheme}
+        />
+        <Button
+          variant="outline"
+          size="xs"
+          onClick={() => void startAdvisorReview()}
+          disabled={!projectPath || !model || model.nodes.length === 0 || editingLocked}
+          data-testid="architecture-advisor-review"
+        >
+          <Bot className="size-3" />
+          Review
+        </Button>
+        <Button
+          variant="outline"
+          size="xs"
+          onClick={() => void writeMcpConfig()}
+          disabled={!projectPath}
+          data-testid="architecture-mcp-config"
+        >
+          <Plug className="size-3" />
+          MCP
+        </Button>
+        <Button
+          variant="outline"
+          size="xs"
+          onClick={() => {
+            void refreshProjectModels()
+            setCommandOpen(true)
+          }}
+          data-testid="architecture-command-open"
+        >
+          <Command className="size-3" />
+          Cmd
+        </Button>
       </div>
 
-      {mainContent}
+      <div className="relative flex min-h-0 flex-1 overflow-hidden">
+        {mainContent}
+        {showBuildWithAi ? (
+          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-background/40">
+            <div className="pointer-events-auto grid w-[380px] gap-2 rounded border border-border bg-background p-4 shadow-lg">
+              <div className="grid gap-1 border-b border-border pb-3">
+                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  New project
+                </div>
+                <div className="truncate text-sm font-semibold text-foreground">
+                  {activeModelName}
+                </div>
+                <div className="truncate text-[11px] text-muted-foreground">{projectPath}</div>
+              </div>
+              <button
+                type="button"
+                className="flex items-center gap-3 rounded border border-border px-3 py-2 text-left hover:bg-accent"
+                onClick={() => void startInitialModel()}
+                disabled={editingLocked}
+                data-testid="architecture-build-ai"
+              >
+                <Bot className="size-4 text-violet-500" />
+                <span className="grid gap-0.5">
+                  <span className="text-sm font-medium">Build with AI</span>
+                  <span className="text-[11px] text-muted-foreground">
+                    Scan the codebase and generate an architecture model
+                  </span>
+                </span>
+              </button>
+              <button
+                type="button"
+                className="flex items-center gap-3 rounded border border-border px-3 py-2 text-left hover:bg-accent"
+                onClick={() => void createBlankProjectModel(activeModelName)}
+                disabled={editingLocked}
+                data-testid="architecture-start-blank"
+              >
+                <Plus className="size-4 text-muted-foreground" />
+                <span className="grid gap-0.5">
+                  <span className="text-sm font-medium">Start blank</span>
+                  <span className="text-[11px] text-muted-foreground">
+                    Add systems, containers, and components manually
+                  </span>
+                </span>
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
 
       <SyncBar
         activeAgent={activeAgent}
@@ -357,6 +549,7 @@ export default function ArchitecturePanel({
       onUpdateEdge={updateSelectedEdge}
       onSourcePatternChange={setSourcePattern}
       onSaveSourcePattern={saveSourcePattern}
+      onSaveSourceLocations={saveSourceLocations}
       onTargetNodeChange={setTargetNodeId}
       onAddEdge={addEdge}
       onCreateGroupFromSelection={createGroupFromSelection}
@@ -370,6 +563,22 @@ export default function ArchitecturePanel({
     />
   )
 
+  const modelTree = model ? (
+    <ArchitectureModelTree
+      model={model}
+      selectedNodeId={selectedNodeId}
+      activeFlowId={activeFlowId}
+      onSelectNode={(nodeId) => {
+        setArchitectureMode('topology')
+        navigateToNode(nodeId)
+      }}
+      onSelectFlow={(flowId) => {
+        setArchitectureMode('flows')
+        setActiveFlowId(flowId)
+      }}
+    />
+  ) : null
+
   const panelContent =
     architectureMode === 'groups' && model ? (
       <GroupsDndProvider
@@ -381,39 +590,57 @@ export default function ArchitecturePanel({
         selectedGroupId={selectedGroupId}
         onSelectedGroupChange={setSelectedGroupId}
       >
+        {modelTree}
         {mainSection}
         {contextPanel}
       </GroupsDndProvider>
     ) : (
       <>
+        {modelTree}
         {mainSection}
         {contextPanel}
       </>
     )
 
   return (
-    <div
-      className="absolute inset-0 flex min-h-0 min-w-0 bg-background text-foreground"
-      data-testid="architecture-panel"
-    >
-      {panelContent}
-      {drift && (drift.nodes.length > 0 || drift.structureChanged) ? (
-        <div
-          className="absolute bottom-3 right-[25rem] z-20 rounded border border-border bg-background p-3 text-xs shadow"
-          data-testid="architecture-drift-report"
-        >
-          <div className="font-medium">Drift report</div>
-          <div className="mt-1 text-muted-foreground">
-            Structure changed: {drift.structureChanged ? 'yes' : 'no'}
-          </div>
-          {drift.nodes.map((node) => (
-            <div key={node.nodeId} className="mt-2">
-              <div>{node.nodeName}</div>
-              <div className="text-muted-foreground">{node.patterns.join(', ')}</div>
+    <>
+      <ArchitectureCommandPalette
+        open={commandOpen}
+        activeModelName={activeModelName}
+        models={projectModels}
+        templates={templates}
+        disabled={editingLocked}
+        onOpenChange={setCommandOpen}
+        onCreateBlank={createBlankProjectModel}
+        onOpenModel={openProjectModel}
+        onSaveAs={saveCurrentModelAs}
+        onDeleteModel={deleteProjectModelByName}
+        onLoadTemplate={createModelFromTemplate}
+      />
+      <div
+        className="absolute inset-0 flex min-h-0 min-w-0 bg-background text-foreground"
+        data-testid="architecture-panel"
+        style={architectureThemeStyle}
+      >
+        {panelContent}
+        {drift && (drift.nodes.length > 0 || drift.structureChanged) ? (
+          <div
+            className="absolute bottom-3 right-[25rem] z-20 rounded border border-border bg-background p-3 text-xs shadow"
+            data-testid="architecture-drift-report"
+          >
+            <div className="font-medium">Drift report</div>
+            <div className="mt-1 text-muted-foreground">
+              Structure changed: {drift.structureChanged ? 'yes' : 'no'}
             </div>
-          ))}
-        </div>
-      ) : null}
-    </div>
+            {drift.nodes.map((node) => (
+              <div key={node.nodeId} className="mt-2">
+                <div>{node.nodeName}</div>
+                <div className="text-muted-foreground">{node.patterns.join(', ')}</div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </>
   )
 }
