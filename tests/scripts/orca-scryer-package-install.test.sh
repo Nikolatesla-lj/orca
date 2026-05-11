@@ -13,6 +13,7 @@ install_path="$tmp_dir/local/Orca.AppImage"
 bin_dir="$tmp_dir/bin"
 symlink_path="$bin_dir/orca"
 desktop_launcher="$bin_dir/orca-app"
+cli_launcher="$bin_dir/orca-app-cli"
 appdir_root="$tmp_dir/Applications/Orca"
 current_appdir="$appdir_root/current.AppDir"
 appdir_name="orca-scryer-test.AppDir"
@@ -40,7 +41,6 @@ set -euo pipefail
 if [[ "${1:-}" == "--appimage-extract" ]]; then
   mkdir -p squashfs-root/resources/bin
   printf '#!/usr/bin/env bash\nprintf app-cli\n' > squashfs-root/resources/bin/orca
-  chmod +x squashfs-root/resources/bin/orca
   printf '#!/usr/bin/env bash\nprintf app-gui\n' > squashfs-root/orca
   chmod +x squashfs-root/orca
   exit 0
@@ -62,6 +62,7 @@ ORCA_SCRYER_REPO_DIR="$repo_dir" \
   ORCA_SCRYER_APPIMAGE_INSTALL_PATH="$install_path" \
   ORCA_SCRYER_APPIMAGE_SYMLINK="$symlink_path" \
   ORCA_SCRYER_APPIMAGE_DESKTOP_LAUNCHER="$desktop_launcher" \
+  ORCA_SCRYER_APPIMAGE_CLI_LAUNCHER="$cli_launcher" \
   ORCA_SCRYER_APPDIR_ROOT="$appdir_root" \
   ORCA_SCRYER_CURRENT_APPDIR="$current_appdir" \
   ORCA_SCRYER_APPDIR_NAME="$appdir_name" \
@@ -89,8 +90,14 @@ test "$(readlink "$current_appdir")" = "$appdir_root/$appdir_name"
 test -x "$current_appdir/orca"
 test -x "$current_appdir/resources/bin/orca"
 test -x "$desktop_launcher"
+test -x "$cli_launcher"
 grep -Fqx "APPDIR=\"$current_appdir\"" "$desktop_launcher"
+grep -Fqx 'unset ELECTRON_RUN_AS_NODE' "$desktop_launcher"
+grep -Fqx 'unset ORCA_TERMINAL_HANDLE ORCA_TAB_ID ORCA_PANE_KEY ORCA_WORKTREE_ID ORCA_APP_VERSION ORCA_SHELL_READY_MARKER' "$desktop_launcher"
 grep -Fqx 'exec "$APPDIR/orca" --no-sandbox "$@"' "$desktop_launcher"
+grep -Fqx "APPDIR=\"$current_appdir\"" "$cli_launcher"
+grep -Fqx 'exec bash "$APPDIR/resources/bin/orca" "$@"' "$cli_launcher"
+test "$("$cli_launcher")" = "app-cli"
 grep -Fqx "Exec=$desktop_launcher %U" "$desktop_file"
 
 shim_repo="$tmp_dir/shim-repo"

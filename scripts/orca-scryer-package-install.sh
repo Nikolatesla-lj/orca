@@ -97,13 +97,14 @@ install_appimage() {
   local install_path="${ORCA_SCRYER_APPIMAGE_INSTALL_PATH:-$HOME/.local/share/orca-scryer/orca-linux.AppImage}"
   local symlink_path="${ORCA_SCRYER_APPIMAGE_SYMLINK:-$HOME/.local/bin/orca}"
   local desktop_launcher="${ORCA_SCRYER_APPIMAGE_DESKTOP_LAUNCHER:-$HOME/.local/bin/orca-app}"
+  local cli_launcher="${ORCA_SCRYER_APPIMAGE_CLI_LAUNCHER:-$HOME/.local/bin/orca-app-cli}"
   local appdir_root="${ORCA_SCRYER_APPDIR_ROOT:-$HOME/Applications/Orca}"
   local current_appdir="${ORCA_SCRYER_CURRENT_APPDIR:-$appdir_root/current.AppDir}"
   local appdir_name="${ORCA_SCRYER_APPDIR_NAME:-orca-scryer-$short_commit.AppDir}"
   local appdir_path="$appdir_root/$appdir_name"
   local desktop_file="${ORCA_SCRYER_APPIMAGE_DESKTOP_FILE:-$HOME/.local/share/applications/orca-appimage.desktop}"
 
-  run mkdir -p "$(dirname "$install_path")" "$(dirname "$symlink_path")" "$(dirname "$desktop_launcher")" "$appdir_root"
+  run mkdir -p "$(dirname "$install_path")" "$(dirname "$symlink_path")" "$(dirname "$desktop_launcher")" "$(dirname "$cli_launcher")" "$appdir_root"
   run cp -f "$artifact" "$install_path"
   run chmod 0755 "$install_path"
   run ln -sfn "$install_path" "$symlink_path"
@@ -119,17 +120,36 @@ install_appimage() {
   run rm -rf "$extract_dir"
   run ln -sfn "$appdir_path" "$current_appdir"
 
+  local cli_entry="$appdir_path/resources/bin/orca"
+  if [[ ! -f "$cli_entry" ]]; then
+    echo "Extracted AppDir is missing the Orca CLI entrypoint: $cli_entry" >&2
+    exit 1
+  fi
+  run chmod 0755 "$cli_entry"
+
   cat > "$desktop_launcher" <<LAUNCHER
 #!/usr/bin/env bash
 set -euo pipefail
 APPDIR="$current_appdir"
+unset ELECTRON_RUN_AS_NODE
+unset ORCA_TERMINAL_HANDLE ORCA_TAB_ID ORCA_PANE_KEY ORCA_WORKTREE_ID ORCA_APP_VERSION ORCA_SHELL_READY_MARKER
 exec "\$APPDIR/orca" --no-sandbox "\$@"
 LAUNCHER
   run chmod 0755 "$desktop_launcher"
+
+  cat > "$cli_launcher" <<LAUNCHER
+#!/usr/bin/env bash
+set -euo pipefail
+APPDIR="$current_appdir"
+exec bash "\$APPDIR/resources/bin/orca" "\$@"
+LAUNCHER
+  run chmod 0755 "$cli_launcher"
+
   echo "Installed Orca AppImage at $install_path"
   echo "Extracted Orca AppDir at $appdir_path"
   echo "Updated current AppDir symlink at $current_appdir"
   echo "Updated launcher symlink at $symlink_path"
+  echo "Updated CLI launcher at $cli_launcher"
 
   if [[ -f "$desktop_file" ]]; then
     sed -i "s|^Exec=.*|Exec=$desktop_launcher %U|" "$desktop_file"

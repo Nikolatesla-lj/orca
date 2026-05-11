@@ -122,13 +122,19 @@ corepack pnpm run build:linux
 ```text
 ~/.local/share/orca-scryer/orca-linux.AppImage
 ~/.local/bin/orca -> ~/.local/share/orca-scryer/orca-linux.AppImage
+~/.local/bin/orca-app -> ~/Applications/Orca/current.AppDir/orca
+~/.local/bin/orca-app-cli -> ~/Applications/Orca/current.AppDir/resources/bin/orca
+~/Applications/Orca/current.AppDir -> ~/Applications/Orca/orca-scryer-<commit>.AppDir
 ```
+
+`orca-app-cli` 是 `/home/ljian/.agents/orca` 搜索和浏览器自动化链路优先使用的命令。它指向 `current.AppDir`，所以每次自动安装后会跟随最新的 orca-scryer 解包版本，不依赖 AppImage/FUSE。
 
 可以用环境变量改路径：
 
 ```bash
 ORCA_SCRYER_APPIMAGE_INSTALL_PATH="$HOME/Apps/Orca.AppImage" \
 ORCA_SCRYER_APPIMAGE_SYMLINK="$HOME/.local/bin/orca" \
+ORCA_SCRYER_APPIMAGE_CLI_LAUNCHER="$HOME/.local/bin/orca-app-cli" \
 ORCA_SCRYER_AUTO_PACKAGE=1 \
 ORCA_SCRYER_AUTO_INSTALL=1 \
 scripts/orca-scryer-sync.sh
