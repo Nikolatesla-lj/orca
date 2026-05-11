@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- Why: the Scryer context panel is intentionally kept together while the remaining node/edge context pieces are still being migrated. */
 import { Boxes, Plus, Save, Trash2 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
   C4Edge,
   C4ModelData,
@@ -9,14 +9,30 @@ import type {
   Contract,
   ContractItem,
   Group,
+  SourceLocation,
   Status
 } from '../../../../shared/scryer/model-types'
 import { Button } from '../ui/button'
 import { GroupsPalette } from './GroupsView'
 import { getNodeContextForModel } from './c4-model'
+import {
+  contractItemText as getContractItemText,
+  getVerifiedBlockers,
+  normalizeContractItem,
+  setContractItemPassed
+} from './contract-status'
+import { MentionTextarea, type MentionItem } from './nodes/MentionTextarea'
 
 const STATUS_OPTIONS: Status[] = ['proposed', 'implemented', 'verified', 'vagrant']
-const SHAPE_OPTIONS: C4Shape[] = ['rectangle', 'cylinder', 'pipe', 'trapezoid', 'bucket', 'hexagon']
+const SHAPE_OPTIONS: C4Shape[] = [
+  'rectangle',
+  'person',
+  'cylinder',
+  'pipe',
+  'trapezoid',
+  'bucket',
+  'hexagon'
+]
 
 type ArchitectureContextPanelProps = {
   model: C4ModelData | null
@@ -38,6 +54,7 @@ type ArchitectureContextPanelProps = {
   onUpdateEdge: (patch: { label?: string; method?: string }) => void | Promise<void>
   onSourcePatternChange: (pattern: string) => void
   onSaveSourcePattern: (pattern: string) => void | Promise<void>
+  onSaveSourceLocations: (nodeId: string, locations: SourceLocation[]) => void | Promise<void>
   onTargetNodeChange: (nodeId: string) => void
   onAddEdge: () => void | Promise<void>
   onCreateGroupFromSelection: (name: string) => void | Promise<void>
@@ -70,6 +87,7 @@ export function ArchitectureContextPanel({
   onUpdateEdge,
   onSourcePatternChange,
   onSaveSourcePattern,
+  onSaveSourceLocations,
   onTargetNodeChange,
   onAddEdge,
   onCreateGroupFromSelection,
@@ -146,6 +164,7 @@ export function ArchitectureContextPanel({
             onUpdateNode={onUpdateNode}
             onSourcePatternChange={onSourcePatternChange}
             onSaveSourcePattern={onSaveSourcePattern}
+            onSaveSourceLocations={onSaveSourceLocations}
             onTargetNodeChange={onTargetNodeChange}
             onAddEdge={onAddEdge}
             onDeleteNode={onDeleteNode}
@@ -425,6 +444,7 @@ function NodeEditor({
   onUpdateNode,
   onSourcePatternChange,
   onSaveSourcePattern,
+  onSaveSourceLocations,
   onTargetNodeChange,
   onAddEdge,
   onDeleteNode,
@@ -440,6 +460,7 @@ function NodeEditor({
   onUpdateNode: (patch: Partial<C4Node['data']>) => void | Promise<void>
   onSourcePatternChange: (pattern: string) => void
   onSaveSourcePattern: (pattern: string) => void | Promise<void>
+  onSaveSourceLocations: (nodeId: string, locations: SourceLocation[]) => void | Promise<void>
   onTargetNodeChange: (nodeId: string) => void
   onAddEdge: () => void | Promise<void>
   onDeleteNode: () => void | Promise<void>
@@ -447,6 +468,18 @@ function NodeEditor({
   onDismissNodeDiff?: (nodeId: string) => void
 }): React.JSX.Element {
   const context = useMemo(() => getNodeContextForModel(model, node.id), [model, node.id])
+  const [sourceRows, setSourceRows] = useState<SourceLocation[]>([])
+  const [sourceRowsDirty, setSourceRowsDirty] = useState(false)
+  const sourceRowsNodeIdRef = useRef(node.id)
+  const [statusDraft, setStatusDraft] = useState<Status | ''>(node.data.status ?? '')
+  const [statusReason, setStatusReason] = useState('')
+  const nodeSourceLocations = useMemo(
+    () => model.sourceMap?.[node.id] ?? [],
+    [model.sourceMap, node.id]
+  )
+  const verifiedBlockers = useMemo(() => getVerifiedBlockers(model, node.id), [model, node.id])
+  const mentionItems = useMemo(() => buildMentionItems(model, node), [model, node])
+  const mentionWarnings = useMemo(() => getMentionEdgeWarnings(model, node), [model, node])
   const showTechnology = node.data.kind === 'container' || node.data.kind === 'component'
   const showExternal = node.data.kind === 'system'
   const showShape =
@@ -456,6 +489,46 @@ function NodeEditor({
     node.data.kind !== 'model'
   const showContract =
     node.data.kind !== 'person' && !node.data.external && node.data.kind !== 'model'
+  const statusChanged = statusDraft !== (node.data.status ?? '')
+  const statusReasonRequired = statusChanged && !!statusDraft
+  const verifiedBlocked = statusDraft === 'verified' && verifiedBlockers.length > 0
+
+  useEffect(() => {
+    setStatusDraft(node.data.status ?? '')
+    setStatusReason('')
+  }, [node.data.status, node.id])
+
+  useEffect(() => {
+    if (sourceRowsNodeIdRef.current !== node.id) {
+      sourceRowsNodeIdRef.current = node.id
+      setSourceRows(nodeSourceLocations)
+      setSourceRowsDirty(false)
+      return
+    }
+
+    if (!sourceRowsDirty) {
+      setSourceRows(nodeSourceLocations)
+    }
+  }, [node.id, nodeSourceLocations, sourceRowsDirty])
+
+  const updateSourceRows = (updater: (rows: SourceLocation[]) => SourceLocation[]): void => {
+    setSourceRows((rows) => updater(rows))
+    setSourceRowsDirty(true)
+  }
+
+  const saveSourceRows = async (): Promise<void> => {
+    const locations = sourceRows
+      .map((location) => ({
+        ...location,
+        pattern: location.pattern.trim(),
+        command: location.command?.trim() || undefined
+      }))
+      .filter((location) => location.pattern)
+
+    await onSaveSourceLocations(node.id, locations)
+    setSourceRows(locations)
+    setSourceRowsDirty(false)
+  }
 
   return (
     <div className="grid gap-4">
@@ -533,6 +606,7 @@ function NodeEditor({
                 })
               }
               disabled={syncing}
+              data-testid="architecture-node-shape-select"
             >
               <option value="">default</option>
               {SHAPE_OPTIONS.map((shape) => (
@@ -546,32 +620,35 @@ function NodeEditor({
 
         <label className="grid gap-1">
           <span className="text-xs text-muted-foreground">Description</span>
-          <textarea
+          <MentionTextarea
             className="min-h-20 rounded border border-border bg-background px-2 py-1"
             value={node.data.description}
-            onChange={(event) =>
-              onUpdateNodeDraft(node.id, { description: event.currentTarget.value })
-            }
-            onBlur={(event) => void onUpdateNode({ description: event.currentTarget.value })}
+            onChange={(event) => onUpdateNodeDraft(node.id, { description: event })}
+            mentionNames={mentionItems}
+            rows={4}
+            testId="architecture-node-description"
             disabled={syncing}
+            onBlur={(value) => void onUpdateNode({ description: value })}
           />
         </label>
+        {mentionWarnings.length > 0 ? (
+          <div
+            className="rounded border border-amber-400/40 bg-amber-400/10 p-2 text-xs text-amber-700 dark:text-amber-300"
+            data-testid="architecture-mention-warning"
+          >
+            {mentionWarnings.join('; ')}
+          </div>
+        ) : null}
 
         {node.data.kind !== 'person' && !node.data.external ? (
-          <label className="grid gap-1">
+          <div className="grid gap-2">
             <span className="text-xs text-muted-foreground">Status</span>
             <select
               className="rounded border border-border bg-background px-2 py-1"
-              value={node.data.status ?? ''}
-              onChange={(event) =>
-                void onUpdateNode({
-                  status: event.currentTarget.value
-                    ? (event.currentTarget.value as Status)
-                    : undefined,
-                  statusReason: undefined
-                })
-              }
+              value={statusDraft}
+              onChange={(event) => setStatusDraft(event.currentTarget.value as Status | '')}
               disabled={syncing}
+              data-testid="architecture-node-status"
             >
               <option value="">none</option>
               {STATUS_OPTIONS.map((status) => (
@@ -580,7 +657,46 @@ function NodeEditor({
                 </option>
               ))}
             </select>
-          </label>
+            {statusChanged ? (
+              <>
+                <input
+                  className="rounded border border-border bg-background px-2 py-1"
+                  value={statusReason}
+                  onChange={(event) => setStatusReason(event.currentTarget.value)}
+                  placeholder="Reason for status change"
+                  disabled={syncing}
+                  data-testid="architecture-node-status-reason"
+                />
+                {verifiedBlocked ? (
+                  <div
+                    className="rounded border border-amber-400/40 bg-amber-400/10 p-2 text-xs text-amber-700 dark:text-amber-300"
+                    data-testid="architecture-node-verified-blockers"
+                  >
+                    Pass these expect items before verifying: {verifiedBlockers.join('; ')}
+                  </div>
+                ) : null}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    void onUpdateNode({
+                      status: statusDraft || undefined,
+                      statusReason: statusDraft ? statusReason.trim() : undefined
+                    })
+                  }
+                  disabled={
+                    syncing ||
+                    !statusChanged ||
+                    verifiedBlocked ||
+                    (statusReasonRequired && !statusReason.trim())
+                  }
+                  data-testid="architecture-node-status-save"
+                >
+                  Save status
+                </Button>
+              </>
+            ) : null}
+          </div>
         ) : null}
       </section>
 
@@ -598,6 +714,105 @@ function NodeEditor({
             disabled={syncing}
           />
         </label>
+        <div className="grid gap-2">
+          {sourceRows.map((location, index) => (
+            <div key={index} className="grid gap-1 rounded border border-border p-2">
+              <input
+                className="rounded border border-border bg-background px-2 py-1 font-mono text-xs"
+                value={location.pattern}
+                placeholder="src/**/*.ts"
+                onChange={(event) => {
+                  const value = event.currentTarget.value
+                  updateSourceRows((rows) =>
+                    rows.map((row, rowIndex) =>
+                      rowIndex === index ? { ...row, pattern: value } : row
+                    )
+                  )
+                }}
+                data-testid="architecture-source-pattern-row"
+                disabled={syncing}
+              />
+              <div className="grid grid-cols-3 gap-1">
+                <input
+                  className="rounded border border-border bg-background px-2 py-1 font-mono text-xs"
+                  value={location.line ?? ''}
+                  placeholder="line"
+                  onChange={(event) => {
+                    const value = event.currentTarget.value
+                    updateSourceRows((rows) =>
+                      rows.map((row, rowIndex) =>
+                        rowIndex === index ? { ...row, line: numberOrUndefined(value) } : row
+                      )
+                    )
+                  }}
+                  data-testid="architecture-source-line-row"
+                  disabled={syncing}
+                />
+                <input
+                  className="rounded border border-border bg-background px-2 py-1 font-mono text-xs"
+                  value={location.endLine ?? ''}
+                  placeholder="end"
+                  onChange={(event) => {
+                    const value = event.currentTarget.value
+                    updateSourceRows((rows) =>
+                      rows.map((row, rowIndex) =>
+                        rowIndex === index ? { ...row, endLine: numberOrUndefined(value) } : row
+                      )
+                    )
+                  }}
+                  data-testid="architecture-source-end-line-row"
+                  disabled={syncing}
+                />
+                <input
+                  className="rounded border border-border bg-background px-2 py-1 font-mono text-xs"
+                  value={location.command ?? ''}
+                  placeholder="command"
+                  onChange={(event) => {
+                    const value = event.currentTarget.value
+                    updateSourceRows((rows) =>
+                      rows.map((row, rowIndex) =>
+                        rowIndex === index ? { ...row, command: value || undefined } : row
+                      )
+                    )
+                  }}
+                  data-testid="architecture-source-command-row"
+                  disabled={syncing}
+                />
+              </div>
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() =>
+                  updateSourceRows((rows) => rows.filter((_, rowIndex) => rowIndex !== index))
+                }
+                disabled={syncing}
+              >
+                Remove source
+              </Button>
+            </div>
+          ))}
+        </div>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="xs"
+            onClick={() => updateSourceRows((rows) => [...rows, { pattern: '' }])}
+            disabled={syncing}
+            data-testid="architecture-source-add"
+          >
+            <Plus className="size-3" />
+            Add source
+          </Button>
+          <Button
+            variant="outline"
+            size="xs"
+            onClick={() => void saveSourceRows()}
+            disabled={syncing}
+            data-testid="architecture-source-save"
+          >
+            Save sources
+          </Button>
+        </div>
       </section>
 
       <section className="grid gap-3 border-t border-border pt-3">
@@ -846,29 +1061,124 @@ function ContractList({
     <div className="grid gap-2">
       <span className="text-xs text-muted-foreground">{label}</span>
       {items.map((item, index) => (
-        <div key={index} className="flex gap-2">
+        <div key={index} className="grid gap-2 rounded border border-border p-2">
+          <div className="flex gap-2">
+            <input
+              className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1"
+              value={getContractItemText(item)}
+              onChange={(event) =>
+                onChange(
+                  items.map((current, itemIndex) =>
+                    itemIndex === index
+                      ? updateContractItemText(current, event.currentTarget.value)
+                      : current
+                  )
+                )
+              }
+              disabled={syncing}
+              data-testid={`architecture-contract-${label}-text`}
+            />
+            <select
+              className="w-28 rounded border border-border bg-background px-2 py-1 text-xs"
+              value={String(normalizeContractItem(item).passed)}
+              onChange={(event) =>
+                onChange(
+                  items.map((current, itemIndex) =>
+                    itemIndex === index
+                      ? setContractItemPassed(
+                          current,
+                          event.currentTarget.value === 'undefined'
+                            ? undefined
+                            : event.currentTarget.value === 'true'
+                        )
+                      : current
+                  )
+                )
+              }
+              disabled={syncing}
+              data-testid={`architecture-contract-${label}-passed`}
+            >
+              <option value="undefined">unchecked</option>
+              <option value="true">passed</option>
+              <option value="false">failed</option>
+            </select>
+            <Button
+              variant="outline"
+              size="icon-sm"
+              onClick={() => onChange(items.filter((_, itemIndex) => itemIndex !== index))}
+              disabled={syncing}
+            >
+              <Trash2 className="size-3" />
+            </Button>
+          </div>
           <input
-            className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1"
-            value={contractItemText(item)}
+            className="rounded border border-border bg-background px-2 py-1 text-xs"
+            value={normalizeContractItem(item).url ?? ''}
+            placeholder="Evidence URL"
             onChange={(event) =>
               onChange(
                 items.map((current, itemIndex) =>
                   itemIndex === index
-                    ? updateContractItemText(current, event.currentTarget.value)
+                    ? updateContractItemUrl(current, event.currentTarget.value)
                     : current
                 )
               )
             }
             disabled={syncing}
+            data-testid={`architecture-contract-${label}-url`}
           />
-          <Button
-            variant="outline"
-            size="icon-sm"
-            onClick={() => onChange(items.filter((_, itemIndex) => itemIndex !== index))}
+          <input
+            className="text-xs text-muted-foreground"
+            type="file"
+            accept="image/*"
             disabled={syncing}
-          >
-            <Trash2 className="size-3" />
-          </Button>
+            data-testid={`architecture-contract-${label}-image`}
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0]
+              if (!file) {
+                return
+              }
+              const reader = new FileReader()
+              reader.onload = () => {
+                const dataUrl = typeof reader.result === 'string' ? reader.result : ''
+                const base64 = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl
+                onChange(
+                  items.map((current, itemIndex) =>
+                    itemIndex === index
+                      ? updateContractItemImage(current, {
+                          filename: file.name,
+                          mimeType: file.type,
+                          data: base64
+                        })
+                      : current
+                  )
+                )
+              }
+              reader.readAsDataURL(file)
+            }}
+          />
+          {normalizeContractItem(item).image ? (
+            <div className="flex items-center gap-2 rounded border border-border bg-muted/30 px-2 py-1 text-xs text-muted-foreground">
+              <span className="min-w-0 flex-1 truncate">
+                {normalizeContractItem(item).image?.filename}
+              </span>
+              <Button
+                variant="outline"
+                size="icon-xs"
+                onClick={() =>
+                  onChange(
+                    items.map((current, itemIndex) =>
+                      itemIndex === index ? updateContractItemImage(current, undefined) : current
+                    )
+                  )
+                }
+                disabled={syncing}
+                data-testid={`architecture-contract-${label}-image-clear`}
+              >
+                <Trash2 className="size-3" />
+              </Button>
+            </div>
+          ) : null}
         </div>
       ))}
       <Button
@@ -954,11 +1264,35 @@ function normalizeContract(contract: Contract | undefined): Contract {
 }
 
 function contractItemText(item: ContractItem): string {
-  return typeof item === 'string' ? item : item.text
+  return getContractItemText(item)
 }
 
 function updateContractItemText(item: ContractItem, text: string): ContractItem {
-  return typeof item === 'string' ? text : { ...item, text }
+  const normalized = normalizeContractItem(item)
+  if (!normalized.passed && !normalized.url && !normalized.image) {
+    return text
+  }
+  return { ...normalized, text }
+}
+
+function updateContractItemUrl(item: ContractItem, url: string): ContractItem {
+  const normalized = normalizeContractItem(item)
+  const nextUrl = url.trim() || undefined
+  if (!normalized.passed && !nextUrl && !normalized.image) {
+    return normalized.text
+  }
+  return { ...normalized, url: nextUrl }
+}
+
+function updateContractItemImage(
+  item: ContractItem,
+  image: ReturnType<typeof normalizeContractItem>['image'] | undefined
+): ContractItem {
+  const normalized = normalizeContractItem(item)
+  if (!normalized.passed && !normalized.url && !image) {
+    return normalized.text
+  }
+  return { ...normalized, image }
 }
 
 function contractItemsToText(items: ContractItem[]): string {
@@ -970,4 +1304,45 @@ function textToContractItems(text: string): ContractItem[] {
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean)
+}
+
+function numberOrUndefined(value: string): number | undefined {
+  const number = Number(value)
+  return Number.isFinite(number) && number > 0 ? number : undefined
+}
+
+function buildMentionItems(model: C4ModelData, node: C4Node): MentionItem[] {
+  return model.nodes
+    .filter((candidate) => candidate.id !== node.id && candidate.parentId === node.parentId)
+    .map((candidate) => ({
+      name: candidate.data.name,
+      insertValue: candidate.data.name,
+      kind: candidate.data.kind,
+      status: candidate.data.status
+    }))
+}
+
+function getMentionEdgeWarnings(model: C4ModelData, node: C4Node): string[] {
+  const siblings = model.nodes.filter(
+    (candidate) => candidate.id !== node.id && candidate.parentId === node.parentId
+  )
+  const edgeKeys = new Set<string>()
+  for (const edge of model.edges) {
+    edgeKeys.add(`${edge.source}->${edge.target}`)
+    edgeKeys.add(`${edge.target}->${edge.source}`)
+  }
+  const warnings: string[] = []
+  for (const match of node.data.description.matchAll(/@\[([^\]]+)\]/g)) {
+    const rawName = match[1]
+    const target = siblings.find(
+      (candidate) =>
+        candidate.id === rawName ||
+        candidate.data.name === rawName ||
+        candidate.data.name.toLowerCase() === rawName.toLowerCase()
+    )
+    if (target && !edgeKeys.has(`${node.id}->${target.id}`)) {
+      warnings.push(`Mention ${target.data.name} needs a relationship edge`)
+    }
+  }
+  return warnings
 }

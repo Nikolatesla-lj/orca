@@ -27,6 +27,7 @@ export type FlowScriptViewProps = {
   onNavigateToNode?: (nodeId: string) => void
   onSwitchToTopology?: () => void
   onOpenSourceLocation?: (location: SourceLocation) => void | Promise<void>
+  onUpdateSourceMap?: (flowId: string, locations: SourceLocation[]) => void | Promise<void>
 }
 
 type StepEditorProps = {
@@ -466,7 +467,8 @@ export function FlowScriptView({
   onDelete,
   onNavigateToNode,
   onSwitchToTopology,
-  onOpenSourceLocation
+  onOpenSourceLocation,
+  onUpdateSourceMap
 }: FlowScriptViewProps): React.JSX.Element {
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const labels = useMemo(() => computeNumbering(flow.steps, '', 1), [flow.steps])
@@ -480,6 +482,7 @@ export function FlowScriptView({
   const dragSourceRef = useRef<string | null>(null)
 
   const flowSources = sourceMap[flow.id] ?? []
+  const [sourceDraft, setSourceDraft] = useState('')
   const nodeNameToId = useMemo(() => {
     const map = new Map<string, string>()
     for (const node of allNodes) {
@@ -736,23 +739,54 @@ export function FlowScriptView({
                 onUpdate({ ...flow, description: event.currentTarget.value || undefined })
               }
             />
-            <div className="mt-2 flex items-center gap-2 text-xs">
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
               {flowSources.length > 0 ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="xs"
-                  className="justify-start text-[var(--text-tertiary)] hover:text-[var(--text)]"
-                  data-testid="architecture-flow-source-link"
-                  title={flowSources[0].pattern}
-                  onClick={() => void onOpenSourceLocation?.(flowSources[0])}
-                >
-                  <FileText className="size-3" />
-                  <span className="font-mono">{flowSources[0].pattern}</span>
-                </Button>
+                flowSources.map((source, index) => (
+                  <Button
+                    key={`${source.pattern}-${index}`}
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    className="justify-start text-[var(--text-tertiary)] hover:text-[var(--text)]"
+                    data-testid="architecture-flow-source-link"
+                    title={source.pattern}
+                    onClick={() => void onOpenSourceLocation?.(source)}
+                  >
+                    <FileText className="size-3" />
+                    <span className="font-mono">{source.pattern}</span>
+                  </Button>
+                ))
               ) : (
                 <span className="italic text-[var(--text-muted)]">No source link</span>
               )}
+              {onUpdateSourceMap ? (
+                <div className="flex items-center gap-1">
+                  <input
+                    className="h-6 w-32 rounded border border-border bg-background px-1.5 font-mono text-[11px]"
+                    value={sourceDraft}
+                    placeholder="src/**/*.test.ts"
+                    onChange={(event) => setSourceDraft(event.currentTarget.value)}
+                    data-testid="architecture-flow-source-input"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    data-testid="architecture-flow-source-add"
+                    onClick={() => {
+                      const pattern = sourceDraft.trim()
+                      if (!pattern) {
+                        return
+                      }
+                      void onUpdateSourceMap(flow.id, [...flowSources, { pattern }])
+                      setSourceDraft('')
+                    }}
+                  >
+                    <Plus className="size-3" />
+                    Source
+                  </Button>
+                </div>
+              ) : null}
             </div>
           </div>
 

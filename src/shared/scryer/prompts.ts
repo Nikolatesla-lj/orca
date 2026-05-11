@@ -79,6 +79,20 @@ Instructions:
 Focus only on "${args.nodeName}". Do not change boundaries outside this scope.`
 }
 
+export function advisorPrompt(args: { modelName: string; cwd: string; modelJson: string }): string {
+  return `You have access to Orca's Scryer-compatible architecture MCP tools. Review the C4 architecture model "${args.modelName}" for structural issues in the codebase at ${args.cwd}.
+
+Current model state:
+${args.modelJson}
+
+Instructions:
+1. Call get_rules to load the C4 modeling rules.
+2. Inspect the model for missing relationships, unclear names, wrong hierarchy, unsupported status changes, missing source maps, and contract gaps.
+3. Read source files only when the current model is ambiguous.
+4. Do not modify the model unless the user explicitly asks you to apply the recommendations.
+5. Return a concise review grouped by node or flow, with concrete suggested fixes.`
+}
+
 export function syncPrompt(args: {
   modelName: string
   cwd: string

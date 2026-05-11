@@ -1,4 +1,4 @@
-import { mkdtemp } from 'fs/promises'
+import { mkdtemp, readFile } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -10,7 +10,7 @@ vi.mock('electron', () => ({
   ipcMain: { handle: handleMock }
 }))
 
-import { registerArchitectureHandlers } from './architecture'
+import { registerArchitectureHandlers, shouldNotifyModelFile } from './architecture'
 
 describe('registerArchitectureHandlers', () => {
   beforeEach(() => {
@@ -79,5 +79,89 @@ describe('registerArchitectureHandlers', () => {
       projectPath,
       fileName: 'model.scry'
     })
+  })
+
+  it('bridges project model management and AI prompt preparation through IPC', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-models-'))
+
+    const template = await handlers.get('architecture:createModel')!(null, {
+      projectPath,
+      modelName: 'game-plan',
+      templateId: 'game'
+    })
+    expect(template).toMatchObject({
+      modelName: 'game-plan',
+      model: expect.objectContaining({ nodes: expect.any(Array) })
+    })
+
+    await handlers.get('architecture:saveModelAs')!(null, {
+      projectPath,
+      fromModelName: 'game-plan',
+      toModelName: 'game-plan-copy'
+    })
+
+    const models = await handlers.get('architecture:listModels')!(null, { projectPath })
+    expect(models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'game-plan' }),
+        expect.objectContaining({ name: 'game-plan-copy' })
+      ])
+    )
+
+    const initialPrompt = await handlers.get('architecture:prepareInitialModelPrompt')!(null, {
+      projectPath,
+      modelName: 'game-plan'
+    })
+    expect(initialPrompt).toMatchObject({
+      prompt: expect.stringContaining('Build a C4 architecture model named "game-plan"')
+    })
+
+    const fillPrompt = await handlers.get('architecture:prepareNodeFillPrompt')!(null, {
+      projectPath,
+      modelName: 'game-plan',
+      nodeId: 'node-2'
+    })
+    expect(fillPrompt).toMatchObject({
+      prompt: expect.stringContaining('Fill out the internals')
+    })
+
+    const advisorPrompt = await handlers.get('architecture:prepareAdvisorPrompt')!(null, {
+      projectPath,
+      modelName: 'game-plan'
+    })
+    expect(advisorPrompt).toMatchObject({
+      prompt: expect.stringContaining('Review the C4 architecture model')
+    })
+
+    await handlers.get('architecture:deleteModel')!(null, {
+      projectPath,
+      modelName: 'game-plan-copy'
+    })
+    const remaining = await handlers.get('architecture:listModels')!(null, { projectPath })
+    expect(remaining).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: 'game-plan-copy' })])
+    )
+  })
+
+  it('filters internal and temporary Scryer watcher files', () => {
+    expect(shouldNotifyModelFile('model.scry')).toBe(true)
+    expect(shouldNotifyModelFile('release-plan.scry')).toBe(true)
+    expect(shouldNotifyModelFile('model.baseline.scry')).toBe(false)
+    expect(shouldNotifyModelFile('model.presync.scry')).toBe(false)
+    expect(shouldNotifyModelFile('.123.tmp')).toBe(false)
+    expect(shouldNotifyModelFile('model.scry.tmp')).toBe(false)
+  })
+
+  it('writes Claude and Codex MCP config files for the project', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-mcp-config-'))
+    const result = await handlers.get('architecture:writeMcpConfig')!(null, { projectPath })
+    expect(result).toMatchObject({
+      claudePath: expect.stringContaining('.mcp.json'),
+      codexPath: expect.stringContaining('config.toml')
+    })
+    expect(await readFile(join(projectPath, '.mcp.json'), 'utf8')).toContain('scryer')
+    expect(await readFile(join(projectPath, '.codex', 'config.toml'), 'utf8')).toContain(
+      'mcp_servers.scryer'
+    )
   })
 })

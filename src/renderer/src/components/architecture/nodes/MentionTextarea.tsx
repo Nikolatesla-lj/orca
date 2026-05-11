@@ -22,6 +22,8 @@ type MentionTextareaProps = {
   maxLength?: number
   autoFocus?: boolean
   testId?: string
+  disabled?: boolean
+  onBlur?: (value: string) => void
 }
 
 function getFilteredMentions(mentionNames: MentionItem[], query: string): MentionItem[] {
@@ -51,7 +53,9 @@ export function MentionTextarea({
   className,
   maxLength,
   autoFocus,
-  testId
+  testId,
+  disabled,
+  onBlur
 }: MentionTextareaProps): React.JSX.Element {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [localValue, setLocalValue] = useState(value)
@@ -183,6 +187,7 @@ export function MentionTextarea({
         rows={rows}
         maxLength={maxLength}
         data-testid={testId}
+        disabled={disabled}
         onChange={handleChange}
         onKeyDown={(event) => {
           if (event.key === 'Escape' && triggerPos !== null) {
@@ -200,6 +205,7 @@ export function MentionTextarea({
           }
         }}
         onBlur={() => {
+          onBlur?.(localValue)
           setTimeout(() => {
             setTriggerPos(null)
             setQuery('')

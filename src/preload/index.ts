@@ -937,10 +937,45 @@ const api = {
   },
 
   architecture: {
-    readModel: (args: { projectPath: string }): Promise<unknown> =>
+    readModel: (args: { projectPath: string; modelName?: string | null }): Promise<unknown> =>
       ipcRenderer.invoke('architecture:readModel', args),
-    writeModel: (args: { projectPath: string; model: unknown }): Promise<void> =>
-      ipcRenderer.invoke('architecture:writeModel', args),
+    writeModel: (args: {
+      projectPath: string
+      model: unknown
+      modelName?: string | null
+    }): Promise<void> => ipcRenderer.invoke('architecture:writeModel', args),
+    listModels: (args: { projectPath: string }): Promise<unknown> =>
+      ipcRenderer.invoke('architecture:listModels', args),
+    createModel: (args: {
+      projectPath: string
+      modelName?: string | null
+      templateId?: string | null
+    }): Promise<unknown> => ipcRenderer.invoke('architecture:createModel', args),
+    saveModelAs: (args: {
+      projectPath: string
+      fromModelName?: string | null
+      toModelName: string
+    }): Promise<unknown> => ipcRenderer.invoke('architecture:saveModelAs', args),
+    deleteModel: (args: { projectPath: string; modelName: string }): Promise<void> =>
+      ipcRenderer.invoke('architecture:deleteModel', args),
+    migrateGlobalModel: (args: { projectPath: string; modelName: string }): Promise<unknown> =>
+      ipcRenderer.invoke('architecture:migrateGlobalModel', args),
+    writeMcpConfig: (args: { projectPath: string }): Promise<unknown> =>
+      ipcRenderer.invoke('architecture:writeMcpConfig', args),
+    listTemplates: (): Promise<unknown> => ipcRenderer.invoke('architecture:listTemplates'),
+    prepareInitialModelPrompt: (args: {
+      projectPath: string
+      modelName: string
+    }): Promise<unknown> => ipcRenderer.invoke('architecture:prepareInitialModelPrompt', args),
+    prepareNodeFillPrompt: (args: {
+      projectPath: string
+      modelName?: string | null
+      nodeId: string
+    }): Promise<unknown> => ipcRenderer.invoke('architecture:prepareNodeFillPrompt', args),
+    prepareAdvisorPrompt: (args: {
+      projectPath: string
+      modelName?: string | null
+    }): Promise<unknown> => ipcRenderer.invoke('architecture:prepareAdvisorPrompt', args),
     checkDrift: (args: { projectPath: string }): Promise<unknown> =>
       ipcRenderer.invoke('architecture:checkDrift', args),
     markSynced: (args: { projectPath: string }): Promise<void> =>
