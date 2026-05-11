@@ -1,7 +1,8 @@
 import { watch, type FSWatcher } from 'fs'
-import { ipcMain } from 'electron'
+import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import {
   getProjectScryerDir,
+  hasPreSyncSnapshot,
   isImplementing,
   markSynced,
   readModel,
@@ -18,6 +19,13 @@ function projectKey(projectPath: string): string {
   return getProjectScryerDir(projectPath)
 }
 
+function notifyModelChanged(event: IpcMainInvokeEvent | null, projectPath: string): void {
+  event?.sender.send('architecture:modelChanged', {
+    projectPath,
+    fileName: 'model.scry'
+  })
+}
+
 export function closeArchitectureWatchers(): void {
   for (const watcher of watchers.values()) {
     watcher.close()
@@ -32,8 +40,9 @@ export function registerArchitectureHandlers(): void {
 
   ipcMain.handle(
     'architecture:writeModel',
-    async (_event, args: { projectPath: string; model: C4ModelData }) => {
+    async (event, args: { projectPath: string; model: C4ModelData }) => {
       await writeModel(args.projectPath, args.model)
+      notifyModelChanged(event, args.projectPath)
     }
   )
 
@@ -47,6 +56,10 @@ export function registerArchitectureHandlers(): void {
 
   ipcMain.handle('architecture:isSyncing', (_event, args: { projectPath: string }) =>
     isImplementing(args.projectPath)
+  )
+
+  ipcMain.handle('architecture:hasPreSyncSnapshot', (_event, args: { projectPath: string }) =>
+    hasPreSyncSnapshot(args.projectPath)
   )
 
   ipcMain.handle(
@@ -65,8 +78,13 @@ export function registerArchitectureHandlers(): void {
 
   ipcMain.handle(
     'architecture:callTool',
-    (_event, args: { projectPath: string; call: ScryerToolCall }) =>
-      callScryerTool(args.projectPath, args.call)
+    async (event, args: { projectPath: string; call: ScryerToolCall }) => {
+      const result = await callScryerTool(args.projectPath, args.call)
+      if (result.ok) {
+        notifyModelChanged(event, args.projectPath)
+      }
+      return result
+    }
   )
 
   ipcMain.handle('architecture:watchModel', async (event, args: { projectPath: string }) => {

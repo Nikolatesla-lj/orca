@@ -215,6 +215,13 @@ export function C4Node({ id, data, selected }: NodeProps<ArchitectureFlowNode>):
       data-node-id={id}
       data-node-kind={data.kind}
       data-node-shape={shape}
+      onDoubleClick={(event) => {
+        if (!expandable) {
+          return
+        }
+        event.stopPropagation()
+        data.onExpand?.()
+      }}
     >
       <div className="relative h-[160px]">
         <HintBadge hints={data._hints ?? []} />

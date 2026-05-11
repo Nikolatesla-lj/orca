@@ -1,13 +1,13 @@
-import { useCallback, useMemo } from 'react'
+/* eslint-disable max-lines -- Why: this canvas still owns selection, drill-in, edge editing, and layout wiring until the remaining Scryer panel logic is split out. */
+import { useCallback, useMemo, useRef } from 'react'
 import {
   Background,
   BackgroundVariant,
   ConnectionMode,
-  Controls,
-  MiniMap,
   Panel,
   ReactFlow,
-  ReactFlowProvider
+  ReactFlowProvider,
+  ViewportPortal
 } from '@xyflow/react'
 import type {
   Connection,
@@ -27,7 +27,10 @@ import type {
 import {
   applyNodePositionChangesToModel,
   createNodeForParent,
+  deleteEdgesFromModel,
   deleteNodesFromModel,
+  deleteReferenceEdgesFromModel,
+  getVisibleGroupBubbles,
   getVisibleArchitectureView
 } from './c4-model'
 import { Button } from '../ui/button'
@@ -40,9 +43,14 @@ type ArchitectureCanvasProps = {
   syncing: boolean
   expandedPath: string[]
   selectedNodeId: string | null
+  selectedEdgeId: string | null
+  multiSelectedNodeIds: string[]
+  changedNodeIds: Set<string>
   driftedNodeIds: Set<string>
   onExpandedPathChange: (path: string[]) => void
   onSelectedNodeChange: (nodeId: string | null) => void
+  onSelectedEdgeChange: (edgeId: string | null) => void
+  onMultiSelectionChange: (nodeIds: string[], totalSelected: number) => void
   onModelChange: (change: C4ModelData | ModelUpdater, message: string) => void | Promise<void>
   onOpenSourceLocation: (location: SourceLocation) => void | Promise<void>
 }
@@ -66,25 +74,37 @@ function ArchitectureCanvasInner({
   syncing,
   expandedPath,
   selectedNodeId,
+  selectedEdgeId,
+  multiSelectedNodeIds,
+  changedNodeIds,
   driftedNodeIds,
   onExpandedPathChange,
   onSelectedNodeChange,
+  onSelectedEdgeChange,
+  onMultiSelectionChange,
   onModelChange,
   onOpenSourceLocation
 }: ArchitectureCanvasProps): React.JSX.Element {
+  const suppressNativeSelectionRef = useRef(false)
   const view = useMemo(
-    () => getVisibleArchitectureView({ model, expandedPath, driftedNodeIds }),
-    [driftedNodeIds, expandedPath, model]
+    () => getVisibleArchitectureView({ model, expandedPath, changedNodeIds, driftedNodeIds }),
+    [changedNodeIds, driftedNodeIds, expandedPath, model]
   )
   const selectedNode = selectedNodeId
     ? (model.nodes.find((node) => node.id === selectedNodeId) ?? null)
+    : null
+  const selectedEdge = selectedEdgeId
+    ? (model.edges.find((edge) => edge.id === selectedEdgeId) ?? null)
+    : null
+  const selectedVisibleNode = selectedNodeId
+    ? (view.visibleNodes.find((node) => node.id === selectedNodeId) ?? null)
     : null
 
   const visibleNodes = useMemo<ArchitectureFlowNode[]>(
     () =>
       view.visibleNodes.map((node) =>
         toFlowNode(node, {
-          selected: node.id === selectedNodeId,
+          selected: node.id === selectedNodeId || multiSelectedNodeIds.includes(node.id),
           data: {
             sourceLocations: model.sourceMap?.[node.id] ?? [],
             onExpand: () => onExpandedPathChange([...expandedPath, node.id]),
@@ -98,6 +118,7 @@ function ArchitectureCanvasInner({
       onExpandedPathChange,
       onOpenSourceLocation,
       selectedNodeId,
+      multiSelectedNodeIds,
       view.visibleNodes
     ]
   )
@@ -106,45 +127,68 @@ function ArchitectureCanvasInner({
     () =>
       decorateEdgesForRouting(view.visibleNodes, view.visibleEdges).map((edge) => ({
         ...edge,
+        selected: edge.id === selectedEdgeId,
         type: 'relationship',
-        data: edge.data ?? { label: '' }
+        data: {
+          label: '',
+          ...edge.data,
+          _onSelect: onSelectedEdgeChange
+        }
       })),
-    [view.visibleEdges, view.visibleNodes]
+    [onSelectedEdgeChange, selectedEdgeId, view.visibleEdges, view.visibleNodes]
+  )
+
+  const groupBubbles = useMemo(
+    () => getVisibleGroupBubbles(model, view.visibleNodes),
+    [model, view.visibleNodes]
   )
 
   const onNodesChange = useCallback<OnNodesChange<ArchitectureFlowNode>>(
     (changes) => {
-      const selection = changes.find((change) => change.type === 'select' && change.selected)
-      if (selection) {
-        if ('id' in selection) {
-          onSelectedNodeChange(selection.id)
-        }
-      }
       if (syncing) {
         return
       }
+      const removedReferenceIds = changes.flatMap((change) =>
+        change.type === 'remove' && 'id' in change && view.refNodeIds.has(change.id)
+          ? [change.id]
+          : []
+      )
       const removedIds = changes.flatMap((change) =>
         change.type === 'remove' && 'id' in change && !view.refNodeIds.has(change.id)
           ? [change.id]
           : []
       )
-      if (removedIds.length > 0) {
+      if (removedIds.length > 0 || removedReferenceIds.length > 0) {
         void onModelChange(
-          (current) => deleteNodesFromModel(current, removedIds),
-          'Deleted architecture nodes'
+          (current) => {
+            let next = current
+            if (removedReferenceIds.length > 0) {
+              next = deleteReferenceEdgesFromModel(next, view.currentParentId, removedReferenceIds)
+            }
+            if (removedIds.length > 0) {
+              next = deleteNodesFromModel(next, removedIds)
+            }
+            return next
+          },
+          removedIds.length > 0 ? 'Deleted architecture nodes' : 'Disconnected reference nodes'
         )
         return
       }
       void onModelChange(
-        (current) => applyNodePositionChangesToModel(current, changes, view.refNodeIds),
+        (current) =>
+          applyNodePositionChangesToModel(current, changes, view.refNodeIds, view.currentParentId),
         'Saved canvas layout'
       )
     },
-    [onModelChange, onSelectedNodeChange, syncing, view.refNodeIds]
+    [onModelChange, syncing, view.currentParentId, view.refNodeIds]
   )
 
   const onEdgesChange = useCallback<OnEdgesChange<ArchitectureFlowEdge>>(
     (changes) => {
+      const selection = changes.find((change) => change.type === 'select' && change.selected)
+      if (selection && 'id' in selection) {
+        onSelectedEdgeChange(selection.id)
+      }
       if (syncing) {
         return
       }
@@ -153,15 +197,15 @@ function ArchitectureCanvasInner({
       )
       if (removedIds.size > 0) {
         void onModelChange(
-          (current) => ({
-            ...current,
-            edges: current.edges.filter((edge) => !removedIds.has(edge.id))
-          }),
+          (current) => deleteEdgesFromModel(current, [...removedIds]),
           'Saved architecture edges'
         )
+        if (selectedEdgeId && removedIds.has(selectedEdgeId)) {
+          onSelectedEdgeChange(null)
+        }
       }
     },
-    [onModelChange, syncing]
+    [onModelChange, onSelectedEdgeChange, selectedEdgeId, syncing]
   )
 
   const onConnect = useCallback<OnConnect>(
@@ -207,13 +251,42 @@ function ArchitectureCanvasInner({
   }, [model, onModelChange, onSelectedNodeChange, syncing, view.currentParentId])
 
   const deleteSelected = useCallback(() => {
-    if (syncing || !selectedNode) {
+    if (syncing) {
       return
     }
-    const nextModel = deleteNodesFromModel(model, [selectedNode.id])
-    void onModelChange(nextModel, `Deleted ${selectedNode.data.name}`)
-    onSelectedNodeChange(nextModel.nodes[0]?.id ?? null)
-  }, [model, onModelChange, onSelectedNodeChange, selectedNode, syncing])
+    if (selectedVisibleNode?.data._reference) {
+      void onModelChange(
+        (current) =>
+          deleteReferenceEdgesFromModel(current, view.currentParentId, [selectedVisibleNode.id]),
+        'Disconnected reference node'
+      )
+      onSelectedNodeChange(null)
+      return
+    }
+    if (selectedNode) {
+      const nextModel = deleteNodesFromModel(model, [selectedNode.id])
+      void onModelChange(nextModel, `Deleted ${selectedNode.data.name}`)
+      onSelectedNodeChange(nextModel.nodes[0]?.id ?? null)
+      return
+    }
+    if (selectedEdge) {
+      void onModelChange(
+        deleteEdgesFromModel(model, [selectedEdge.id]),
+        `Deleted ${selectedEdge.id}`
+      )
+      onSelectedEdgeChange(null)
+    }
+  }, [
+    model,
+    onModelChange,
+    onSelectedEdgeChange,
+    onSelectedNodeChange,
+    selectedEdge,
+    selectedNode,
+    selectedVisibleNode,
+    syncing,
+    view.currentParentId
+  ])
 
   const autoLayout = useCallback(() => {
     if (syncing) {
@@ -253,6 +326,26 @@ function ArchitectureCanvasInner({
     (index: number) => onExpandedPathChange(expandedPath.slice(0, index + 1)),
     [expandedPath, onExpandedPathChange]
   )
+  const expandNode = useCallback(
+    (nodeId: string) => {
+      const node = model.nodes.find((candidate) => candidate.id === nodeId)
+      if (!node || node.data.external || node.data._reference) {
+        return
+      }
+      if (
+        node.data.kind !== 'system' &&
+        node.data.kind !== 'container' &&
+        node.data.kind !== 'component'
+      ) {
+        return
+      }
+      onSelectedNodeChange(nodeId)
+      onExpandedPathChange(
+        expandedPath.at(-1) === nodeId ? expandedPath : [...expandedPath, nodeId]
+      )
+    },
+    [expandedPath, model.nodes, onExpandedPathChange, onSelectedNodeChange]
+  )
 
   return (
     <div className="relative flex-1 overflow-hidden" data-testid="architecture-canvas">
@@ -264,37 +357,91 @@ function ArchitectureCanvasInner({
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
-        onSelectionChange={({ nodes }) => {
-          const node = nodes[0]
-          if (node) {
-            onSelectedNodeChange(node.id)
+        onSelectionChange={({ nodes, edges }) => {
+          if (suppressNativeSelectionRef.current) {
+            return
+          }
+          const realNodeIds = nodes.filter((node) => !node.data._reference).map((node) => node.id)
+          const totalSelected = realNodeIds.length + edges.length
+          onMultiSelectionChange(realNodeIds.length >= 2 ? realNodeIds : [], totalSelected)
+          if (realNodeIds.length >= 2) {
+            onSelectedNodeChange(null)
+            onSelectedEdgeChange(null)
+            return
+          }
+          if (realNodeIds.length === 1) {
+            onSelectedNodeChange(realNodeIds[0])
           }
         }}
-        onPaneClick={() => onSelectedNodeChange(null)}
+        onNodeClick={(event, node) => {
+          if (event.shiftKey) {
+            suppressNativeSelectionRef.current = true
+            window.setTimeout(() => {
+              suppressNativeSelectionRef.current = false
+            }, 0)
+            if (node.data._reference) {
+              return
+            }
+            const baseSelection =
+              multiSelectedNodeIds.length > 0
+                ? multiSelectedNodeIds
+                : selectedVisibleNode
+                  ? [selectedVisibleNode.id]
+                  : []
+            const nextSelection = baseSelection.includes(node.id)
+              ? baseSelection.filter((nodeId) => nodeId !== node.id)
+              : [...baseSelection, node.id]
+            if (nextSelection.length >= 2) {
+              onMultiSelectionChange(nextSelection, nextSelection.length)
+            } else {
+              onMultiSelectionChange([], nextSelection.length)
+              onSelectedNodeChange(nextSelection[0] ?? null)
+            }
+            return
+          }
+          onSelectedNodeChange(node.id)
+        }}
+        onNodeDoubleClick={(_, node) => expandNode(node.id)}
+        onEdgeClick={(_, edge) => onSelectedEdgeChange(edge.id)}
+        onEdgeDoubleClick={(_, edge) => onSelectedEdgeChange(edge.id)}
+        onPaneClick={() => {
+          onSelectedNodeChange(null)
+          onSelectedEdgeChange(null)
+        }}
         connectionMode={ConnectionMode.Loose}
         defaultEdgeOptions={defaultEdgeOptions}
         nodesDraggable={!syncing}
         nodesConnectable={!syncing}
         elementsSelectable
+        deleteKeyCode={['Delete', 'Backspace']}
         fitView
+        multiSelectionKeyCode="Shift"
         snapToGrid
         snapGrid={[20, 20]}
         proOptions={{ hideAttribution: true }}
       >
         <Background gap={20} variant={BackgroundVariant.Dots} size={1} color="var(--grid-color)" />
-        <MiniMap pannable zoomable className="!bg-background/90" />
-        <Controls showInteractive={!syncing}>
-          <button
-            type="button"
-            title="Auto layout"
-            className="react-flow__controls-button"
-            onClick={autoLayout}
-            data-testid="architecture-auto-layout"
-            disabled={syncing}
-          >
-            <LayoutGrid className="size-3.5" />
-          </button>
-        </Controls>
+        <ViewportPortal>
+          {groupBubbles.map((bubble) => (
+            <div
+              key={bubble.id}
+              className="pointer-events-none absolute rounded-[28px] border border-emerald-400/35 bg-emerald-400/8 shadow-[0_0_0_1px_rgba(16,185,129,0.08)]"
+              style={{
+                left: bubble.x,
+                top: bubble.y,
+                width: bubble.width,
+                height: bubble.height,
+                zIndex: -10 - bubble.depth
+              }}
+              data-testid="architecture-group-bubble"
+              data-group-id={bubble.id}
+            >
+              <div className="absolute left-4 top-2 rounded-full border border-emerald-400/30 bg-background/90 px-2 py-0.5 text-[10px] font-medium text-emerald-600 shadow-sm dark:text-emerald-300">
+                {bubble.name} · {bubble.memberCount}
+              </div>
+            </div>
+          ))}
+        </ViewportPortal>
         <Panel position="top-left" className="!m-3">
           <div className="flex items-center gap-1 rounded-md border border-border bg-background/95 px-1 py-1 shadow-sm">
             <Button variant="ghost" size="xs" onClick={navigateToRoot}>
@@ -325,7 +472,19 @@ function ArchitectureCanvasInner({
               <Plus className="size-3" />
               Add
             </Button>
-            {selectedNode ? (
+            {selectedVisibleNode ? (
+              <Button
+                variant="ghost"
+                size="xs"
+                className="text-destructive hover:text-destructive"
+                onClick={deleteSelected}
+                disabled={syncing}
+              >
+                <Trash2 className="size-3" />
+                {selectedVisibleNode.data._reference ? 'Disconnect' : 'Delete'}
+              </Button>
+            ) : null}
+            {selectedEdge ? (
               <Button
                 variant="ghost"
                 size="xs"
@@ -337,6 +496,16 @@ function ArchitectureCanvasInner({
                 Delete
               </Button>
             ) : null}
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={autoLayout}
+              disabled={syncing}
+              data-testid="architecture-auto-layout"
+            >
+              <LayoutGrid className="size-3" />
+              Layout
+            </Button>
           </div>
         </Panel>
       </ReactFlow>

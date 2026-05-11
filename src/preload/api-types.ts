@@ -610,6 +610,7 @@ export type ArchitectureApi = {
   checkDrift: (args: { projectPath: string }) => Promise<DriftReport>
   markSynced: (args: { projectPath: string }) => Promise<void>
   isSyncing: (args: { projectPath: string }) => Promise<boolean>
+  hasPreSyncSnapshot: (args: { projectPath: string }) => Promise<boolean>
   beginSync: (args: {
     projectPath: string
     modelName?: string

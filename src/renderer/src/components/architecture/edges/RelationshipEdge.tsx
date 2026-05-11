@@ -8,6 +8,7 @@ type RelationshipEdgeData = C4EdgeData & {
   _dimmed?: boolean
   _mention?: boolean
   _biPair?: boolean
+  _onSelect?: (edgeId: string) => void
 }
 
 export type ArchitectureFlowEdge = Edge<RelationshipEdgeData, 'relationship'>
@@ -148,6 +149,11 @@ export function RelationshipEdge({
             }}
             className="flex flex-col items-center"
             data-testid="architecture-edge-label"
+            data-edge-id={id}
+            onClick={(event) => {
+              event.stopPropagation()
+              data?._onSelect?.(id)
+            }}
           >
             {data.label ? (
               <div className="whitespace-nowrap rounded bg-background/90 px-1.5 py-0.5 text-[10px] text-foreground shadow-sm">
