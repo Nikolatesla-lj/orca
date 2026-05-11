@@ -1297,6 +1297,8 @@ const api = {
       ipcRenderer.invoke('architecture:markSynced', args),
     isSyncing: (args: { projectPath: string }): Promise<boolean> =>
       ipcRenderer.invoke('architecture:isSyncing', args),
+    hasPreSyncSnapshot: (args: { projectPath: string }): Promise<boolean> =>
+      ipcRenderer.invoke('architecture:hasPreSyncSnapshot', args),
     beginSync: (args: { projectPath: string; modelName?: string }): Promise<unknown> =>
       ipcRenderer.invoke('architecture:beginSync', args),
     cancelSync: (args: { projectPath: string }): Promise<unknown> =>

@@ -1,11 +1,20 @@
+/* eslint-disable max-lines -- Why: this suite keeps the Scryer C4 view, external diff, grouping, and layout helper assertions together for migration parity. */
 import { describe, expect, it } from 'vitest'
 import type { C4ModelData } from '../../../../shared/scryer/model-types'
 import {
+  addMembersToGroupInModel,
+  analyzeExternalModelUpdate,
   applyNodePositionChangesToModel,
   createNodeForParent,
+  createGroupFromSelectedNodes,
+  deleteEdgesFromModel,
   deleteNodesFromModel,
+  deleteReferenceEdgesFromModel,
+  getNodeContextForModel,
+  getVisibleGroupBubbles,
   getVisibleArchitectureView,
-  reconcileExpandedPath
+  reconcileExpandedPath,
+  updateEdgeDataInModel
 } from './c4-model'
 
 function fixtureModel(): C4ModelData {
@@ -140,6 +149,53 @@ describe('C4 model view helpers', () => {
     expect(model.groups).toEqual([])
   })
 
+  it('updates edge labels and removes blank methods without touching other edges', () => {
+    const model = updateEdgeDataInModel(fixtureModel(), 'edge-shop-payments', {
+      label: 'publishes event',
+      method: ''
+    })
+
+    expect(model.edges.find((edge) => edge.id === 'edge-shop-payments')?.data).toEqual({
+      label: 'publishes event'
+    })
+    expect(model.edges.find((edge) => edge.id === 'edge-user-shop')?.data).toEqual({
+      label: 'uses'
+    })
+  })
+
+  it('deletes selected edges without deleting connected nodes', () => {
+    const model = deleteEdgesFromModel(fixtureModel(), ['edge-shop-payments'])
+
+    expect(model.nodes.map((node) => node.id)).toContain('shop')
+    expect(model.nodes.map((node) => node.id)).toContain('payments')
+    expect(model.edges.map((edge) => edge.id)).toEqual([
+      'edge-user-shop',
+      'edge-web-api',
+      'edge-api-handler'
+    ])
+  })
+
+  it('builds the selected node get_node context from descendants, edges, groups, and source map', () => {
+    const context = getNodeContextForModel(fixtureModel(), 'api')
+
+    expect(context.descendants.map((node) => node.id)).toEqual(['handler', 'operation'])
+    expect(context.internalEdges.map((edge) => edge.id)).toEqual(['edge-api-handler'])
+    expect(context.externalEdges).toEqual([
+      expect.objectContaining({
+        id: 'edge-web-api',
+        externalNodeName: 'Web',
+        externalNodeKind: 'container',
+        direction: 'in'
+      })
+    ])
+    expect(context.groups).toEqual([expect.objectContaining({ id: 'backend', name: 'Backend' })])
+    expect(context.sourceMap).toEqual({
+      api: [{ pattern: 'src/api/**/*.ts' }],
+      handler: [{ pattern: 'src/api/handler.ts' }],
+      operation: [{ pattern: 'src/api/handler.ts', line: 12 }]
+    })
+  })
+
   it('creates the next C4 kind for the selected parent', () => {
     const model = fixtureModel()
     const shop = model.nodes.find((node) => node.id === 'shop')!
@@ -187,6 +243,56 @@ describe('C4 model view helpers', () => {
     expect(model.nodes.find((node) => node.id === 'shop')?.position).toEqual({ x: 240, y: 0 })
   })
 
+  it('stores moved reference node positions under the current parent', () => {
+    const model = fixtureModel()
+    const moved = applyNodePositionChangesToModel(
+      model,
+      [{ id: 'user', type: 'position', position: { x: 44, y: -220 } }],
+      new Set(['user']),
+      'shop'
+    )
+
+    expect(moved?.nodes.find((node) => node.id === 'user')?.position).toEqual({ x: 0, y: 0 })
+    expect(moved?.refPositions?.['shop/user']).toEqual({ x: 44, y: -220 })
+  })
+
+  it('disconnects reference nodes without deleting the real external node', () => {
+    const model = deleteReferenceEdgesFromModel(fixtureModel(), 'shop', ['payments'])
+
+    expect(model.nodes.map((node) => node.id)).toContain('payments')
+    expect(model.edges.map((edge) => edge.id)).toEqual([
+      'edge-user-shop',
+      'edge-web-api',
+      'edge-api-handler'
+    ])
+  })
+
+  it('creates and updates groups from a multi-selection while keeping nodes in one group', () => {
+    const model = fixtureModel()
+    const withGroup = createGroupFromSelectedNodes(model, {
+      id: 'platform',
+      name: 'Platform',
+      memberIds: ['web', 'api']
+    })
+
+    expect(withGroup.groups).toEqual([
+      {
+        id: 'platform',
+        name: 'Platform',
+        memberIds: ['web', 'api']
+      }
+    ])
+
+    const moved = addMembersToGroupInModel(withGroup, 'platform', ['api', 'handler'])
+    expect(moved.groups).toEqual([
+      {
+        id: 'platform',
+        name: 'Platform',
+        memberIds: ['web', 'api', 'handler']
+      }
+    ])
+  })
+
   it('auto-drills into a single root node with children when no path is selected', () => {
     const model = fixtureModel()
     const singleRootModel = {
@@ -198,5 +304,83 @@ describe('C4 model view helpers', () => {
     expect(reconcileExpandedPath(singleRootModel, [])).toEqual(['shop'])
     expect(reconcileExpandedPath(singleRootModel, ['api'])).toEqual(['api'])
     expect(reconcileExpandedPath(singleRootModel, ['missing'])).toEqual([])
+  })
+
+  it('summarizes external model updates with changed node ids, old node data, and follow path', () => {
+    const previous = fixtureModel()
+    const incoming: C4ModelData = {
+      ...previous,
+      nodes: previous.nodes.map((node) =>
+        node.id === 'operation'
+          ? {
+              ...node,
+              position: { x: 0, y: 0 },
+              data: { ...node.data, name: 'listOrders', _needsLayout: true }
+            }
+          : node
+      )
+    }
+
+    const summary = analyzeExternalModelUpdate({
+      previous,
+      incoming,
+      expandedPath: ['shop'],
+      followExternalChanges: true
+    })
+
+    expect(summary.changedNodeIds).toEqual(new Set(['operation', 'handler']))
+    expect(summary.nodeDiffs.get('operation')).toEqual(
+      expect.objectContaining({ name: 'listUsers', kind: 'operation' })
+    )
+    expect(summary.expandedPath).toEqual(['shop', 'api'])
+    expect(summary.model.nodes.find((node) => node.id === 'operation')?.position).toEqual({
+      x: 0,
+      y: 0
+    })
+  })
+
+  it('keeps the current path when follow external changes is disabled', () => {
+    const previous = fixtureModel()
+    const incoming: C4ModelData = {
+      ...previous,
+      nodes: previous.nodes.map((node) =>
+        node.id === 'handler' ? { ...node, data: { ...node.data, status: 'implemented' } } : node
+      )
+    }
+
+    const summary = analyzeExternalModelUpdate({
+      previous,
+      incoming,
+      expandedPath: ['shop'],
+      followExternalChanges: false
+    })
+
+    expect(summary.changedNodeIds).toEqual(new Set(['handler', 'api']))
+    expect(summary.expandedPath).toEqual(['shop'])
+  })
+
+  it('computes visible group bubble bounds from visible member node positions', () => {
+    const model = fixtureModel()
+    const view = getVisibleArchitectureView({
+      model,
+      expandedPath: ['shop'],
+      changedNodeIds: new Set(),
+      driftedNodeIds: new Set()
+    })
+
+    const bubbles = getVisibleGroupBubbles(model, view.visibleNodes)
+
+    expect(bubbles).toEqual([
+      {
+        id: 'backend',
+        name: 'Backend',
+        x: 230,
+        y: -30,
+        width: 240,
+        height: 220,
+        memberCount: 1,
+        depth: 0
+      }
+    ])
   })
 })

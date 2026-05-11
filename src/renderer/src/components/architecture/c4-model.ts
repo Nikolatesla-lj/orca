@@ -1,5 +1,12 @@
 /* eslint-disable max-lines -- Why: C4 view, hierarchy, deletion, and layout-write helpers stay together until the remaining Scryer layout modules are migrated. */
-import type { C4Edge, C4Kind, C4ModelData, C4Node } from '../../../../shared/scryer/model-types'
+import type {
+  C4Edge,
+  C4Kind,
+  C4ModelData,
+  C4Node,
+  C4NodeData,
+  Group
+} from '../../../../shared/scryer/model-types'
 
 const NODE_W = 180
 const NODE_H = 160
@@ -25,6 +32,38 @@ export type NodePositionChangeLike = {
   type: string
   position?: { x: number; y: number }
   [key: string]: unknown
+}
+
+export type ExternalArchitectureEdge = C4Edge & {
+  externalNodeName: string
+  externalNodeKind: C4Kind
+  direction: 'out' | 'in'
+}
+
+export type ArchitectureNodeContext = {
+  descendants: C4Node[]
+  internalEdges: C4Edge[]
+  externalEdges: ExternalArchitectureEdge[]
+  groups: NonNullable<C4ModelData['groups']>
+  sourceMap: NonNullable<C4ModelData['sourceMap']>
+}
+
+export type ExternalModelUpdateSummary = {
+  model: C4ModelData
+  changedNodeIds: Set<string>
+  nodeDiffs: Map<string, C4NodeData>
+  expandedPath: string[]
+}
+
+export type VisibleGroupBubble = {
+  id: string
+  name: string
+  x: number
+  y: number
+  width: number
+  height: number
+  memberCount: number
+  depth: number
 }
 
 export function currentParentIdFromPath(expandedPath: string[]): string | undefined {
@@ -60,8 +99,12 @@ export function defaultNodePosition(kind: C4Kind, index: number): { x: number; y
   return { x: 80 + (index % 4) * 250, y }
 }
 
-export function createNodeForParent(model: C4ModelData, parent: C4Node | null): C4Node {
-  const kind = nextKindForParent(parent)
+export function createNodeForParent(
+  model: C4ModelData,
+  parent: C4Node | null,
+  kindOverride?: C4Kind
+): C4Node {
+  const kind = kindOverride ?? nextKindForParent(parent)
   const sameKindCount = model.nodes.filter((node) => node.data.kind === kind).length
   const id = `node-${Date.now().toString(36)}-${sameKindCount + 1}`
   return {
@@ -126,14 +169,436 @@ export function deleteNodesFromModel(model: C4ModelData, nodeIds: string[]): C4M
   }
 }
 
+export function deleteEdgesFromModel(model: C4ModelData, edgeIds: string[]): C4ModelData {
+  const ids = new Set(edgeIds)
+  if (ids.size === 0) {
+    return model
+  }
+  return {
+    ...model,
+    edges: model.edges.filter((edge) => !ids.has(edge.id))
+  }
+}
+
+export function deleteReferenceEdgesFromModel(
+  model: C4ModelData,
+  currentParentId: string | undefined,
+  referenceNodeIds: string[]
+): C4ModelData {
+  const ids = new Set(referenceNodeIds)
+  if (!currentParentId || ids.size === 0) {
+    return model
+  }
+  return {
+    ...model,
+    edges: model.edges.filter(
+      (edge) =>
+        !(
+          (edge.source === currentParentId && ids.has(edge.target)) ||
+          (edge.target === currentParentId && ids.has(edge.source))
+        )
+    )
+  }
+}
+
+export function updateEdgeDataInModel(
+  model: C4ModelData,
+  edgeId: string,
+  patch: { label?: string; method?: string }
+): C4ModelData {
+  let changed = false
+  const edges = model.edges.map((edge) => {
+    if (edge.id !== edgeId) {
+      return edge
+    }
+    const currentData = edge.data ?? { label: '' }
+    const data = { ...currentData }
+    if (patch.label !== undefined) {
+      data.label = patch.label
+    }
+    if (patch.method !== undefined) {
+      if (patch.method.trim()) {
+        data.method = patch.method.trim()
+      } else {
+        delete data.method
+      }
+    }
+    changed = true
+    return { ...edge, data }
+  })
+  return changed ? { ...model, edges } : model
+}
+
+function removeMembersFromOtherGroups(groups: Group[], memberIds: Set<string>): Group[] {
+  return groups
+    .map((group) => ({
+      ...group,
+      memberIds: group.memberIds.filter((memberId) => !memberIds.has(memberId))
+    }))
+    .filter((group) => group.memberIds.length > 0)
+}
+
+export function createGroupFromSelectedNodes(
+  model: C4ModelData,
+  group: Pick<Group, 'id' | 'name' | 'memberIds'>
+): C4ModelData {
+  const memberIds = [...new Set(group.memberIds)].filter((memberId) =>
+    model.nodes.some((node) => node.id === memberId)
+  )
+  if (memberIds.length === 0) {
+    return model
+  }
+  const memberSet = new Set(memberIds)
+  return {
+    ...model,
+    groups: [
+      ...removeMembersFromOtherGroups(model.groups ?? [], memberSet),
+      {
+        id: group.id,
+        name: group.name.trim() || 'New group',
+        memberIds
+      }
+    ]
+  }
+}
+
+export function addMembersToGroupInModel(
+  model: C4ModelData,
+  groupId: string,
+  memberIds: string[]
+): C4ModelData {
+  const existingGroup = (model.groups ?? []).find((group) => group.id === groupId)
+  if (!existingGroup) {
+    return model
+  }
+  const validMemberIds = memberIds.filter((memberId) =>
+    model.nodes.some((node) => node.id === memberId)
+  )
+  if (validMemberIds.length === 0) {
+    return model
+  }
+  const memberSet = new Set(validMemberIds)
+  const cleanedGroups = removeMembersFromOtherGroups(
+    (model.groups ?? []).filter((group) => group.id !== groupId),
+    memberSet
+  )
+  return {
+    ...model,
+    groups: [
+      ...cleanedGroups,
+      {
+        ...existingGroup,
+        memberIds: [...new Set([...existingGroup.memberIds, ...validMemberIds])]
+      }
+    ]
+  }
+}
+
+export function getNodeContextForModel(
+  model: C4ModelData,
+  nodeId: string | null
+): ArchitectureNodeContext {
+  if (!nodeId) {
+    return {
+      descendants: [],
+      internalEdges: [],
+      externalEdges: [],
+      groups: [],
+      sourceMap: {}
+    }
+  }
+
+  const subtreeIds = collectDescendantIds(model.nodes, [nodeId])
+  const descendants = model.nodes.filter((node) => subtreeIds.has(node.id) && node.id !== nodeId)
+  const nodeById = new Map(model.nodes.map((node) => [node.id, node]))
+  const internalEdges: C4Edge[] = []
+  const externalEdges: ExternalArchitectureEdge[] = []
+
+  for (const edge of model.edges) {
+    const sourceIn = subtreeIds.has(edge.source)
+    const targetIn = subtreeIds.has(edge.target)
+    if (sourceIn && targetIn) {
+      internalEdges.push(edge)
+      continue
+    }
+    if (!sourceIn && !targetIn) {
+      continue
+    }
+    const externalNode = nodeById.get(sourceIn ? edge.target : edge.source)
+    if (!externalNode) {
+      continue
+    }
+    externalEdges.push({
+      ...edge,
+      externalNodeName: externalNode.data.name,
+      externalNodeKind: externalNode.data.kind,
+      direction: sourceIn ? 'out' : 'in'
+    })
+  }
+
+  const sourceMap: NonNullable<C4ModelData['sourceMap']> = {}
+  for (const [id, locations] of Object.entries(model.sourceMap ?? {})) {
+    if (subtreeIds.has(id)) {
+      sourceMap[id] = locations
+    }
+  }
+
+  const groups = (model.groups ?? []).filter((group) =>
+    group.memberIds.some((memberId) => subtreeIds.has(memberId))
+  )
+
+  return {
+    descendants,
+    internalEdges,
+    externalEdges,
+    groups,
+    sourceMap
+  }
+}
+
+function stripTransientNodeData(data: C4NodeData): C4NodeData {
+  return Object.fromEntries(
+    Object.entries(data).filter(([key]) => !key.startsWith('_'))
+  ) as C4NodeData
+}
+
+function nodeChanged(previous: C4Node, incoming: C4Node): boolean {
+  return (
+    previous.parentId !== incoming.parentId ||
+    previous.type !== incoming.type ||
+    JSON.stringify(stripTransientNodeData(previous.data)) !==
+      JSON.stringify(stripTransientNodeData(incoming.data))
+  )
+}
+
+function preserveUsefulRuntimeNodeState(previous: C4Node | undefined, incoming: C4Node): C4Node {
+  if (!previous) {
+    return incoming
+  }
+  if (incoming.data._needsLayout && !previous.data._needsLayout && previous.position) {
+    const { _needsLayout: _unused, ...cleanData } = incoming.data
+    void _unused
+    return {
+      ...incoming,
+      position: previous.position,
+      selected: previous.selected,
+      measured: previous.measured,
+      data: cleanData as C4NodeData
+    }
+  }
+  return {
+    ...incoming,
+    selected: previous.selected,
+    measured: previous.measured
+  }
+}
+
+function pathToNodeParent(model: C4ModelData, parentId: string): string[] {
+  const nodeById = new Map(model.nodes.map((node) => [node.id, node]))
+  const path: string[] = []
+  let current: string | undefined = parentId
+  while (current) {
+    path.unshift(current)
+    current = nodeById.get(current)?.parentId
+  }
+  return path
+}
+
+function followPathForChangedParents(
+  model: C4ModelData,
+  changedParents: Map<string, number>,
+  currentPath: string[],
+  followExternalChanges: boolean
+): string[] {
+  if (!followExternalChanges || changedParents.size === 0) {
+    return reconcileExpandedPath(model, currentPath)
+  }
+
+  const nodeById = new Map(model.nodes.map((node) => [node.id, node]))
+  let bestParentId = ''
+  let bestDepth = Number.POSITIVE_INFINITY
+  let bestCount = 0
+
+  for (const [parentId, count] of changedParents) {
+    if (!parentId) {
+      continue
+    }
+    let depth = 0
+    let current: string | undefined = parentId
+    while (current) {
+      depth++
+      current = nodeById.get(current)?.parentId
+    }
+    if (depth < bestDepth || (depth === bestDepth && count > bestCount)) {
+      bestParentId = parentId
+      bestDepth = depth
+      bestCount = count
+    }
+  }
+
+  if (!bestParentId) {
+    return reconcileExpandedPath(model, currentPath)
+  }
+
+  const bestParent = nodeById.get(bestParentId)
+  if (bestParent?.data.kind === 'component' && bestParent.parentId) {
+    bestParentId = bestParent.parentId
+  }
+  return reconcileExpandedPath(model, pathToNodeParent(model, bestParentId))
+}
+
+export function analyzeExternalModelUpdate({
+  previous,
+  incoming,
+  expandedPath,
+  followExternalChanges
+}: {
+  previous: C4ModelData
+  incoming: C4ModelData
+  expandedPath: string[]
+  followExternalChanges: boolean
+}): ExternalModelUpdateSummary {
+  const previousById = new Map(previous.nodes.map((node) => [node.id, node]))
+  const incomingById = new Map(incoming.nodes.map((node) => [node.id, node]))
+  const changedNodeIds = new Set<string>()
+  const nodeDiffs = new Map<string, C4NodeData>()
+  const changedParents = new Map<string, number>()
+  const bumpParent = (parentId: string | undefined) => {
+    const key = parentId ?? ''
+    changedParents.set(key, (changedParents.get(key) ?? 0) + 1)
+  }
+
+  for (const node of incoming.nodes) {
+    const previousNode = previousById.get(node.id)
+    if (!previousNode) {
+      changedNodeIds.add(node.id)
+      if (node.parentId) {
+        changedNodeIds.add(node.parentId)
+      }
+      bumpParent(node.parentId)
+      continue
+    }
+    if (nodeChanged(previousNode, node)) {
+      changedNodeIds.add(node.id)
+      if (node.parentId) {
+        changedNodeIds.add(node.parentId)
+      }
+      nodeDiffs.set(node.id, stripTransientNodeData(previousNode.data))
+      bumpParent(node.parentId)
+    }
+  }
+
+  for (const previousNode of previous.nodes) {
+    if (incomingById.has(previousNode.id)) {
+      continue
+    }
+    if (previousNode.parentId) {
+      changedNodeIds.add(previousNode.parentId)
+    }
+    bumpParent(previousNode.parentId)
+  }
+
+  const previousEdgeById = new Map(previous.edges.map((edge) => [edge.id, edge]))
+  for (const edge of incoming.edges) {
+    const previousEdge = previousEdgeById.get(edge.id)
+    if (
+      !previousEdge ||
+      previousEdge.source !== edge.source ||
+      previousEdge.target !== edge.target ||
+      JSON.stringify(previousEdge.data ?? {}) !== JSON.stringify(edge.data ?? {})
+    ) {
+      changedNodeIds.add(edge.source)
+      changedNodeIds.add(edge.target)
+      bumpParent(incomingById.get(edge.source)?.parentId)
+      bumpParent(incomingById.get(edge.target)?.parentId)
+    }
+  }
+  const incomingEdgeIds = new Set(incoming.edges.map((edge) => edge.id))
+  for (const previousEdge of previous.edges) {
+    if (incomingEdgeIds.has(previousEdge.id)) {
+      continue
+    }
+    changedNodeIds.add(previousEdge.source)
+    changedNodeIds.add(previousEdge.target)
+    bumpParent(previousById.get(previousEdge.source)?.parentId)
+    bumpParent(previousById.get(previousEdge.target)?.parentId)
+  }
+
+  const model: C4ModelData = {
+    ...incoming,
+    nodes: incoming.nodes.map((node) =>
+      preserveUsefulRuntimeNodeState(previousById.get(node.id), node)
+    )
+  }
+
+  return {
+    model,
+    changedNodeIds,
+    nodeDiffs,
+    expandedPath: followPathForChangedParents(
+      model,
+      changedParents,
+      expandedPath,
+      followExternalChanges
+    )
+  }
+}
+
+export function getVisibleGroupBubbles(
+  model: C4ModelData,
+  visibleNodes: C4Node[]
+): VisibleGroupBubble[] {
+  const visibleById = new Map(visibleNodes.map((node) => [node.id, node]))
+  const groups = model.groups ?? []
+  const groupById = new Map(groups.map((group) => [group.id, group]))
+
+  const depthForGroup = (groupId: string): number => {
+    let depth = 0
+    let current = groupById.get(groupId)?.parentGroupId
+    while (current) {
+      depth++
+      current = groupById.get(current)?.parentGroupId
+    }
+    return depth
+  }
+
+  return groups.flatMap((group) => {
+    const members = group.memberIds
+      .map((memberId) => visibleById.get(memberId))
+      .filter((node): node is C4Node => !!node)
+    if (members.length === 0) {
+      return []
+    }
+    const minX = Math.min(...members.map((node) => node.position?.x ?? 0))
+    const minY = Math.min(...members.map((node) => node.position?.y ?? 0))
+    const maxX = Math.max(...members.map((node) => (node.position?.x ?? 0) + NODE_W))
+    const maxY = Math.max(...members.map((node) => (node.position?.y ?? 0) + NODE_H))
+    const padding = 30 + depthForGroup(group.id) * 10
+    return [
+      {
+        id: group.id,
+        name: group.name,
+        x: minX - padding,
+        y: minY - padding,
+        width: maxX - minX + padding * 2,
+        height: maxY - minY + padding * 2,
+        memberCount: members.length,
+        depth: depthForGroup(group.id)
+      }
+    ]
+  })
+}
+
 export function applyNodePositionChangesToModel(
   model: C4ModelData,
   changes: readonly NodePositionChangeLike[],
-  refNodeIds: ReadonlySet<string>
+  refNodeIds: ReadonlySet<string>,
+  currentParentId?: string
 ): C4ModelData | null {
   const positions = new Map<string, { x: number; y: number }>()
+  const refPositions = new Map<string, { x: number; y: number }>()
   for (const change of changes) {
-    if (change.type !== 'position' || !change.id || refNodeIds.has(change.id)) {
+    if (change.type !== 'position' || !change.id) {
       continue
     }
     if (!change.position) {
@@ -143,10 +608,16 @@ export function applyNodePositionChangesToModel(
     if (!Number.isFinite(x) || !Number.isFinite(y)) {
       continue
     }
+    if (refNodeIds.has(change.id)) {
+      if (currentParentId) {
+        refPositions.set(`${currentParentId}/${change.id}`, { x, y })
+      }
+      continue
+    }
     positions.set(change.id, { x, y })
   }
 
-  if (positions.size === 0) {
+  if (positions.size === 0 && refPositions.size === 0) {
     return null
   }
 
@@ -163,7 +634,19 @@ export function applyNodePositionChangesToModel(
     return { ...node, position }
   })
 
-  return changed ? { ...model, nodes } : null
+  let nextRefPositions = model.refPositions ?? {}
+  if (refPositions.size > 0) {
+    nextRefPositions = { ...nextRefPositions }
+    for (const [key, position] of refPositions) {
+      const current = nextRefPositions[key]
+      if (!current || current.x !== position.x || current.y !== position.y) {
+        nextRefPositions[key] = position
+        changed = true
+      }
+    }
+  }
+
+  return changed ? { ...model, nodes, refPositions: nextRefPositions } : null
 }
 
 export function reconcileExpandedPath(model: C4ModelData, expandedPath: string[]): string[] {
