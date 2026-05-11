@@ -474,4 +474,57 @@ describe('callScryerTool', () => {
     expect(rules.content).toContain('No cross-container component edges')
     expect(rules.content).toContain('Implementation loop')
   })
+
+  it('warns when a node description mentions a sibling without a relationship edge', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-mention-edge-'))
+    await callScryerTool(projectPath, {
+      toolName: 'set_model',
+      arguments: {
+        data: JSON.stringify({
+          nodes: [
+            {
+              id: 'system',
+              data: { name: 'Shop', description: 'Commerce system', kind: 'system' }
+            },
+            {
+              id: 'api',
+              parentId: 'system',
+              data: {
+                name: 'API',
+                description: 'Calls @[Worker]',
+                kind: 'container'
+              }
+            },
+            {
+              id: 'worker',
+              parentId: 'system',
+              data: { name: 'Worker', description: 'Background jobs', kind: 'container' }
+            }
+          ],
+          edges: []
+        })
+      }
+    })
+
+    const invalid = await callScryerTool(projectPath, {
+      toolName: 'validate_model',
+      arguments: {}
+    })
+    expect(invalid.ok).toBe(false)
+    expect(invalid.content).toContain('API mentions Worker')
+
+    const fixed = await callScryerTool(projectPath, {
+      toolName: 'add_edges',
+      arguments: {
+        edges: [{ source: 'api', target: 'worker', label: 'calls' }]
+      }
+    })
+    expect(fixed.ok).toBe(true)
+
+    const valid = await callScryerTool(projectPath, {
+      toolName: 'validate_model',
+      arguments: {}
+    })
+    expect(valid.ok).toBe(true)
+  })
 })

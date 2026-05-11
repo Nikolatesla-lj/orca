@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { C4ModelData } from '../../../../shared/scryer/model-types'
 import {
+  pushArchitectureUndoSnapshot,
   createEmptyArchitectureModel,
   findCompletedArchitectureSyncPane,
   fingerprintArchitectureModel
@@ -118,5 +119,33 @@ describe('architecture model controller helpers', () => {
         }
       })
     ).toEqual({ paneKey: 'tab-sync:0', interrupted: true })
+  })
+
+  it('keeps the last 10 undo snapshots and batches rapid edits for one second', () => {
+    const snapshots = Array.from({ length: 12 }, (_, index) =>
+      createEmptyArchitectureModel(`/repo-${index}`)
+    )
+    let stack: C4ModelData[] = []
+    let batchStartedAt: number | null = null
+
+    for (const [index, snapshot] of snapshots.entries()) {
+      const result = pushArchitectureUndoSnapshot(stack, snapshot, {
+        batchStartedAt,
+        now: index * 1_100
+      })
+      stack = result.stack
+      batchStartedAt = result.batchStartedAt
+    }
+
+    expect(stack).toHaveLength(10)
+    expect(stack[0].projectPath).toBe('/repo-2')
+    expect(stack.at(-1)?.projectPath).toBe('/repo-11')
+
+    const batched = pushArchitectureUndoSnapshot(stack, createEmptyArchitectureModel('/rapid'), {
+      batchStartedAt,
+      now: 12_050
+    })
+    expect(batched.stack).toBe(stack)
+    expect(batched.batchStartedAt).toBe(batchStartedAt)
   })
 })

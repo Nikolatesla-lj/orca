@@ -3,10 +3,17 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { describe, expect, it } from 'vitest'
 import {
+  createGlobalModel,
   getProjectModelPath,
+  getGlobalModelPath,
+  createProjectModel,
+  deleteProjectModel,
+  listProjectModels,
+  migrateGlobalModelToProject,
   markSynced,
   readBaseline,
   readModel,
+  saveProjectModelAs,
   writeBaseline,
   writeModel
 } from './model-store'
@@ -57,5 +64,72 @@ describe('project-local Scryer model store', () => {
     await writeFile(getProjectModelPath(projectPath), '{"nodes":')
 
     await expect(readModel(projectPath)).rejects.toThrow(/Invalid Scryer model JSON/)
+  })
+
+  it('creates, lists, saves as, and deletes project-local model files', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-model-list-'))
+
+    await createProjectModel(projectPath, { modelName: 'roadmap' })
+    let models = await listProjectModels(projectPath, { includeGlobal: false })
+    expect(models.map((model) => model.name)).toEqual(['roadmap'])
+
+    const roadmap = await readModel(projectPath, 'roadmap')
+    roadmap.nodes.push({
+      id: 'system',
+      type: 'c4',
+      data: { name: 'Roadmap', description: 'Planning system', kind: 'system' }
+    })
+    await writeModel(projectPath, roadmap, 'roadmap')
+
+    await saveProjectModelAs(projectPath, 'roadmap', 'release-plan')
+    expect((await readModel(projectPath, 'release-plan')).nodes[0].data.name).toBe('Roadmap')
+
+    await deleteProjectModel(projectPath, 'roadmap')
+    models = await listProjectModels(projectPath, { includeGlobal: false })
+    expect(models.map((model) => model.name)).toEqual(['release-plan'])
+  })
+
+  it('loads built-in templates into project-local model files', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-template-'))
+
+    const model = await createProjectModel(projectPath, {
+      modelName: 'game-template',
+      templateId: 'game'
+    })
+
+    expect(model.nodes.length).toBeGreaterThan(0)
+    expect(model.nodes.some((node) => node.data.name === 'Game')).toBe(true)
+    expect(
+      (await readFile(getProjectModelPath(projectPath, 'game-template'), 'utf8')).length
+    ).toBeGreaterThan(100)
+  })
+
+  it('lists global models and migrates them into the project model folder', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-global-project-'))
+    const homePath = await mkdtemp(join(tmpdir(), 'orca-scryer-global-home-'))
+
+    const global = await createGlobalModel(homePath, { modelName: 'shared-platform' })
+    global.nodes.push({
+      id: 'system',
+      type: 'c4',
+      data: { name: 'Shared Platform', description: 'Global model', kind: 'system' }
+    })
+    await createGlobalModel(homePath, { modelName: 'shared-platform', model: global })
+
+    const models = await listProjectModels(projectPath, { globalHomePath: homePath })
+    expect(models.map((model) => `${model.scope}:${model.name}`)).toEqual([
+      'global:shared-platform'
+    ])
+
+    const migrated = await migrateGlobalModelToProject(projectPath, 'shared-platform', {
+      globalHomePath: homePath
+    })
+    expect(migrated.model.nodes[0].data.name).toBe('Shared Platform')
+    expect(await readFile(getProjectModelPath(projectPath, 'shared-platform'), 'utf8')).toContain(
+      'Shared Platform'
+    )
+    expect(await readFile(getGlobalModelPath('shared-platform', homePath), 'utf8')).toContain(
+      'Shared Platform'
+    )
   })
 })

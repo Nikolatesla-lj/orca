@@ -575,8 +575,54 @@ export type AppApi = {
 }
 
 export type ArchitectureApi = {
-  readModel: (args: { projectPath: string }) => Promise<C4ModelData>
-  writeModel: (args: { projectPath: string; model: C4ModelData }) => Promise<void>
+  readModel: (args: { projectPath: string; modelName?: string | null }) => Promise<C4ModelData>
+  writeModel: (args: {
+    projectPath: string
+    model: C4ModelData
+    modelName?: string | null
+  }) => Promise<void>
+  listModels: (args: { projectPath: string }) => Promise<
+    {
+      name: string
+      fileName: string
+      path: string
+      isDefault: boolean
+      scope: 'project' | 'global'
+    }[]
+  >
+  createModel: (args: {
+    projectPath: string
+    modelName?: string | null
+    templateId?: string | null
+  }) => Promise<{ modelName: string; model: C4ModelData }>
+  saveModelAs: (args: {
+    projectPath: string
+    fromModelName?: string | null
+    toModelName: string
+  }) => Promise<{ modelName: string; model: C4ModelData }>
+  deleteModel: (args: { projectPath: string; modelName: string }) => Promise<void>
+  migrateGlobalModel: (args: {
+    projectPath: string
+    modelName: string
+  }) => Promise<{ modelName: string; model: C4ModelData }>
+  writeMcpConfig: (args: { projectPath: string }) => Promise<{
+    claudePath: string
+    codexPath: string
+  }>
+  listTemplates: () => Promise<{ id: string; name: string }[]>
+  prepareInitialModelPrompt: (args: {
+    projectPath: string
+    modelName: string
+  }) => Promise<{ prompt: string }>
+  prepareNodeFillPrompt: (args: {
+    projectPath: string
+    modelName?: string | null
+    nodeId: string
+  }) => Promise<{ prompt: string }>
+  prepareAdvisorPrompt: (args: {
+    projectPath: string
+    modelName?: string | null
+  }) => Promise<{ prompt: string }>
   checkDrift: (args: { projectPath: string }) => Promise<DriftReport>
   markSynced: (args: { projectPath: string }) => Promise<void>
   isSyncing: (args: { projectPath: string }) => Promise<boolean>
