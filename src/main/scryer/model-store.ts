@@ -107,6 +107,10 @@ export async function readPreSyncSnapshot(projectPath: string): Promise<C4ModelD
   return parseModelData(await readFile(snapshotPath, 'utf8'))
 }
 
+export function hasPreSyncSnapshot(projectPath: string): boolean {
+  return existsSync(getProjectPreSyncSnapshotPath(projectPath))
+}
+
 export async function clearPreSyncSnapshot(projectPath: string): Promise<void> {
   await rm(getProjectPreSyncSnapshotPath(projectPath), { force: true })
 }

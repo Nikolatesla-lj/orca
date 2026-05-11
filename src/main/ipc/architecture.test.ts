@@ -50,4 +50,34 @@ describe('registerArchitectureHandlers', () => {
     const drift = await handlers.get('architecture:checkDrift')!(null, { projectPath })
     expect(drift).toMatchObject({ nodes: [], structureChanged: false })
   })
+
+  it('notifies the renderer immediately when IPC writes replace the model', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-write-'))
+    const send = vi.fn()
+
+    await handlers.get('architecture:writeModel')!(
+      { sender: { send } },
+      {
+        projectPath,
+        model: {
+          nodes: [
+            {
+              id: 'system',
+              type: 'c4',
+              data: { name: 'System', description: 'Root system', kind: 'system' }
+            }
+          ],
+          edges: [],
+          sourceMap: {},
+          groups: [],
+          flows: []
+        }
+      }
+    )
+
+    expect(send).toHaveBeenCalledWith('architecture:modelChanged', {
+      projectPath,
+      fileName: 'model.scry'
+    })
+  })
 })
