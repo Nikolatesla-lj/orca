@@ -64,4 +64,120 @@ describe('parseModelData', () => {
     expect(parsed.edges).toHaveLength(1)
     expect(parsed.flows?.[0].steps.map((step) => step.id)).toEqual(['a', 'b'])
   })
+
+  it('normalizes dirty flow branches, source maps, contracts, groups, and mention warnings', () => {
+    const parsed = parseModelData(
+      JSON.stringify({
+        nodes: [
+          {
+            id: 'api',
+            data: {
+              name: 'API',
+              description: 'Calls @[Ghost API]',
+              kind: 'container',
+              contract: {
+                expect: [
+                  {
+                    text: 'Attach evidence',
+                    passed: false,
+                    url: ' https://example.test/evidence ',
+                    image: {
+                      filename: 'evidence.png',
+                      mimeType: 'image/png',
+                      dataUrl: 'data:image/png;base64,abc123'
+                    }
+                  },
+                  {
+                    text: 'Ignore malformed image',
+                    image: { data: 42 }
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        sourceMap: {
+          api: [
+            { pattern: ' src/api.ts ', line: 8, endLine: 3, command: ' npm test ' },
+            { pattern: '' },
+            { pattern: 'src/model.ts', line: -2, endLine: 4 }
+          ],
+          ghost: [{ pattern: 'src/ghost.ts' }]
+        },
+        groups: [
+          { id: 'backend', name: 'Backend', nodeIds: ['api', 'ghost'], kind: 'legacy-group' },
+          { id: 42, name: 'Broken', memberIds: 'api' }
+        ],
+        flows: [
+          {
+            id: 'flow-1',
+            name: 'Dirty Flow',
+            steps: [
+              {
+                id: 'step-1',
+                label: 123,
+                description: 'Use @[API]',
+                branches: [
+                  {
+                    condition: 99,
+                    steps: [{ id: 'branch-step', description: 'Return @[Ghost API]' }]
+                  },
+                  { condition: 'empty branch', steps: 'not-an-array' }
+                ]
+              }
+            ]
+          }
+        ]
+      })
+    )
+
+    expect(parsed.nodes[0].data.contract?.expect[0]).toEqual({
+      text: 'Attach evidence',
+      passed: false,
+      url: 'https://example.test/evidence',
+      image: {
+        filename: 'evidence.png',
+        mimeType: 'image/png',
+        data: 'abc123'
+      }
+    })
+    expect(parsed.nodes[0].data.contract?.expect[1]).toEqual({
+      text: 'Ignore malformed image'
+    })
+    expect(parsed.sourceMap).toEqual({
+      api: [
+        { pattern: 'src/api.ts', line: 3, endLine: 8, command: 'npm test' },
+        { pattern: 'src/model.ts', endLine: 4 }
+      ]
+    })
+    expect(parsed.groups).toEqual([{ id: 'backend', name: 'Backend', memberIds: ['api'] }])
+    expect(parsed.flows?.[0].steps[0]).toMatchObject({
+      id: 'step-1',
+      label: '',
+      branches: [
+        {
+          condition: '',
+          steps: [{ id: 'branch-step', description: 'Return @[Ghost API]' }]
+        },
+        {
+          condition: 'empty branch',
+          steps: []
+        }
+      ]
+    })
+    expect(parsed.validationWarnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'missing-mention',
+          reference: 'Ghost API',
+          path: 'nodes.api.description'
+        }),
+        expect.objectContaining({
+          kind: 'missing-mention',
+          reference: 'Ghost API',
+          path: 'flows.flow-1.steps.branch-step.description'
+        })
+      ])
+    )
+  })
 })

@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Why: this IPC registrar remains a compatibility facade for Scryer model, drift, sync, MCP, and prompt handlers while the backing services are split behind injectable deps. */
 import { watch, type FSWatcher } from 'fs'
 import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import {
@@ -32,6 +33,61 @@ import { BUILT_IN_SCRYER_TEMPLATES } from '../../shared/scryer/templates'
 
 const watchers = new Map<string, FSWatcher>()
 
+export type ArchitectureIpcRegistrar = {
+  handle: <Args>(
+    channel: string,
+    listener: (event: IpcMainInvokeEvent, args: Args) => unknown
+  ) => void
+}
+
+export type ArchitectureHandlerDeps = {
+  createProjectModel: typeof createProjectModel
+  deleteProjectModel: typeof deleteProjectModel
+  getProjectScryerDir: typeof getProjectScryerDir
+  hasPreSyncSnapshot: typeof hasPreSyncSnapshot
+  isImplementing: typeof isImplementing
+  listProjectModels: typeof listProjectModels
+  migrateGlobalModelToProject: typeof migrateGlobalModelToProject
+  markSynced: typeof markSynced
+  patchNodeData: typeof patchNodeData
+  readModel: typeof readModel
+  readModelDocument: typeof readModelDocument
+  saveProjectModelAs: typeof saveProjectModelAs
+  sanitizeProjectModelName: typeof sanitizeProjectModelName
+  writeModel: typeof writeModel
+  writeModelDocument: typeof writeModelDocument
+  checkDrift: typeof checkDrift
+  callScryerTool: typeof callScryerTool
+  writeArchitectureMcpConfig: typeof writeArchitectureMcpConfig
+  beginSync: typeof beginSync
+  cancelSync: typeof cancelSync
+  finishSync: typeof finishSync
+}
+
+const defaultArchitectureDeps: ArchitectureHandlerDeps = {
+  createProjectModel,
+  deleteProjectModel,
+  getProjectScryerDir,
+  hasPreSyncSnapshot,
+  isImplementing,
+  listProjectModels,
+  migrateGlobalModelToProject,
+  markSynced,
+  patchNodeData,
+  readModel,
+  readModelDocument,
+  saveProjectModelAs,
+  sanitizeProjectModelName,
+  writeModel,
+  writeModelDocument,
+  checkDrift,
+  callScryerTool,
+  writeArchitectureMcpConfig,
+  beginSync,
+  cancelSync,
+  finishSync
+}
+
 export function shouldNotifyModelFile(filename: string | Buffer): boolean {
   const name = String(filename)
   if (!name || name.startsWith('.') || name.endsWith('.tmp')) {
@@ -43,18 +99,19 @@ export function shouldNotifyModelFile(filename: string | Buffer): boolean {
   return !name.endsWith('.baseline.scry') && !name.endsWith('.presync.scry')
 }
 
-function projectKey(projectPath: string): string {
-  return getProjectScryerDir(projectPath)
+function projectKey(projectPath: string, deps: ArchitectureHandlerDeps): string {
+  return deps.getProjectScryerDir(projectPath)
 }
 
 function notifyModelChanged(
   event: IpcMainInvokeEvent | null,
   projectPath: string,
-  modelName?: string | null
+  modelName: string | null | undefined,
+  deps: ArchitectureHandlerDeps
 ): void {
   event?.sender.send('architecture:modelChanged', {
     projectPath,
-    fileName: `${sanitizeProjectModelName(modelName)}.scry`
+    fileName: `${deps.sanitizeProjectModelName(modelName)}.scry`
   })
 }
 
@@ -65,28 +122,31 @@ export function closeArchitectureWatchers(): void {
   watchers.clear()
 }
 
-export function registerArchitectureHandlers(): void {
-  ipcMain.handle(
+export function registerArchitectureHandlers(
+  registrar: ArchitectureIpcRegistrar = ipcMain,
+  deps: ArchitectureHandlerDeps = defaultArchitectureDeps
+): void {
+  registrar.handle(
     'architecture:readModel',
     (_event, args: { projectPath: string; modelName?: string | null }) =>
-      readModel(args.projectPath, args.modelName)
+      deps.readModel(args.projectPath, args.modelName)
   )
 
-  ipcMain.handle(
+  registrar.handle(
     'architecture:readModelDocument',
     (_event, args: { projectPath: string; modelName?: string | null }) =>
-      readModelDocument(args.projectPath, args.modelName)
+      deps.readModelDocument(args.projectPath, args.modelName)
   )
 
-  ipcMain.handle(
+  registrar.handle(
     'architecture:writeModel',
     async (event, args: { projectPath: string; model: C4ModelData; modelName?: string | null }) => {
-      await writeModel(args.projectPath, args.model, args.modelName)
-      notifyModelChanged(event, args.projectPath, args.modelName)
+      await deps.writeModel(args.projectPath, args.model, args.modelName)
+      notifyModelChanged(event, args.projectPath, args.modelName, deps)
     }
   )
 
-  ipcMain.handle(
+  registrar.handle(
     'architecture:writeModelDocument',
     async (
       event,
@@ -97,15 +157,15 @@ export function registerArchitectureHandlers(): void {
         baseRevision?: string | null
       }
     ) => {
-      const result = await writeModelDocument(args.projectPath, args.model, args.modelName, {
+      const result = await deps.writeModelDocument(args.projectPath, args.model, args.modelName, {
         baseRevision: args.baseRevision
       })
-      notifyModelChanged(event, args.projectPath, args.modelName)
+      notifyModelChanged(event, args.projectPath, args.modelName, deps)
       return result
     }
   )
 
-  ipcMain.handle(
+  registrar.handle(
     'architecture:patchNodeData',
     async (
       event,
@@ -118,86 +178,90 @@ export function registerArchitectureHandlers(): void {
         baseNodeData?: C4NodeData | null
       }
     ) => {
-      const result = await patchNodeData(args.projectPath, args)
-      notifyModelChanged(event, args.projectPath, args.modelName)
+      const result = await deps.patchNodeData(args.projectPath, args)
+      notifyModelChanged(event, args.projectPath, args.modelName, deps)
       return result
     }
   )
 
-  ipcMain.handle('architecture:listModels', (_event, args: { projectPath: string }) =>
-    listProjectModels(args.projectPath)
+  registrar.handle('architecture:listModels', (_event, args: { projectPath: string }) =>
+    deps.listProjectModels(args.projectPath)
   )
 
-  ipcMain.handle(
+  registrar.handle(
     'architecture:migrateGlobalModel',
     async (event, args: { projectPath: string; modelName: string }) => {
-      const result = await migrateGlobalModelToProject(args.projectPath, args.modelName)
-      notifyModelChanged(event, args.projectPath, result.modelName)
+      const result = await deps.migrateGlobalModelToProject(args.projectPath, args.modelName)
+      notifyModelChanged(event, args.projectPath, result.modelName, deps)
       return result
     }
   )
 
-  ipcMain.handle(
+  registrar.handle(
     'architecture:createModel',
     async (
       event,
       args: { projectPath: string; modelName?: string | null; templateId?: string | null }
     ) => {
-      const model = await createProjectModel(args.projectPath, {
+      const model = await deps.createProjectModel(args.projectPath, {
         modelName: args.modelName,
         templateId: args.templateId
       })
-      notifyModelChanged(event, args.projectPath, args.modelName)
-      return { modelName: sanitizeProjectModelName(args.modelName), model }
+      notifyModelChanged(event, args.projectPath, args.modelName, deps)
+      return { modelName: deps.sanitizeProjectModelName(args.modelName), model }
     }
   )
 
-  ipcMain.handle(
+  registrar.handle(
     'architecture:saveModelAs',
     async (
       event,
       args: { projectPath: string; fromModelName?: string | null; toModelName: string }
     ) => {
-      const model = await saveProjectModelAs(args.projectPath, args.fromModelName, args.toModelName)
-      notifyModelChanged(event, args.projectPath, args.toModelName)
-      return { modelName: sanitizeProjectModelName(args.toModelName), model }
+      const model = await deps.saveProjectModelAs(
+        args.projectPath,
+        args.fromModelName,
+        args.toModelName
+      )
+      notifyModelChanged(event, args.projectPath, args.toModelName, deps)
+      return { modelName: deps.sanitizeProjectModelName(args.toModelName), model }
     }
   )
 
-  ipcMain.handle(
+  registrar.handle(
     'architecture:deleteModel',
     async (event, args: { projectPath: string; modelName: string }) => {
-      await deleteProjectModel(args.projectPath, args.modelName)
-      notifyModelChanged(event, args.projectPath, args.modelName)
+      await deps.deleteProjectModel(args.projectPath, args.modelName)
+      notifyModelChanged(event, args.projectPath, args.modelName, deps)
     }
   )
 
-  ipcMain.handle('architecture:listTemplates', () =>
+  registrar.handle('architecture:listTemplates', () =>
     BUILT_IN_SCRYER_TEMPLATES.map((template) => ({ id: template.id, name: template.name }))
   )
 
-  ipcMain.handle('architecture:writeMcpConfig', (_event, args: { projectPath: string }) =>
-    writeArchitectureMcpConfig(args.projectPath)
+  registrar.handle('architecture:writeMcpConfig', (_event, args: { projectPath: string }) =>
+    deps.writeArchitectureMcpConfig(args.projectPath)
   )
 
-  ipcMain.handle(
+  registrar.handle(
     'architecture:prepareInitialModelPrompt',
     (_event, args: { projectPath: string; modelName: string }) => ({
       prompt: initialModelPrompt(args.modelName, args.projectPath)
     })
   )
 
-  ipcMain.handle(
+  registrar.handle(
     'architecture:prepareNodeFillPrompt',
     async (_event, args: { projectPath: string; modelName?: string | null; nodeId: string }) => {
-      const model = await readModel(args.projectPath, args.modelName)
+      const model = await deps.readModel(args.projectPath, args.modelName)
       const node = model.nodes.find((candidate) => candidate.id === args.nodeId)
       if (!node) {
         throw new Error(`Node '${args.nodeId}' not found`)
       }
       return {
         prompt: nodeFillPrompt({
-          modelName: sanitizeProjectModelName(args.modelName),
+          modelName: deps.sanitizeProjectModelName(args.modelName),
           cwd: args.projectPath,
           nodeId: node.id,
           nodeName: node.data.name,
@@ -208,13 +272,13 @@ export function registerArchitectureHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registrar.handle(
     'architecture:prepareAdvisorPrompt',
     async (_event, args: { projectPath: string; modelName?: string | null }) => {
-      const model = await readModel(args.projectPath, args.modelName)
+      const model = await deps.readModel(args.projectPath, args.modelName)
       return {
         prompt: advisorPrompt({
-          modelName: sanitizeProjectModelName(args.modelName),
+          modelName: deps.sanitizeProjectModelName(args.modelName),
           cwd: args.projectPath,
           modelJson: serializeModelForPrompt(model)
         })
@@ -222,53 +286,53 @@ export function registerArchitectureHandlers(): void {
     }
   )
 
-  ipcMain.handle('architecture:checkDrift', (_event, args: { projectPath: string }) =>
-    checkDrift(args.projectPath)
+  registrar.handle('architecture:checkDrift', (_event, args: { projectPath: string }) =>
+    deps.checkDrift(args.projectPath)
   )
 
-  ipcMain.handle('architecture:markSynced', async (_event, args: { projectPath: string }) => {
-    await markSynced(args.projectPath)
+  registrar.handle('architecture:markSynced', async (_event, args: { projectPath: string }) => {
+    await deps.markSynced(args.projectPath)
   })
 
-  ipcMain.handle('architecture:isSyncing', (_event, args: { projectPath: string }) =>
-    isImplementing(args.projectPath)
+  registrar.handle('architecture:isSyncing', (_event, args: { projectPath: string }) =>
+    deps.isImplementing(args.projectPath)
   )
 
-  ipcMain.handle('architecture:hasPreSyncSnapshot', (_event, args: { projectPath: string }) =>
-    hasPreSyncSnapshot(args.projectPath)
+  registrar.handle('architecture:hasPreSyncSnapshot', (_event, args: { projectPath: string }) =>
+    deps.hasPreSyncSnapshot(args.projectPath)
   )
 
-  ipcMain.handle(
+  registrar.handle(
     'architecture:beginSync',
     (_event, args: { projectPath: string; modelName?: string }) =>
-      beginSync(args.projectPath, { modelName: args.modelName })
+      deps.beginSync(args.projectPath, { modelName: args.modelName })
   )
 
-  ipcMain.handle('architecture:cancelSync', (_event, args: { projectPath: string }) =>
-    cancelSync(args.projectPath)
+  registrar.handle('architecture:cancelSync', (_event, args: { projectPath: string }) =>
+    deps.cancelSync(args.projectPath)
   )
 
-  ipcMain.handle('architecture:finishSync', async (_event, args: { projectPath: string }) => {
-    await finishSync(args.projectPath)
+  registrar.handle('architecture:finishSync', async (_event, args: { projectPath: string }) => {
+    await deps.finishSync(args.projectPath)
   })
 
-  ipcMain.handle(
+  registrar.handle(
     'architecture:callTool',
     async (event, args: { projectPath: string; call: ScryerToolCall }) => {
-      const result = await callScryerTool(args.projectPath, args.call)
+      const result = await deps.callScryerTool(args.projectPath, args.call)
       if (result.ok) {
-        notifyModelChanged(event, args.projectPath)
+        notifyModelChanged(event, args.projectPath, undefined, deps)
       }
       return result
     }
   )
 
-  ipcMain.handle('architecture:watchModel', async (event, args: { projectPath: string }) => {
-    const key = projectKey(args.projectPath)
+  registrar.handle('architecture:watchModel', async (event, args: { projectPath: string }) => {
+    const key = projectKey(args.projectPath, deps)
     if (watchers.has(key)) {
       return
     }
-    await readModel(args.projectPath)
+    await deps.readModel(args.projectPath)
     const watcher = watch(key, { persistent: false }, (_eventType, filename) => {
       if (!filename || !shouldNotifyModelFile(filename)) {
         return

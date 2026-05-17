@@ -180,10 +180,10 @@ test.describe('Terminal attention', () => {
     await proveShellReadyWithSingleWrite(orcaPage, activePtyId)
     await installRendererTitleLog(orcaPage)
 
-    // Emit the BEL, then a deterministic OSC title marker. When the marker
-    // title lands, all prior PTY bytes (including the BEL) have been
-    // processed — we can then safely assert unread state without racing the
-    // async PTY pipeline.
+    // Emit the BEL, then a deterministic visible marker. When the marker lands
+    // in the terminal buffer, all prior PTY bytes (including the BEL) have been
+    // processed. Do not use OSC title as the marker: shell prompt hooks can
+    // immediately overwrite titles with cwd/user info, making the poll flaky.
     await emitBell(orcaPage, activePtyId)
     const MARKER_TITLE = 'focused-tab-bell-marker'
     // Why: printf is a shell builtin so it works even when CI launches the

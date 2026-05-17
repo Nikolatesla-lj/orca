@@ -22,7 +22,6 @@ import {
 } from '@stablyai/playwright-test'
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { execSync } from 'child_process'
-import { randomUUID } from 'crypto'
 import os from 'os'
 import path from 'path'
 import { TEST_REPO_PATH_FILE } from '../global-setup'
@@ -43,6 +42,11 @@ type OrcaTestFixtures = {
 type OrcaWorkerFixtures = {
   /** Absolute path to the test git repo created by globalSetup. */
   testRepoPath: string
+}
+
+type SeededRepo = {
+  repoPath: string
+  worktreePath: string
 }
 
 // Why: parse + warn at module scope so a bad ORCA_E2E_SLOWMO_MS value logs once
@@ -107,8 +111,17 @@ function isValidGitRepo(repoPath: string): boolean {
   }
 }
 
-function createSeededTestRepo(): string {
-  const testRepoDir = mkdtempSync(path.join(os.tmpdir(), 'orca-e2e-repo-'))
+function createSeededTestRepo(options?: {
+  persistPathFile?: boolean
+  repoPrefix?: string
+  worktreePrefix?: string
+}): SeededRepo {
+  const uniqueId = `${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2)}`
+  const testRepoDir = path.join(
+    os.tmpdir(),
+    `${options?.repoPrefix ?? 'orca-e2e-repo'}-${uniqueId}`
+  )
+  mkdirSync(testRepoDir, { recursive: true })
 
   execSync('git init', { cwd: testRepoDir, stdio: 'pipe' })
   execSync('git config user.email "e2e@test.local"', { cwd: testRepoDir, stdio: 'pipe' })
@@ -130,16 +143,24 @@ function createSeededTestRepo(): string {
   execSync('git add -A', { cwd: testRepoDir, stdio: 'pipe' })
   execSync('git commit -m "Initial commit for E2E tests"', { cwd: testRepoDir, stdio: 'pipe' })
 
-  // Why: worker-scoped fixture fallbacks can run in parallel; UUIDs avoid
-  // colliding on the same temp repo/worktree when workers start together.
-  const worktreeDir = path.join(testRepoDir, '..', `orca-e2e-worktree-${randomUUID()}`)
+  const worktreeDir = path.join(
+    testRepoDir,
+    '..',
+    `${options?.worktreePrefix ?? 'orca-e2e-worktree'}-${uniqueId}`
+  )
   execSync(`git worktree add "${worktreeDir}" -b e2e-secondary`, {
     cwd: testRepoDir,
     stdio: 'pipe'
   })
 
-  writeFileSync(TEST_REPO_PATH_FILE, testRepoDir)
-  return testRepoDir
+  if (options?.persistPathFile !== false) {
+    writeFileSync(TEST_REPO_PATH_FILE, testRepoDir)
+  }
+  return { repoPath: testRepoDir, worktreePath: worktreeDir }
+}
+
+function shouldUseIsolatedArchitectureRepo(testInfo: TestInfo): boolean {
+  return path.basename(testInfo.file).startsWith('architecture-')
 }
 
 /**
@@ -160,7 +181,7 @@ export const test = base.extend<OrcaTestFixtures, OrcaWorkerFixtures>({
         : ''
       const repoPath = isValidGitRepo(persistedRepoPath)
         ? persistedRepoPath
-        : createSeededTestRepo()
+        : createSeededTestRepo().repoPath
       await provideFixture(repoPath)
     },
     { scope: 'worker' }
@@ -243,7 +264,7 @@ export const test = base.extend<OrcaTestFixtures, OrcaWorkerFixtures>({
 
   // Test-scoped: grab the first BrowserWindow, add the test repo, and wait
   // until the session is fully ready with a worktree active.
-  sharedPage: async ({ electronApp, testRepoPath }, provideFixture) => {
+  sharedPage: async ({ electronApp, testRepoPath }, provideFixture, testInfo) => {
     // Why: the Electron app may take a while to create the first window,
     // especially on cold start with no prior dev userData. Isolated per-test
     // profiles make late-suite launches slower, so use the full test budget.
@@ -253,7 +274,18 @@ export const test = base.extend<OrcaTestFixtures, OrcaWorkerFixtures>({
     // Wait for the store to be available
     await page.waitForFunction(() => Boolean(window.__store), null, { timeout: 30_000 })
 
-    const repoPath = isValidGitRepo(testRepoPath) ? testRepoPath : createSeededTestRepo()
+    const isolatedRepo = shouldUseIsolatedArchitectureRepo(testInfo)
+      ? createSeededTestRepo({
+          persistPathFile: false,
+          repoPrefix: 'orca-e2e-arch-repo',
+          worktreePrefix: 'orca-e2e-arch-worktree'
+        })
+      : null
+    const repoPath = isolatedRepo
+      ? isolatedRepo.repoPath
+      : isValidGitRepo(testRepoPath)
+        ? testRepoPath
+        : createSeededTestRepo().repoPath
 
     // Add the test repo via the IPC bridge
     // Why: calling window.api.repos.add() goes through the same code path as
@@ -337,6 +369,10 @@ export const test = base.extend<OrcaTestFixtures, OrcaWorkerFixtures>({
     })
 
     await provideFixture(page)
+    if (isolatedRepo) {
+      rmSync(isolatedRepo.worktreePath, { recursive: true, force: true })
+      rmSync(isolatedRepo.repoPath, { recursive: true, force: true })
+    }
   },
 
   // Test-scoped: each test gets the shared page

@@ -45,7 +45,8 @@ const {
   registerSpeechHandlersMock,
   registerSkillsHandlersMock,
   registerWorkspaceSpaceHandlersMock,
-  registerWorkspacePortHandlersMock
+  registerWorkspacePortHandlersMock,
+  registerArchitectureHandlersMock
 } = vi.hoisted(() => ({
   registerCliHandlersMock: vi.fn(),
   registerPreflightHandlersMock: vi.fn(),
@@ -89,7 +90,8 @@ const {
   registerSpeechHandlersMock: vi.fn(),
   registerSkillsHandlersMock: vi.fn(),
   registerWorkspaceSpaceHandlersMock: vi.fn(),
-  registerWorkspacePortHandlersMock: vi.fn()
+  registerWorkspacePortHandlersMock: vi.fn(),
+  registerArchitectureHandlersMock: vi.fn()
 }))
 
 vi.mock('./onboarding', () => ({
@@ -258,6 +260,10 @@ vi.mock('./hosted-review', () => ({
   registerHostedReviewHandlers: registerHostedReviewHandlersMock
 }))
 
+vi.mock('./architecture', () => ({
+  registerArchitectureHandlers: registerArchitectureHandlersMock
+}))
+
 import { registerCoreHandlers } from './register-core-handlers'
 
 describe('registerCoreHandlers', () => {
@@ -304,6 +310,7 @@ describe('registerCoreHandlers', () => {
     registerSkillsHandlersMock.mockReset()
     registerWorkspaceSpaceHandlersMock.mockReset()
     registerWorkspacePortHandlersMock.mockReset()
+    registerArchitectureHandlersMock.mockReset()
   })
 
   it('passes the store through to handler registrars that need it', () => {
@@ -371,6 +378,7 @@ describe('registerCoreHandlers', () => {
     expect(registerUpdaterHandlersMock).toHaveBeenCalled()
     expect(setTrustedBrowserRendererWebContentsIdMock).toHaveBeenCalledWith(null)
     expect(registerBrowserHandlersMock).toHaveBeenCalled()
+    expect(registerArchitectureHandlersMock).toHaveBeenCalled()
     expect(registerFilesystemWatcherHandlersMock).toHaveBeenCalled()
     expect(registerSpeechHandlersMock).toHaveBeenCalledWith(store)
   })
@@ -407,6 +415,7 @@ describe('registerCoreHandlers', () => {
     expect(registerCliHandlersMock).not.toHaveBeenCalled()
     expect(registerPreflightHandlersMock).not.toHaveBeenCalled()
     expect(registerBrowserHandlersMock).not.toHaveBeenCalled()
+    expect(registerArchitectureHandlersMock).not.toHaveBeenCalled()
     // Why: ipcMain.handle throws on duplicate channel registration, so the
     // memory handler must not be wired up a second time on reactivation.
     expect(registerMemoryHandlersMock).not.toHaveBeenCalled()

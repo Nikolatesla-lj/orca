@@ -6,6 +6,7 @@ import {
   hasRecentArchitectureSelfWrite,
   recordArchitectureSelfWrite
 } from './architecture-self-write-registry'
+import { createArchitecturePerformanceRecorder } from './architecture-performance'
 
 export type ArchitectureProjectModelEntry = {
   name: string
@@ -70,6 +71,7 @@ export function useArchitectureModelSession({
   )
   const [projectModels, setProjectModels] = useState<ArchitectureProjectModelEntry[]>([])
   const [templates, setTemplates] = useState<ArchitectureTemplateEntry[]>([])
+  const performanceRecorderRef = useRef(createArchitecturePerformanceRecorder())
 
   const refreshProjectModels = useCallback(async () => {
     if (!projectPath) {
@@ -120,12 +122,14 @@ export function useArchitectureModelSession({
         `${pending.modelName}.scry`
       )
       recordArchitectureSelfWrite(selfWritePath)
-      const result = await window.api.architecture.writeModelDocument({
-        projectPath: pending.projectPath,
-        model: pending.model,
-        modelName: pending.modelName,
-        baseRevision: pending.baseRevision
-      })
+      const result = await performanceRecorderRef.current.measureAsync('save', () =>
+        window.api.architecture.writeModelDocument({
+          projectPath: pending.projectPath,
+          model: pending.model,
+          modelName: pending.modelName,
+          baseRevision: pending.baseRevision
+        })
+      )
       revisionRef.current = result.revision
     } catch (writeError) {
       onError(writeError)
