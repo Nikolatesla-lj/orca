@@ -433,7 +433,7 @@ function ArchitectureCanvasInner({
   )
 
   return (
-    <div className="relative flex-1 overflow-hidden" data-testid="architecture-canvas">
+    <div className="relative min-w-0 flex-1 overflow-hidden" data-testid="architecture-canvas">
       <ReactFlow
         nodes={visibleNodes}
         edges={visibleEdges}
