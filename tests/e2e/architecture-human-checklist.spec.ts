@@ -98,9 +98,21 @@ function readSavedModel(projectPath: string): SavedModel {
 }
 
 async function addNodeFromCanvasContext(page: Page, x = 42, y = 120): Promise<void> {
-  const pane = page.locator('.react-flow__pane')
-  await expect(pane).toBeVisible({ timeout: 10_000 })
-  await pane.click({ button: 'right', position: { x, y } })
+  const canvas = page.getByTestId('architecture-canvas')
+  await expect(canvas).toBeVisible({ timeout: 10_000 })
+  const canvasBox = await canvas.boundingBox()
+  expect(canvasBox).not.toBeNull()
+  const horizontalPadding = Math.min(32, Math.max(8, canvasBox!.width / 4))
+  const verticalPadding = Math.min(64, Math.max(16, canvasBox!.height / 5))
+  const safeX = Math.min(
+    Math.max(x, horizontalPadding),
+    Math.max(horizontalPadding, canvasBox!.width - horizontalPadding)
+  )
+  const safeY = Math.min(
+    Math.max(y, verticalPadding),
+    Math.max(verticalPadding, canvasBox!.height - verticalPadding)
+  )
+  await page.mouse.click(canvasBox!.x + safeX, canvasBox!.y + safeY, { button: 'right' })
   await expect(page.getByTestId('architecture-canvas-context-menu')).toBeVisible()
   await page.getByTestId('architecture-context-add-node').click()
 }

@@ -34,6 +34,8 @@ const SHAPE_OPTIONS: C4Shape[] = [
   'bucket',
   'hexagon'
 ]
+const INSPECTOR_PANEL_CLASS =
+  'flex w-80 shrink-0 flex-col border-l border-border bg-background text-sm xl:w-96'
 
 type ArchitectureContextPanelProps = {
   model: C4ModelData | null
@@ -104,7 +106,7 @@ export function ArchitectureContextPanel({
 }: ArchitectureContextPanelProps): React.JSX.Element {
   if (multiSelectedNodeIds.length >= 2 && model) {
     return (
-      <aside className="flex w-96 shrink-0 flex-col border-l border-border bg-background text-sm">
+      <aside className={INSPECTOR_PANEL_CLASS}>
         <div className="min-h-0 flex-1 overflow-y-auto p-3">
           <MultiSelectionPanel
             selectedIds={multiSelectedNodeIds}
@@ -122,14 +124,14 @@ export function ArchitectureContextPanel({
 
   if (groupsPaletteMode && !selectedGroup) {
     return (
-      <aside className="flex w-96 shrink-0 flex-col border-l border-border bg-background text-sm">
+      <aside className={INSPECTOR_PANEL_CLASS}>
         <GroupsPalette />
       </aside>
     )
   }
 
   return (
-    <aside className="flex w-96 shrink-0 flex-col border-l border-border bg-background text-sm">
+    <aside className={INSPECTOR_PANEL_CLASS}>
       <div className="flex gap-2 border-b border-border p-3">
         <Button
           className="flex-1 bg-emerald-600 text-white hover:bg-emerald-700"

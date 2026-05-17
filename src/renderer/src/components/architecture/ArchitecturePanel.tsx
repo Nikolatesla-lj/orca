@@ -331,8 +331,8 @@ export default function ArchitecturePanel({
   )
 
   const mainSection = (
-    <section className="flex min-w-0 flex-1 flex-col">
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
+    <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
+      <div className="scrollbar-sleek flex h-10 min-w-0 shrink-0 items-center gap-2 overflow-x-auto overflow-y-hidden border-b border-border px-3">
         <Network className="size-4 text-emerald-500" />
         <span className="truncate text-sm font-medium">{workspace.title}</span>
         <span
