@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Plus, Upload } from 'lucide-react'
 import type { SshTarget } from '../../../../shared/ssh-types'
+import { SSH_TERMINATE_RECONNECT_REQUIRED } from '../../../../shared/constants'
 import { useAppStore } from '@/store'
 import { Button } from '../ui/button'
 import {
@@ -52,8 +53,11 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
   const [form, setForm] = useState<EditingTarget>(EMPTY_FORM)
   const [testingIds, setTestingIds] = useState<Set<string>>(new Set())
   const [pendingRemove, setPendingRemove] = useState<{ id: string; label: string } | null>(null)
+  const [pendingTerminate, setPendingTerminate] = useState<{ id: string; label: string } | null>(
+    null
+  )
 
-  const setSshTargetLabels = useAppStore((s) => s.setSshTargetLabels)
+  const setSshTargetsMetadata = useAppStore((s) => s.setSshTargetsMetadata)
 
   const loadTargets = useCallback(
     async (opts?: { signal?: AbortSignal }) => {
@@ -63,18 +67,14 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
           return
         }
         setTargets(result)
-        const labels = new Map<string, string>()
-        for (const t of result) {
-          labels.set(t.id, t.label)
-        }
-        setSshTargetLabels(labels)
+        setSshTargetsMetadata(result)
       } catch {
         if (!opts?.signal?.aborted) {
           toast.error('Failed to load SSH targets')
         }
       }
     },
-    [setSshTargetLabels]
+    [setSshTargetsMetadata]
   )
 
   useEffect(() => {
@@ -100,6 +100,14 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
       toast.error('Relay grace period must be between 60 and 3600 seconds')
       return
     }
+    const remoteGraceSeconds = parseInt(form.remoteWorkspaceSyncGracePeriodSeconds, 10)
+    if (
+      form.remoteWorkspaceSyncEnabled &&
+      (isNaN(remoteGraceSeconds) || remoteGraceSeconds < 0 || remoteGraceSeconds > 3600)
+    ) {
+      toast.error('Synced relay grace period must be between 0 and 3600 seconds')
+      return
+    }
 
     const target = {
       label: form.label.trim() || `${form.username}@${form.host}`,
@@ -108,6 +116,10 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
       port,
       username: form.username.trim(),
       relayGracePeriodSeconds: graceSeconds,
+      remoteWorkspaceSyncEnabled: form.remoteWorkspaceSyncEnabled,
+      remoteWorkspaceSyncGracePeriodSeconds: form.remoteWorkspaceSyncEnabled
+        ? remoteGraceSeconds
+        : 300,
       ...(form.identityFile.trim() ? { identityFile: form.identityFile.trim() } : {}),
       ...(form.proxyCommand.trim() ? { proxyCommand: form.proxyCommand.trim() } : {}),
       ...(form.jumpHost.trim() ? { jumpHost: form.jumpHost.trim() } : {})
@@ -130,15 +142,26 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
     }
   }
 
+  const terminateSessionsWithReconnect = async (targetId: string): Promise<void> => {
+    try {
+      await window.api.ssh.terminateSessions({ targetId })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (!message.includes(SSH_TERMINATE_RECONNECT_REQUIRED)) {
+        throw err
+      }
+      // Why: disconnect is now non-destructive, so preserved remote PTYs may
+      // require a fresh relay attachment before they can be explicitly killed.
+      await window.api.ssh.connect({ targetId })
+      await window.api.ssh.terminateSessions({ targetId })
+    }
+  }
+
   const handleRemove = async (id: string): Promise<void> => {
     try {
-      // Why: disconnect any non-disconnected connection, including transitional
-      // states (connecting, reconnecting, deploying-relay). Leaving these alive
-      // would orphan SSH connections with providers registered for a removed target.
-      const state = sshConnectionStates.get(id)
-      if (state && state.status !== 'disconnected') {
-        await window.api.ssh.disconnect({ targetId: id })
-      }
+      // Why: removing a target is destructive even after non-destructive
+      // disconnect, when remote PTYs can still be alive in the grace window.
+      await terminateSessionsWithReconnect(id)
       await window.api.ssh.removeTarget({ id })
       toast.success('Target removed')
       await loadTargets()
@@ -158,7 +181,11 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
       identityFile: target.identityFile ?? '',
       proxyCommand: target.proxyCommand ?? '',
       jumpHost: target.jumpHost ?? '',
-      relayGracePeriodSeconds: String(target.relayGracePeriodSeconds ?? 300)
+      relayGracePeriodSeconds: String(target.relayGracePeriodSeconds ?? 300),
+      remoteWorkspaceSyncEnabled: target.remoteWorkspaceSyncEnabled === true,
+      remoteWorkspaceSyncGracePeriodSeconds: String(
+        target.remoteWorkspaceSyncGracePeriodSeconds ?? 300
+      )
     })
     setShowForm(true)
   }
@@ -176,6 +203,15 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
       await window.api.ssh.disconnect({ targetId })
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Disconnect failed')
+    }
+  }
+
+  const handleTerminateSessions = async (targetId: string): Promise<void> => {
+    try {
+      await terminateSessionsWithReconnect(targetId)
+      toast.success('Remote terminals ended')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to end remote terminals')
     }
   }
 
@@ -272,6 +308,7 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
               testing={testingIds.has(target.id)}
               onConnect={(id) => void handleConnect(id)}
               onDisconnect={(id) => void handleDisconnect(id)}
+              onTerminateSessions={(id) => setPendingTerminate({ id, label: target.label })}
               onTest={(id) => void handleTest(id)}
               onEdit={handleEdit}
               onRemove={(id) => setPendingRemove({ id, label: target.label })}
@@ -304,7 +341,7 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
           <DialogHeader>
             <DialogTitle className="text-sm">Remove SSH Target</DialogTitle>
             <DialogDescription className="text-xs">
-              This will remove the target and disconnect any active sessions.
+              This will remove the target and end any active remote terminals.
             </DialogDescription>
           </DialogHeader>
 
@@ -328,6 +365,49 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
               }}
             >
               Remove
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* End remote terminals confirmation dialog */}
+      <Dialog
+        open={!!pendingTerminate}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingTerminate(null)
+          }
+        }}
+      >
+        <DialogContent className="max-w-sm sm:max-w-sm" showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle className="text-sm">End Remote Terminals?</DialogTitle>
+            <DialogDescription className="text-xs">
+              This will stop active terminal sessions on this SSH target. Reconnecting will not
+              restore them.
+            </DialogDescription>
+          </DialogHeader>
+
+          {pendingTerminate ? (
+            <div className="rounded-md border border-border/70 bg-muted/35 px-3 py-2 text-xs">
+              <div className="break-all text-muted-foreground">{pendingTerminate.label}</div>
+            </div>
+          ) : null}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPendingTerminate(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (pendingTerminate) {
+                  void handleTerminateSessions(pendingTerminate.id)
+                  setPendingTerminate(null)
+                }
+              }}
+            >
+              End Terminals
             </Button>
           </DialogFooter>
         </DialogContent>

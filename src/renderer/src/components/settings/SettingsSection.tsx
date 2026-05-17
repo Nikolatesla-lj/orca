@@ -1,15 +1,18 @@
 import type React from 'react'
 import { useAppStore } from '../../store'
-import { matchesSettingsSearch, type SettingsSearchEntry } from './settings-search'
+import type { SettingsSearchEntry } from './settings-search'
+import { matchesSettingsSearch } from './settings-search'
 
 type SettingsSectionProps = {
   id: string
   title: string
   description: string
-  searchEntries: SettingsSearchEntry[]
-  children: React.ReactNode
+  searchEntries?: SettingsSearchEntry[]
+  children?: React.ReactNode
   className?: string
   badge?: string
+  badgeAccessory?: React.ReactNode
+  forceVisible?: boolean
   /** Rendered in the section header's upper-right corner — intended for
    *  section-scoped actions (e.g. "Import from Ghostty") that would otherwise
    *  crowd the settings list as their own row. */
@@ -24,10 +27,12 @@ export function SettingsSection({
   children,
   className,
   badge,
+  badgeAccessory,
+  forceVisible = false,
   headerAction
 }: SettingsSectionProps): React.JSX.Element | null {
   const query = useAppStore((state) => state.settingsSearchQuery)
-  if (!matchesSettingsSearch(query, searchEntries)) {
+  if (!forceVisible && searchEntries && !matchesSettingsSearch(query, searchEntries)) {
     return null
   }
 
@@ -52,6 +57,7 @@ export function SettingsSection({
                 {badge}
               </span>
             ) : null}
+            {badgeAccessory}
           </h2>
           <p className="text-sm text-muted-foreground">{description}</p>
         </div>

@@ -2,6 +2,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '@/lib/utils'
+import { getConnectionId } from '@/lib/connection-context'
+import { detectLanguage } from '@/lib/language-detect'
+import { isPathInsideWorktree, toWorktreeRelativePath } from '@/lib/terminal-links'
 import {
   ArrowLeft,
   ArrowRight,
@@ -12,9 +15,11 @@ import {
   Globe,
   Image,
   Loader2,
+  MessageSquarePlus,
   OctagonX,
   RefreshCw,
-  SquareCode
+  SquareCode,
+  Trash2
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -26,6 +31,15 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select'
+import { Label } from '@/components/ui/label'
+import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import { useAppStore } from '@/store'
 import { ORCA_BROWSER_BLANK_URL, ORCA_BROWSER_PARTITION } from '../../../../shared/constants'
 import type {
@@ -52,6 +66,7 @@ import {
   getHiddenContainer,
   MAX_PARKED_WEBVIEWS,
   parkedAtByTabId,
+  registerPersistentWebview,
   registeredWebContentsIds,
   webviewRegistry
 } from './webview-registry'
@@ -60,12 +75,20 @@ import type {
   BrowserDownloadProgressEvent,
   BrowserDownloadFinishedEvent
 } from '../../../../shared/browser-guest-events'
-import type {
-  BrowserGrabPayload,
-  BrowserGrabScreenshot
+import {
+  GRAB_BUDGET,
+  type BrowserAnnotationIntent,
+  type BrowserAnnotationPayload,
+  type BrowserAnnotationPriority,
+  type BrowserGrabPayload,
+  type BrowserGrabRect,
+  type BrowserGrabScreenshot,
+  type BrowserPageAnnotation
 } from '../../../../shared/browser-grab-types'
+import { BROWSER_ANNOTATION_VIEWPORT_MESSAGE_PREFIX } from '../../../../shared/browser-annotation-viewport-bridge'
 import { useGrabMode } from './useGrabMode'
 import { formatGrabPayloadAsText } from './GrabConfirmationSheet'
+import { formatBrowserAnnotationsAsMarkdown } from './browser-annotation-output'
 import { isEditableKeyboardTarget } from './browser-keyboard'
 import BrowserAddressBar from './BrowserAddressBar'
 import { BrowserToolbarMenu } from './BrowserToolbarMenu'
@@ -75,6 +98,19 @@ import {
   ORCA_BROWSER_FOCUS_REQUEST_EVENT,
   type BrowserFocusRequestDetail
 } from './browser-focus'
+import {
+  isRemoteRuntimeFileOperation,
+  statRuntimePath,
+  type RuntimeFileOperationArgs
+} from '@/runtime/runtime-file-client'
+import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
+import type {
+  BrowserBackResult,
+  BrowserGotoResult,
+  BrowserReloadResult,
+  BrowserScreenshotResult,
+  BrowserTabInfo
+} from '../../../../shared/runtime-types'
 import {
   formatByteCount,
   formatDownloadFinishedNotice,
@@ -96,7 +132,229 @@ type BrowserDownloadState = BrowserDownloadRequestedEvent & {
   status: 'requested' | 'downloading'
 }
 
+type GrabIntent = 'copy' | 'annotate'
+
+type BrowserOverlayAnchor = {
+  x: number
+  y: number
+  below: boolean
+}
+
+type BrowserOverlayViewport = {
+  scrollX: number
+  scrollY: number
+  version: number
+}
+
 const EMPTY_BROWSER_PAGES: BrowserPageState[] = []
+const EMPTY_BROWSER_ANNOTATIONS: BrowserPageAnnotation[] = []
+const PENDING_ANNOTATION_CARD_HEIGHT = 330
+
+function createBrowserAnnotationId(): string {
+  return `browser-annotation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function createBrowserAnnotationPayload(payload: BrowserGrabPayload): BrowserAnnotationPayload {
+  return {
+    ...payload,
+    // Why: annotations are persisted renderer state; screenshot data is a
+    // transient copy action payload and can be megabytes per selection.
+    screenshot: null
+  }
+}
+
+function getBrowserOverlayAnchor(
+  payload: BrowserGrabPayload,
+  container: HTMLElement | null,
+  webview: Electron.WebviewTag | null,
+  viewport: BrowserOverlayViewport
+): BrowserOverlayAnchor {
+  const containerRect = container?.getBoundingClientRect()
+  const webviewRect = webview?.getBoundingClientRect()
+  const rect = getLiveBrowserAnnotationRect(payload, viewport)
+  const offsetX = (webviewRect?.left ?? 0) - (containerRect?.left ?? 0)
+  const offsetY = (webviewRect?.top ?? 0) - (containerRect?.top ?? 0)
+  const elementBottom = offsetY + rect.y + rect.height
+  const elementTop = offsetY + rect.y
+  const containerWidth = containerRect?.width ?? 0
+  const containerHeight = containerRect?.height ?? 0
+  const below = elementBottom + PENDING_ANNOTATION_CARD_HEIGHT < containerHeight
+  return {
+    x: clampNumber(offsetX + rect.x + rect.width / 2, 12, Math.max(12, containerWidth - 12)),
+    y: clampNumber(below ? elementBottom : elementTop, 12, Math.max(12, containerHeight - 12)),
+    below
+  }
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max)
+}
+
+function getLiveBrowserAnnotationRect(
+  payload: BrowserGrabPayload,
+  viewport: BrowserOverlayViewport
+): BrowserGrabRect {
+  if (payload.target.isFixed) {
+    return payload.target.rectViewport
+  }
+  const scrollX = viewport.version === 0 ? payload.page.scrollX : viewport.scrollX
+  const scrollY = viewport.version === 0 ? payload.page.scrollY : viewport.scrollY
+  return {
+    ...payload.target.rectViewport,
+    x: payload.target.rectPage.x - scrollX,
+    y: payload.target.rectPage.y - scrollY
+  }
+}
+
+function PendingBrowserAnnotationCard({
+  payload,
+  anchor,
+  portalContainer,
+  onAdd,
+  onCancel
+}: {
+  payload: BrowserGrabPayload
+  anchor: BrowserOverlayAnchor
+  portalContainer: HTMLElement | null
+  onAdd: (
+    comment: string,
+    intent: BrowserAnnotationIntent,
+    priority: BrowserAnnotationPriority
+  ) => void
+  onCancel: () => void
+}): React.JSX.Element {
+  const [comment, setComment] = useState('')
+  const [intent, setIntent] = useState<BrowserAnnotationIntent>('change')
+  const [priority, setPriority] = useState<BrowserAnnotationPriority>('important')
+  const trimmed = comment.trim()
+
+  return (
+    <Popover
+      open
+      onOpenChange={(open) => {
+        if (!open) {
+          onCancel()
+        }
+      }}
+    >
+      <PopoverAnchor asChild>
+        <span
+          className="pointer-events-none absolute size-px"
+          style={{ left: anchor.x, top: anchor.y }}
+        />
+      </PopoverAnchor>
+      <PopoverContent
+        side={anchor.below ? 'bottom' : 'top'}
+        align="center"
+        sideOffset={10}
+        collisionBoundary={portalContainer ?? undefined}
+        collisionPadding={12}
+        portalContainer={portalContainer}
+        className="z-40 w-[22rem] max-w-[calc(var(--radix-popover-content-available-width)-1rem)] p-3 shadow-[0_10px_24px_rgba(0,0,0,0.18)]"
+        aria-label="Add browser annotation"
+        onEscapeKeyDown={(event) => {
+          event.preventDefault()
+          onCancel()
+        }}
+      >
+        <div className="mb-2 min-w-0">
+          <div className="truncate text-xs font-medium text-foreground">
+            {payload.target.accessibility.accessibleName ||
+              payload.target.textSnippet ||
+              payload.target.tagName}
+          </div>
+          <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+            {payload.target.selector}
+          </div>
+        </div>
+        <Label htmlFor="browser-annotation-comment" className="sr-only">
+          Annotation comment
+        </Label>
+        <textarea
+          id="browser-annotation-comment"
+          value={comment}
+          onChange={(event) => setComment(event.target.value)}
+          placeholder="Describe what the agent should change here..."
+          maxLength={GRAB_BUDGET.annotationCommentMaxLength}
+          className="h-24 w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          autoFocus
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.preventDefault()
+              event.stopPropagation()
+              onCancel()
+            }
+          }}
+        />
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          <div className="min-w-0">
+            <Label className="mb-1 block text-xs text-muted-foreground">Intent</Label>
+            <Select
+              value={intent}
+              onValueChange={(value) => setIntent(value as BrowserAnnotationIntent)}
+            >
+              <SelectTrigger
+                size="sm"
+                className="h-8 w-full text-xs"
+                aria-label="Annotation intent"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent
+                position="popper"
+                portalContainer={portalContainer}
+                collisionBoundary={portalContainer ?? undefined}
+              >
+                <SelectItem value="change">Change</SelectItem>
+                <SelectItem value="fix">Fix</SelectItem>
+                <SelectItem value="question">Question</SelectItem>
+                <SelectItem value="approve">Approve</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="min-w-0">
+            <Label className="mb-1 block text-xs text-muted-foreground">Priority</Label>
+            <Select
+              value={priority}
+              onValueChange={(value) => setPriority(value as BrowserAnnotationPriority)}
+            >
+              <SelectTrigger
+                size="sm"
+                className="h-8 w-full text-xs"
+                aria-label="Annotation priority"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent
+                position="popper"
+                portalContainer={portalContainer}
+                collisionBoundary={portalContainer ?? undefined}
+              >
+                <SelectItem value="important">Important</SelectItem>
+                <SelectItem value="blocking">Blocking</SelectItem>
+                <SelectItem value="suggestion">Suggestion</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        <div className="mt-3 flex justify-end gap-2">
+          <Button size="sm" variant="ghost" className="h-8" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            className="h-8 gap-1.5"
+            disabled={!trimmed}
+            onClick={() => onAdd(trimmed, intent, priority)}
+          >
+            <MessageSquarePlus className="size-3.5" />
+            Add
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
 
 function buildLoadError(event: {
   errorCode?: number
@@ -129,6 +387,54 @@ function getBrowserDisplayTitle(title: string | null | undefined, url: string): 
 
 function isChromiumErrorPage(url: string): boolean {
   return url.startsWith('chrome-error://')
+}
+
+function fileUrlToAbsolutePath(url: string): string | null {
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'file:') {
+      return null
+    }
+    const hostPrefix =
+      parsed.hostname && parsed.hostname !== 'localhost' ? `//${parsed.hostname}` : ''
+    let absolutePath = `${hostPrefix}${decodeURIComponent(parsed.pathname)}`
+    if (/^\/[A-Za-z]:\//.test(absolutePath)) {
+      absolutePath = absolutePath.slice(1)
+    }
+    return absolutePath
+  } catch {
+    return null
+  }
+}
+
+function getNotebookPathFromBrowserUrl(url: string): string | null {
+  const filePath = fileUrlToAbsolutePath(url)
+  return filePath?.toLowerCase().endsWith('.ipynb') ? filePath : null
+}
+
+function getRemoteBrowserKeypressKey(event: React.KeyboardEvent): string | null {
+  if (event.key.length === 1) {
+    return null
+  }
+  if (event.metaKey || event.ctrlKey || event.altKey) {
+    return null
+  }
+  const supported = new Set([
+    'Enter',
+    'Backspace',
+    'Delete',
+    'Tab',
+    'Escape',
+    'ArrowUp',
+    'ArrowDown',
+    'ArrowLeft',
+    'ArrowRight',
+    'Home',
+    'End',
+    'PageUp',
+    'PageDown'
+  ])
+  return supported.has(event.key) ? event.key : null
 }
 
 function getLoadErrorMetadata(loadError: BrowserLoadError | null): {
@@ -251,18 +557,46 @@ export default function BrowserPane({
   browserTab: BrowserWorkspaceState
   isActive: boolean
 }): React.JSX.Element {
+  const activeRuntimeEnvironmentId = useAppStore(
+    (s) => s.settings?.activeRuntimeEnvironmentId ?? null
+  )
   const browserPagesByWorkspace = useAppStore((s) => s.browserPagesByWorkspace)
   const browserPages = browserPagesByWorkspace[browserTab.id] ?? EMPTY_BROWSER_PAGES
   const activeBrowserPage =
     browserPages.find((page) => page.id === browserTab.activePageId) ?? browserPages[0] ?? null
   const updateBrowserPageState = useAppStore((s) => s.updateBrowserPageState)
   const setBrowserPageUrl = useAppStore((s) => s.setBrowserPageUrl)
+  const runtimeEnvironmentActive = Boolean(activeRuntimeEnvironmentId?.trim())
+
+  useEffect(() => {
+    if (!runtimeEnvironmentActive) {
+      return
+    }
+    for (const page of browserPages) {
+      destroyPersistentWebview(page.id)
+    }
+  }, [browserPages, runtimeEnvironmentActive])
+
+  if (runtimeEnvironmentActive) {
+    return activeBrowserPage ? (
+      <RemoteBrowserPagePane
+        browserTab={activeBrowserPage}
+        worktreeId={browserTab.worktreeId}
+        isActive={isActive}
+        onUpdatePageState={updateBrowserPageState}
+        onSetUrl={setBrowserPageUrl}
+      />
+    ) : (
+      <div className="flex h-full min-h-0 flex-1 bg-background" />
+    )
+  }
 
   return (
     <div className="relative flex h-full min-h-0 flex-1 flex-col">
       {activeBrowserPage ? (
         <div className="relative flex min-h-0 flex-1">
           <BrowserPagePane
+            key={activeBrowserPage.id}
             browserTab={activeBrowserPage}
             workspaceId={browserTab.id}
             worktreeId={browserTab.worktreeId}
@@ -273,6 +607,470 @@ export default function BrowserPane({
           />
         </div>
       ) : null}
+    </div>
+  )
+}
+
+function RemoteBrowserPagePane({
+  browserTab,
+  worktreeId,
+  isActive,
+  onUpdatePageState,
+  onSetUrl
+}: {
+  browserTab: BrowserPageState
+  worktreeId: string
+  isActive: boolean
+  onUpdatePageState: (tabId: string, updates: BrowserTabPageState) => void
+  onSetUrl: (tabId: string, url: string) => void
+}): React.JSX.Element {
+  const settings = useAppStore((s) => s.settings)
+  const addressBarInputRef = useRef<HTMLInputElement | null>(null)
+  const imageRef = useRef<HTMLImageElement | null>(null)
+  const [addressBarValue, setAddressBarValue] = useState(toDisplayUrl(browserTab.url))
+  const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null)
+  const [remoteError, setRemoteError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const remotePageIdRef = useRef<string | null>(null)
+  const activeRuntimeEnvironmentId = settings?.activeRuntimeEnvironmentId?.trim() ?? null
+  const setRemoteBrowserPageHandle = useAppStore((s) => s.setRemoteBrowserPageHandle)
+
+  useEffect(() => {
+    if (document.activeElement === addressBarInputRef.current) {
+      return
+    }
+    setAddressBarValue(toDisplayUrl(browserTab.url))
+  }, [browserTab.url])
+
+  const runtimeTarget = useCallback(() => {
+    const target = getActiveRuntimeTarget(settings)
+    return target.kind === 'environment' ? target : null
+  }, [settings])
+
+  useEffect(() => {
+    if (!activeRuntimeEnvironmentId) {
+      return
+    }
+    return () => {
+      const remotePageId = remotePageIdRef.current
+      if (!remotePageId) {
+        return
+      }
+      const state = useAppStore.getState()
+      const currentEnvironmentId = state.settings?.activeRuntimeEnvironmentId?.trim() ?? null
+      const pageStillExists = Object.values(state.browserPagesByWorkspace).some((pages) =>
+        pages.some((page) => page.id === browserTab.id)
+      )
+      if (currentEnvironmentId === activeRuntimeEnvironmentId && pageStillExists) {
+        return
+      }
+      const removedHandle = state.removeRemoteBrowserPageHandle(browserTab.id, remotePageId)
+      remotePageIdRef.current = null
+      if (!removedHandle) {
+        return
+      }
+      // Why: remote browser tabs outlive React components on the daemon. Close
+      // only when the local page is gone or its owning runtime environment is.
+      void callRuntimeRpc(
+        { kind: 'environment', environmentId: removedHandle.environmentId },
+        'browser.tabClose',
+        { worktree: `id:${worktreeId}`, page: removedHandle.remotePageId },
+        { timeoutMs: 15_000 }
+      ).catch(() => {})
+    }
+  }, [activeRuntimeEnvironmentId, browserTab.id, worktreeId])
+
+  const applyRemoteTabInfo = useCallback(
+    (tab: Pick<BrowserTabInfo, 'url' | 'title'>): void => {
+      const safeUrl = redactKagiSessionToken(tab.url || 'about:blank')
+      onSetUrl(browserTab.id, safeUrl)
+      onUpdatePageState(browserTab.id, {
+        title: getBrowserDisplayTitle(tab.title, safeUrl),
+        loading: false,
+        loadError: null
+      })
+      setAddressBarValue(toDisplayUrl(safeUrl))
+    },
+    [browserTab.id, onSetUrl, onUpdatePageState]
+  )
+
+  const captureRemoteScreenshot = useCallback(
+    async (pageId: string): Promise<void> => {
+      const target = runtimeTarget()
+      if (!target) {
+        return
+      }
+      const screenshot = await callRuntimeRpc<BrowserScreenshotResult>(
+        target,
+        'browser.screenshot',
+        { worktree: `id:${worktreeId}`, page: pageId, format: 'png' },
+        { timeoutMs: 30_000 }
+      )
+      setScreenshotUrl(`data:image/${screenshot.format};base64,${screenshot.data}`)
+    },
+    [runtimeTarget, worktreeId]
+  )
+
+  const ensureRemotePage = useCallback(async (): Promise<string | null> => {
+    const target = runtimeTarget()
+    if (!target) {
+      return null
+    }
+    const existingHandle = useAppStore.getState().remoteBrowserPageHandlesByPageId[browserTab.id]
+    if (existingHandle?.environmentId === target.environmentId) {
+      remotePageIdRef.current = existingHandle.remotePageId
+      return existingHandle.remotePageId
+    }
+    const initialUrl =
+      browserTab.url === ORCA_BROWSER_BLANK_URL ? 'about:blank' : browserTab.url || 'about:blank'
+    const created = await callRuntimeRpc<{ browserPageId: string }>(
+      target,
+      'browser.tabCreate',
+      { worktree: `id:${worktreeId}`, url: initialUrl },
+      { timeoutMs: 30_000 }
+    )
+    remotePageIdRef.current = created.browserPageId
+    setRemoteBrowserPageHandle(browserTab.id, {
+      environmentId: target.environmentId,
+      remotePageId: created.browserPageId
+    })
+    return created.browserPageId
+  }, [browserTab.id, browserTab.url, runtimeTarget, setRemoteBrowserPageHandle, worktreeId])
+
+  const refreshRemoteView = useCallback(
+    async (pageId?: string): Promise<void> => {
+      const target = runtimeTarget()
+      const targetPageId = pageId ?? remotePageIdRef.current
+      if (!target || !targetPageId) {
+        return
+      }
+      const shown = await callRuntimeRpc<{ tab: BrowserTabInfo }>(
+        target,
+        'browser.tabShow',
+        { worktree: `id:${worktreeId}`, page: targetPageId },
+        { timeoutMs: 15_000 }
+      )
+      applyRemoteTabInfo(shown.tab)
+      await captureRemoteScreenshot(targetPageId)
+    },
+    [applyRemoteTabInfo, captureRemoteScreenshot, runtimeTarget, worktreeId]
+  )
+
+  useEffect(() => {
+    if (!isActive) {
+      return
+    }
+    let cancelled = false
+    setBusy(true)
+    setRemoteError(null)
+    void ensureRemotePage()
+      .then(async (pageId) => {
+        if (!pageId || cancelled) {
+          return
+        }
+        await refreshRemoteView(pageId)
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setRemoteError(error instanceof Error ? error.message : 'Failed to open remote browser.')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setBusy(false)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [ensureRemotePage, isActive, refreshRemoteView])
+
+  useEffect(() => {
+    if (!isActive) {
+      return
+    }
+    return window.api.ui.onFocusBrowserAddressBar(() => {
+      addressBarInputRef.current?.focus()
+      addressBarInputRef.current?.select()
+    })
+  }, [isActive])
+
+  const runRemoteNavigation = useCallback(
+    async (
+      method: 'browser.goto' | 'browser.back' | 'browser.forward' | 'browser.reload',
+      url?: string
+    ) => {
+      const target = runtimeTarget()
+      if (!target) {
+        return
+      }
+      const pageId = await ensureRemotePage()
+      if (!pageId) {
+        return
+      }
+      setBusy(true)
+      setRemoteError(null)
+      onUpdatePageState(browserTab.id, { loading: true, loadError: null })
+      try {
+        const params =
+          method === 'browser.goto'
+            ? { worktree: `id:${worktreeId}`, page: pageId, url: url ?? 'about:blank' }
+            : { worktree: `id:${worktreeId}`, page: pageId }
+        const result = await callRuntimeRpc<
+          BrowserGotoResult | BrowserBackResult | BrowserReloadResult
+        >(target, method, params, { timeoutMs: 30_000 })
+        applyRemoteTabInfo(result)
+        await captureRemoteScreenshot(pageId)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Remote browser command failed.'
+        setRemoteError(message)
+        onUpdatePageState(browserTab.id, {
+          loading: false,
+          loadError: { code: 0, description: message, validatedUrl: url ?? browserTab.url }
+        })
+      } finally {
+        setBusy(false)
+      }
+    },
+    [
+      applyRemoteTabInfo,
+      browserTab.id,
+      browserTab.url,
+      captureRemoteScreenshot,
+      ensureRemotePage,
+      onUpdatePageState,
+      runtimeTarget,
+      worktreeId
+    ]
+  )
+
+  const navigateToUrl = useCallback(
+    (url: string): void => {
+      void runRemoteNavigation('browser.goto', url)
+    },
+    [runRemoteNavigation]
+  )
+
+  const submitAddressBar = (): void => {
+    const searchEngine = useAppStore.getState().browserDefaultSearchEngine
+    const kagiSessionLink = useAppStore.getState().browserKagiSessionLink
+    const nextUrl = normalizeBrowserNavigationUrl(addressBarValue, searchEngine, {
+      kagiSessionLink
+    })
+    if (!nextUrl) {
+      const message = 'Enter a valid http(s) or localhost URL.'
+      setRemoteError(message)
+      onUpdatePageState(browserTab.id, {
+        loadError: {
+          code: 0,
+          description: message,
+          validatedUrl: redactKagiSessionToken(addressBarValue.trim()) || 'about:blank'
+        }
+      })
+      return
+    }
+    navigateToUrl(nextUrl)
+  }
+
+  const clickRemoteScreenshot = (event: React.MouseEvent<HTMLImageElement>): void => {
+    const target = runtimeTarget()
+    const pageId = remotePageIdRef.current
+    const image = imageRef.current
+    if (!target || !pageId || !image) {
+      return
+    }
+    const rect = image.getBoundingClientRect()
+    image.focus()
+    const scaleX = image.naturalWidth / rect.width
+    const scaleY = image.naturalHeight / rect.height
+    const x = Math.round((event.clientX - rect.left) * scaleX)
+    const y = Math.round((event.clientY - rect.top) * scaleY)
+    setBusy(true)
+    setRemoteError(null)
+    void (async () => {
+      try {
+        const params = { worktree: `id:${worktreeId}`, page: pageId }
+        await callRuntimeRpc(
+          target,
+          'browser.mouseMove',
+          { ...params, x, y },
+          { timeoutMs: 15_000 }
+        )
+        await callRuntimeRpc(target, 'browser.mouseDown', params, { timeoutMs: 15_000 })
+        await callRuntimeRpc(target, 'browser.mouseUp', params, { timeoutMs: 15_000 })
+        await new Promise((resolve) => window.setTimeout(resolve, 300))
+        await refreshRemoteView(pageId)
+      } catch (error) {
+        setRemoteError(error instanceof Error ? error.message : 'Remote click failed.')
+      } finally {
+        setBusy(false)
+      }
+    })()
+  }
+
+  const handleRemoteScreenshotKeyDown = (event: React.KeyboardEvent<HTMLImageElement>): void => {
+    if (isEditableKeyboardTarget(event.target)) {
+      return
+    }
+    const target = runtimeTarget()
+    const pageId = remotePageIdRef.current
+    if (!target || !pageId) {
+      return
+    }
+    const params = { worktree: `id:${worktreeId}`, page: pageId }
+    const text =
+      event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey ? event.key : null
+    const key = text ? null : getRemoteBrowserKeypressKey(event)
+    if (!text && !key) {
+      return
+    }
+    event.preventDefault()
+    setRemoteError(null)
+    void (async () => {
+      try {
+        if (text) {
+          await callRuntimeRpc(
+            target,
+            'browser.keyboardInsertText',
+            { ...params, text },
+            { timeoutMs: 15_000 }
+          )
+        } else if (key) {
+          await callRuntimeRpc(
+            target,
+            'browser.keypress',
+            { ...params, key },
+            { timeoutMs: 15_000 }
+          )
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 100))
+        await refreshRemoteView(pageId)
+      } catch (error) {
+        setRemoteError(error instanceof Error ? error.message : 'Remote keyboard input failed.')
+      }
+    })()
+  }
+
+  const handleRemoteScreenshotWheel = (event: React.WheelEvent<HTMLImageElement>): void => {
+    const target = runtimeTarget()
+    const pageId = remotePageIdRef.current
+    if (!target || !pageId) {
+      return
+    }
+    event.preventDefault()
+    setRemoteError(null)
+    void callRuntimeRpc(
+      target,
+      'browser.mouseWheel',
+      {
+        worktree: `id:${worktreeId}`,
+        page: pageId,
+        dx: Math.round(event.deltaX),
+        dy: Math.round(event.deltaY)
+      },
+      { timeoutMs: 15_000 }
+    )
+      .then(async () => {
+        await new Promise((resolve) => window.setTimeout(resolve, 100))
+        await refreshRemoteView(pageId)
+      })
+      .catch((error: unknown) => {
+        setRemoteError(error instanceof Error ? error.message : 'Remote scroll failed.')
+      })
+  }
+
+  return (
+    <div className="relative flex h-full min-h-0 flex-1 flex-col bg-background">
+      <div className="relative z-10 flex items-center gap-2 border-b border-border/70 bg-background/95 px-3 py-1.5">
+        <Button
+          size="icon"
+          variant="ghost"
+          className="h-7 w-7"
+          onClick={() => void runRemoteNavigation('browser.back')}
+        >
+          <ArrowLeft className="size-4" />
+        </Button>
+        <Button
+          size="icon"
+          variant="ghost"
+          className="h-7 w-7"
+          onClick={() => void runRemoteNavigation('browser.forward')}
+        >
+          <ArrowRight className="size-4" />
+        </Button>
+        <Button
+          size="icon"
+          variant="ghost"
+          className="h-7 w-7"
+          onClick={() => void runRemoteNavigation('browser.reload')}
+        >
+          {busy || browserTab.loading ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <RefreshCw className="size-4" />
+          )}
+        </Button>
+        <BrowserAddressBar
+          value={addressBarValue}
+          onChange={setAddressBarValue}
+          onSubmit={submitAddressBar}
+          onNavigate={navigateToUrl}
+          inputRef={addressBarInputRef}
+        />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-7 w-7 opacity-50"
+              aria-disabled="true"
+              aria-label="Browser annotations unavailable in remote runtime"
+              onClick={(event) => {
+                event.preventDefault()
+              }}
+            >
+              <MessageSquarePlus className="size-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" sideOffset={4}>
+            Browser annotations are only available in local browser tabs.
+          </TooltipContent>
+        </Tooltip>
+      </div>
+      <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-auto bg-muted/20">
+        {screenshotUrl ? (
+          <img
+            ref={imageRef}
+            src={screenshotUrl}
+            alt=""
+            tabIndex={0}
+            className="max-h-full max-w-full cursor-crosshair bg-white object-contain"
+            onClick={clickRemoteScreenshot}
+            onKeyDown={handleRemoteScreenshotKeyDown}
+            onWheel={handleRemoteScreenshotWheel}
+            draggable={false}
+          />
+        ) : (
+          <div className="flex max-w-sm flex-col items-center gap-2 px-6 text-center">
+            {busy ? (
+              <Loader2 className="size-5 animate-spin text-muted-foreground" />
+            ) : (
+              <Globe className="size-5 text-muted-foreground" />
+            )}
+            <div className="text-sm font-medium text-foreground">
+              {busy ? 'Opening remote browser' : 'Remote browser'}
+            </div>
+            <div className="text-xs leading-5 text-muted-foreground">
+              This pane is rendered from the active runtime server.
+            </div>
+          </div>
+        )}
+        {remoteError ? (
+          <div className="absolute bottom-4 left-1/2 max-w-md -translate-x-1/2 rounded-md border border-border bg-popover px-3 py-2 text-xs text-popover-foreground shadow-md">
+            {remoteError}
+          </div>
+        ) : null}
+      </div>
     </div>
   )
 }
@@ -334,6 +1132,37 @@ function BrowserPagePane({
   const contextMenuRef = useRef<HTMLDivElement>(null)
   const [findOpen, setFindOpen] = useState(false)
   const grab = useGrabMode(browserTab.id)
+  const [grabIntent, setGrabIntent] = useState<GrabIntent>('copy')
+  const grabIntentRef = useRef(grabIntent)
+  grabIntentRef.current = grabIntent
+  const [pendingAnnotationPayload, setPendingAnnotationPayload] =
+    useState<BrowserGrabPayload | null>(null)
+  const pendingAnnotationPayloadRef = useRef<BrowserGrabPayload | null>(null)
+  pendingAnnotationPayloadRef.current = pendingAnnotationPayload
+  const [browserOverlayViewport, setBrowserOverlayViewport] = useState<BrowserOverlayViewport>({
+    scrollX: 0,
+    scrollY: 0,
+    version: 0
+  })
+  const isActiveRef = useRef(isActive)
+  isActiveRef.current = isActive
+  const annotationViewportBridgeTokenRef = useRef(
+    typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID().replaceAll('-', '')
+      : `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`
+  )
+  const browserAnnotations = useAppStore(
+    (s) => s.browserAnnotationsByPageId[browserTab.id] ?? EMPTY_BROWSER_ANNOTATIONS
+  )
+  const browserAnnotationsRef = useRef(browserAnnotations)
+  browserAnnotationsRef.current = browserAnnotations
+  const [browserAnnotationTrayOpen, setBrowserAnnotationTrayOpen] = useState(true)
+  const [browserAnnotationsCopied, setBrowserAnnotationsCopied] = useState(false)
+  const addBrowserPageAnnotation = useAppStore((s) => s.addBrowserPageAnnotation)
+  const deleteBrowserPageAnnotation = useAppStore((s) => s.deleteBrowserPageAnnotation)
+  const clearBrowserPageAnnotations = useAppStore((s) => s.clearBrowserPageAnnotations)
+  const clearBrowserPageAnnotationsRef = useRef(clearBrowserPageAnnotations)
+  clearBrowserPageAnnotationsRef.current = clearBrowserPageAnnotations
   const createBrowserTab = useAppStore((s) => s.createBrowserTab)
   const consumeAddressBarFocusRequest = useAppStore((s) => s.consumeAddressBarFocusRequest)
   const browserSessionProfiles = useAppStore((s) => s.browserSessionProfiles)
@@ -385,15 +1214,30 @@ function BrowserPagePane({
     payload: BrowserGrabPayload | null
   } | null>(null)
   const grabToastTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const annotationCopyTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
   // Why: clear the toast auto-dismiss timer on unmount so it cannot fire
   // after the component is destroyed (prevents setState-on-unmounted warnings
   // and stale rearm calls).
   useEffect(() => {
-    return () => clearTimeout(grabToastTimerRef.current)
+    return () => {
+      clearTimeout(grabToastTimerRef.current)
+      clearTimeout(annotationCopyTimerRef.current)
+    }
   }, [])
 
   const grabRef = useRef(grab)
   grabRef.current = grab
+
+  useEffect(() => {
+    setPendingAnnotationPayload(null)
+    setBrowserOverlayViewport({ scrollX: 0, scrollY: 0, version: 0 })
+    setBrowserAnnotationTrayOpen(true)
+    setBrowserAnnotationsCopied(false)
+    clearTimeout(annotationCopyTimerRef.current)
+    if (grabRef.current.state !== 'idle' && grabRef.current.state !== 'error') {
+      grabRef.current.cancel()
+    }
+  }, [browserTab.id])
 
   const dismissGrabToast = useCallback(() => {
     clearTimeout(grabToastTimerRef.current)
@@ -402,7 +1246,10 @@ function BrowserPagePane({
     // auto-copy toast is dismissing naturally. If the user already triggered
     // a shortcut (C/S) that called rearm, the state will be 'armed' and we
     // skip to avoid a double-rearm race.
-    if (grabRef.current.state === 'confirming') {
+    if (
+      grabRef.current.state === 'confirming' &&
+      !(grabIntentRef.current === 'annotate' && pendingAnnotationPayloadRef.current)
+    ) {
       grabRef.current.rearm()
     }
   }, [])
@@ -437,17 +1284,58 @@ function BrowserPagePane({
     [dismissGrabToast]
   )
 
-  // Why: auto-copy element context when the user left-clicks to select in
-  // grab mode. One-click-to-copy is the primary action. Right-click
-  // (contextMenu=true) skips auto-copy and shows the full action dropdown
-  // so the user can choose between copy and screenshot.
+  // Why: the same in-guest picker powers two flows. Cmd/Ctrl+C preserves the
+  // original one-click copy behavior, while the toolbar annotation action turns
+  // the selected element into a pending feedback note.
   useEffect(() => {
-    if (grab.state === 'confirming' && grab.payload && !grab.contextMenu) {
+    if (grab.state !== 'confirming' || !grab.payload) {
+      return
+    }
+    if (grabIntent === 'annotate') {
+      setPendingAnnotationPayload(grab.payload)
+      return
+    }
+    if (!grab.contextMenu) {
       const text = formatGrabPayloadAsText(grab.payload)
       void window.api.ui.writeClipboardText(text)
       showGrabToast('Copied', 'success', grab.payload)
     }
-  }, [grab.state, grab.payload, grab.contextMenu, showGrabToast])
+  }, [grab.state, grab.payload, grab.contextMenu, grabIntent, showGrabToast])
+
+  useEffect(() => {
+    if (grab.state === 'idle' || grab.state === 'error') {
+      setPendingAnnotationPayload(null)
+    }
+  }, [grab.state])
+
+  useEffect(() => {
+    if (browserAnnotations.length === 0) {
+      setBrowserAnnotationTrayOpen(true)
+      setBrowserAnnotationsCopied(false)
+      clearTimeout(annotationCopyTimerRef.current)
+    }
+  }, [browserAnnotations.length])
+
+  useEffect(() => {
+    if (!isActive || (!pendingAnnotationPayload && browserAnnotations.length === 0)) {
+      return
+    }
+
+    const observedContainer = containerRef.current
+    const resizeObserver =
+      typeof ResizeObserver === 'undefined' || !observedContainer
+        ? null
+        : new ResizeObserver(() => {
+            setBrowserOverlayViewport((current) => ({ ...current, version: current.version + 1 }))
+          })
+    if (resizeObserver && observedContainer) {
+      resizeObserver.observe(observedContainer)
+    }
+
+    return () => {
+      resizeObserver?.disconnect()
+    }
+  }, [browserAnnotations.length, isActive, pendingAnnotationPayload])
 
   useEffect(() => {
     initialBrowserUrlRef.current = browserTab.url
@@ -901,6 +1789,32 @@ function BrowserPagePane({
     [browserTab.id]
   )
 
+  const syncBrowserAnnotationViewportBridge = useCallback((): void => {
+    const pendingAnnotationPayload = pendingAnnotationPayloadRef.current
+    // Why: existing annotation badges are rendered in the guest process for
+    // compositor-smooth scroll; only the pending dialog needs viewport messages.
+    const markers = browserAnnotationsRef.current.map((annotation, index) => ({
+      id: annotation.id,
+      index,
+      isFixed: annotation.payload.target.isFixed === true,
+      rectPage: annotation.payload.target.rectPage,
+      rectViewport: annotation.payload.target.rectViewport
+    }))
+    const enabled = isActiveRef.current && (pendingAnnotationPayload !== null || markers.length > 0)
+    void window.api.browser
+      .setAnnotationViewportBridge({
+        browserPageId: browserTab.id,
+        emitViewport: pendingAnnotationPayload !== null,
+        enabled,
+        markers,
+        token: annotationViewportBridgeTokenRef.current
+      })
+      .catch(() => {
+        // The viewport bridge is visual-only; stale markers are less bad than
+        // breaking the browser pane on a navigated or destroyed guest.
+      })
+  }, [browserTab.id])
+
   // Why: this effect manages the full lifecycle of the webview DOM element —
   // creation, parking, event wiring, and teardown. browserTab.url is
   // intentionally excluded — it changes on every navigation, and including it
@@ -939,7 +1853,7 @@ function BrowserPagePane({
       // browsers paint the viewport white by default; sites that specify their
       // own background (including dark ones) still override this.
       webview.style.background = '#ffffff'
-      webviewRegistry.set(browserTab.id, webview)
+      registerPersistentWebview(browserTab.id, webview)
       container.appendChild(webview)
       needsInitialNavigation = true
     }
@@ -948,19 +1862,26 @@ function BrowserPagePane({
 
     const handleDomReady = (): void => {
       const webContentsId = webview.getWebContentsId()
+      let queuedAnnotationViewportBridgeSync = false
       if (registeredWebContentsIds.get(browserTab.id) !== webContentsId) {
         registeredWebContentsIds.set(browserTab.id, webContentsId)
-        void window.api.browser.registerGuest({
-          browserPageId: browserTab.id,
-          workspaceId,
-          worktreeId,
-          sessionProfileId,
-          webContentsId
-        })
+        queuedAnnotationViewportBridgeSync = true
+        void window.api.browser
+          .registerGuest({
+            browserPageId: browserTab.id,
+            workspaceId,
+            worktreeId,
+            sessionProfileId,
+            webContentsId
+          })
+          .finally(() => syncBrowserAnnotationViewportBridge())
       }
       syncNavigationState(webview)
       if (keepAddressBarFocusRef.current) {
         focusAddressBarNow()
+      }
+      if (!queuedAnnotationViewportBridgeSync) {
+        syncBrowserAnnotationViewportBridge()
       }
       // Why: CDP Emulation.setDeviceMetricsOverride and related overrides are
       // scoped to the guest's debugger session and do not survive all
@@ -980,6 +1901,11 @@ function BrowserPagePane({
     }
 
     const handleDidStartLoading = (): void => {
+      // Why: reloads replace the document without changing URL, invalidating
+      // captured element rects and DOM context just like navigation does.
+      clearBrowserPageAnnotationsRef.current(browserTab.id)
+      setPendingAnnotationPayload(null)
+      setBrowserOverlayViewport({ scrollX: 0, scrollY: 0, version: 0 })
       if (!trackNextLoadingEventRef.current) {
         return
       }
@@ -1131,6 +2057,32 @@ function BrowserPagePane({
       })
     }
 
+    const handleAnnotationViewportMessage = (event: { message?: string }): void => {
+      const message = typeof event.message === 'string' ? event.message : ''
+      const prefix = `${BROWSER_ANNOTATION_VIEWPORT_MESSAGE_PREFIX}${annotationViewportBridgeTokenRef.current}:`
+      if (!message.startsWith(prefix)) {
+        return
+      }
+      try {
+        const next = JSON.parse(message.slice(prefix.length)) as {
+          scrollX?: unknown
+          scrollY?: unknown
+        }
+        const scrollX =
+          typeof next.scrollX === 'number' && Number.isFinite(next.scrollX) ? next.scrollX : 0
+        const scrollY =
+          typeof next.scrollY === 'number' && Number.isFinite(next.scrollY) ? next.scrollY : 0
+        setBrowserOverlayViewport((current) => {
+          if (current.scrollX === scrollX && current.scrollY === scrollY) {
+            return current.version === 0 ? { ...current, version: 1 } : current
+          }
+          return { scrollX, scrollY, version: current.version + 1 }
+        })
+      } catch {
+        // Ignore unrelated or malformed guest console output.
+      }
+    }
+
     webview.addEventListener('dom-ready', handleDomReady)
     webview.addEventListener('did-start-loading', handleDidStartLoading)
     webview.addEventListener('did-stop-loading', handleDidStopLoading)
@@ -1148,6 +2100,7 @@ function BrowserPagePane({
     webview.addEventListener('page-title-updated', handleTitleUpdate)
     webview.addEventListener('page-favicon-updated', handleFaviconUpdate)
     webview.addEventListener('did-fail-load', handleFailLoad)
+    webview.addEventListener('console-message', handleAnnotationViewportMessage)
 
     if (needsInitialNavigation) {
       // Why: connection-refused localhost tabs can fail before Electron wires up
@@ -1173,6 +2126,7 @@ function BrowserPagePane({
       webview.removeEventListener('page-title-updated', handleTitleUpdate)
       webview.removeEventListener('page-favicon-updated', handleFaviconUpdate)
       webview.removeEventListener('did-fail-load', handleFailLoad)
+      webview.removeEventListener('console-message', handleAnnotationViewportMessage)
 
       if (webviewRef.current === webview) {
         webviewRef.current = null
@@ -1200,7 +2154,18 @@ function BrowserPagePane({
     createBrowserTab,
     focusAddressBarNow,
     focusWebviewNow,
-    syncNavigationState
+    syncNavigationState,
+    syncBrowserAnnotationViewportBridge
+  ])
+
+  useEffect(() => {
+    syncBrowserAnnotationViewportBridge()
+  }, [
+    browserAnnotations.length,
+    browserTab.id,
+    isActive,
+    pendingAnnotationPayload,
+    syncBrowserAnnotationViewportBridge
   ])
 
   useEffect(() => {
@@ -1293,6 +2258,21 @@ function BrowserPagePane({
     return () => window.clearInterval(intervalId)
   }, [browserTab.id, browserTab.loading])
 
+  const startGrabIntent = useCallback(
+    (nextIntent: GrabIntent): void => {
+      setGrabIntent(nextIntent)
+      if (nextIntent === 'copy') {
+        setPendingAnnotationPayload(null)
+      } else {
+        setBrowserAnnotationTrayOpen(true)
+      }
+      if (grab.state === 'idle' || grab.state === 'error' || grabIntent === nextIntent) {
+        grab.toggle()
+      }
+    },
+    [grab, grabIntent]
+  )
+
   // CmdOrCtrl+C toggles grab mode
   // Why: Cmd+C is deliberately repurposed inside the browser pane so that the
   // most natural "copy" gesture enters grab mode, letting the user visually
@@ -1316,12 +2296,12 @@ function BrowserPagePane({
       const isMod = navigator.userAgent.includes('Mac') ? e.metaKey : e.ctrlKey
       if (isMod && !e.shiftKey && e.key.toLowerCase() === 'c') {
         e.preventDefault()
-        grab.toggle()
+        startGrabIntent('copy')
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [grab, isActive])
+  }, [isActive, startGrabIntent])
 
   useEffect(() => {
     if (!isActive) {
@@ -1350,10 +2330,10 @@ function BrowserPagePane({
   useEffect(() => {
     return window.api.browser.onGrabModeToggle((tabId) => {
       if (tabId === browserTab.id) {
-        grabRef.current.toggle()
+        startGrabIntent('copy')
       }
     })
-  }, [browserTab.id])
+  }, [browserTab.id, startGrabIntent])
 
   // Why: single-key shortcuts (C / S) let the user copy the hovered element
   // without clicking. During 'armed'/'awaiting' state, the shortcut calls the
@@ -1365,6 +2345,9 @@ function BrowserPagePane({
   grabPayloadRef.current = grab.payload
   const handleGrabActionShortcut = useCallback(
     (key: 'c' | 's'): void => {
+      if (grabIntent === 'annotate') {
+        return
+      }
       const copyFromPayload = (payload: BrowserGrabPayload): void => {
         if (key === 'c') {
           const text = formatGrabPayloadAsText(payload)
@@ -1427,7 +2410,7 @@ function BrowserPagePane({
         })()
       }
     },
-    [grab, showGrabToast]
+    [grab, grabIntent, showGrabToast]
   )
 
   useEffect(() => {
@@ -1499,31 +2482,138 @@ function BrowserPagePane({
     grab.rearm()
   }, [grab, showGrabToast])
 
-  const navigateToUrl = useCallback(
-    (url: string): void => {
-      const browserModelUrl = redactKagiSessionToken(url)
-      setAddressBarValue(toDisplayUrl(browserModelUrl))
-      onSetUrlRef.current(browserTab.id, browserModelUrl)
-      onUpdatePageStateRef.current(browserTab.id, {
-        loading: true,
-        loadError: null,
-        title: getBrowserDisplayTitle(browserModelUrl, browserModelUrl)
-      })
-      setResourceNotice(null)
-
-      const webview = webviewRef.current
-      if (!webview) {
+  const handleAddBrowserAnnotation = useCallback(
+    (
+      comment: string,
+      intent: BrowserAnnotationIntent,
+      priority: BrowserAnnotationPriority
+    ): void => {
+      const payload = pendingAnnotationPayload
+      if (!payload) {
         return
       }
-      trackNextLoadingEventRef.current = url !== ORCA_BROWSER_BLANK_URL
-      lastKnownWebviewUrlRef.current =
-        normalizeBrowserNavigationUrl(browserModelUrl) ?? browserModelUrl
-      webview.src = url
-      if (url !== ORCA_BROWSER_BLANK_URL) {
-        focusWebviewNow()
-      }
+      addBrowserPageAnnotation({
+        id: createBrowserAnnotationId(),
+        browserPageId: browserTab.id,
+        comment,
+        intent,
+        priority,
+        createdAt: new Date().toISOString(),
+        payload: createBrowserAnnotationPayload(payload)
+      })
+      setPendingAnnotationPayload(null)
+      setBrowserAnnotationTrayOpen(true)
+      showGrabToast('Annotation added', 'success', payload)
+      grab.rearm()
     },
-    [browserTab.id, focusWebviewNow]
+    [addBrowserPageAnnotation, browserTab.id, grab, pendingAnnotationPayload, showGrabToast]
+  )
+
+  const handleCancelPendingBrowserAnnotation = useCallback((): void => {
+    setPendingAnnotationPayload(null)
+    if (grabIntent === 'annotate' && grab.state === 'confirming') {
+      grab.rearm()
+    }
+  }, [grab, grabIntent])
+
+  const handleCopyBrowserAnnotations = useCallback((): void => {
+    const markdown = formatBrowserAnnotationsAsMarkdown(browserAnnotations)
+    if (!markdown) {
+      return
+    }
+    void window.api.ui.writeClipboardText(markdown)
+    clearTimeout(annotationCopyTimerRef.current)
+    setBrowserAnnotationsCopied(true)
+    annotationCopyTimerRef.current = setTimeout(() => setBrowserAnnotationsCopied(false), 1400)
+  }, [browserAnnotations])
+
+  const handleClearBrowserAnnotations = useCallback((): void => {
+    clearTimeout(annotationCopyTimerRef.current)
+    setBrowserAnnotationsCopied(false)
+    clearBrowserPageAnnotations(browserTab.id)
+  }, [browserTab.id, clearBrowserPageAnnotations])
+
+  const navigateToUrl = useCallback(
+    (url: string): void => {
+      const navigateBrowserUrl = (targetUrl: string): void => {
+        const browserModelUrl = redactKagiSessionToken(targetUrl)
+        setAddressBarValue(toDisplayUrl(browserModelUrl))
+        onSetUrlRef.current(browserTab.id, browserModelUrl)
+        onUpdatePageStateRef.current(browserTab.id, {
+          loading: true,
+          loadError: null,
+          title: getBrowserDisplayTitle(browserModelUrl, browserModelUrl)
+        })
+        setResourceNotice(null)
+
+        const webview = webviewRef.current
+        if (!webview) {
+          return
+        }
+        trackNextLoadingEventRef.current = targetUrl !== ORCA_BROWSER_BLANK_URL
+        lastKnownWebviewUrlRef.current =
+          normalizeBrowserNavigationUrl(browserModelUrl) ?? browserModelUrl
+        webview.src = targetUrl
+        if (targetUrl !== ORCA_BROWSER_BLANK_URL) {
+          focusWebviewNow()
+        }
+      }
+
+      const notebookPath = getNotebookPathFromBrowserUrl(url)
+      if (notebookPath) {
+        void (async () => {
+          const store = useAppStore.getState()
+          const connectionId = getConnectionId(worktreeId)
+          if (connectionId !== null) {
+            navigateBrowserUrl(url)
+            return
+          }
+
+          try {
+            const activeWorktree = store.allWorktrees().find((w) => w.id === worktreeId)
+            const fileContext: RuntimeFileOperationArgs = {
+              settings: store.settings,
+              worktreeId,
+              worktreePath: activeWorktree?.path,
+              connectionId: undefined
+            }
+            if (!isRemoteRuntimeFileOperation(fileContext, notebookPath)) {
+              await window.api.fs.authorizeExternalPath({ targetPath: notebookPath })
+            }
+            const stat = await statRuntimePath(fileContext, notebookPath)
+            if (stat.isDirectory) {
+              navigateBrowserUrl(url)
+              return
+            }
+
+            let relativePath = notebookPath
+            if (activeWorktree?.path && isPathInsideWorktree(notebookPath, activeWorktree.path)) {
+              relativePath =
+                toWorktreeRelativePath(notebookPath, activeWorktree.path) ?? notebookPath
+            }
+
+            // Why: file:// notebooks in the browser are otherwise rendered as raw JSON by Chromium.
+            store.setActiveTabType('editor')
+            store.openFile(
+              {
+                filePath: notebookPath,
+                relativePath,
+                worktreeId,
+                language: detectLanguage(notebookPath),
+                mode: 'edit'
+              },
+              { preview: false, targetGroupId: store.ensureWorktreeRootGroup(worktreeId) }
+            )
+          } catch {
+            navigateBrowserUrl(url)
+          }
+        })()
+        return
+      }
+
+      navigateBrowserUrl(url)
+    },
+    [browserTab.id, focusWebviewNow, worktreeId]
   )
 
   const submitAddressBar = (): void => {
@@ -1772,17 +2862,19 @@ function BrowserPagePane({
 
         <Tooltip>
           <TooltipTrigger asChild>
-            {/* Why: wrap the disabled button in a span so pointer events still
-                reach the tooltip trigger — Radix (and the DOM) drop hover
-                events on disabled <button>, which is why the previous native
-                `title` attribute fired inconsistently. */}
             <span className="inline-flex">
               <Button
                 size="icon"
-                variant={grab.state !== 'idle' ? 'default' : 'ghost'}
-                className={`h-8 w-8 ${grab.state !== 'idle' ? 'bg-foreground/80 text-background hover:bg-foreground/90' : ''}`}
-                onClick={grab.toggle}
+                variant={grab.state !== 'idle' && grabIntent === 'copy' ? 'default' : 'ghost'}
+                className={cn(
+                  'h-8 w-8',
+                  grab.state !== 'idle' &&
+                    grabIntent === 'copy' &&
+                    'bg-foreground/80 text-background hover:bg-foreground/90'
+                )}
+                onClick={() => startGrabIntent('copy')}
                 disabled={isBlankTab}
+                aria-label="Grab page element"
               >
                 <Crosshair className="size-4" />
               </Button>
@@ -1790,6 +2882,40 @@ function BrowserPagePane({
           </TooltipTrigger>
           <TooltipContent side="bottom" sideOffset={4}>
             {`Grab page element (${navigator.userAgent.includes('Mac') ? '⌘C' : 'Ctrl+C'})`}
+          </TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            {/* Why: wrap the disabled button in a span so pointer events still
+                reach the tooltip trigger — Radix (and the DOM) drop hover
+                events on disabled <button>, which is why the previous native
+                `title` attribute fired inconsistently. */}
+            <span className="inline-flex">
+              <Button
+                size="icon"
+                variant={grab.state !== 'idle' && grabIntent === 'annotate' ? 'default' : 'ghost'}
+                className={cn(
+                  'relative h-8 w-8',
+                  grab.state !== 'idle' &&
+                    grabIntent === 'annotate' &&
+                    'bg-foreground/80 text-background hover:bg-foreground/90'
+                )}
+                onClick={() => startGrabIntent('annotate')}
+                disabled={isBlankTab}
+                aria-label="Annotate page element"
+              >
+                <MessageSquarePlus className="size-4" />
+                {browserAnnotations.length > 0 ? (
+                  <span className="absolute -top-1 -right-1 flex min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] leading-4 text-primary-foreground">
+                    {browserAnnotations.length}
+                  </span>
+                ) : null}
+              </Button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" sideOffset={4}>
+            Annotate page element
           </TooltipContent>
         </Tooltip>
 
@@ -1888,33 +3014,60 @@ function BrowserPagePane({
         <div
           className={cn(
             'flex items-center gap-2 border-b border-border/60 px-3 py-1.5 text-xs text-foreground/90',
-            grab.state === 'error'
-              ? 'bg-destructive/10'
-              : grab.state === 'confirming'
-                ? 'bg-green-500/10'
-                : 'bg-blue-500/10'
+            grab.state === 'error' ? 'bg-destructive/10' : 'bg-accent'
           )}
         >
           <Crosshair
             className={cn(
               'size-3 shrink-0',
-              grab.state === 'error'
-                ? 'text-destructive'
-                : grab.state === 'confirming'
-                  ? 'text-green-500'
-                  : 'text-blue-500'
+              grab.state === 'error' ? 'text-destructive' : 'text-muted-foreground'
             )}
           />
-          <span>
+          <span className="min-w-0 flex-1 truncate">
             {grab.state === 'error'
               ? `Grab failed: ${grab.error ?? 'Unknown error'}`
-              : grab.state === 'confirming'
-                ? 'Copied — press S to screenshot, or select another element'
-                : 'Click or hover an element, then press C to copy or S to screenshot.'}
+              : grabIntent === 'annotate'
+                ? pendingAnnotationPayload
+                  ? 'Add feedback for the selected element.'
+                  : browserAnnotations.length > 0
+                    ? `${browserAnnotations.length} annotation${browserAnnotations.length === 1 ? '' : 's'} ready. Select another element or copy all feedback.`
+                    : 'Click an element to add feedback for the agent.'
+                : grab.state === 'confirming'
+                  ? 'Copied — press S to screenshot, or select another element'
+                  : 'Click or hover an element, then press C to copy or S to screenshot.'}
           </span>
+          {grabIntent === 'annotate' && browserAnnotations.length > 0 ? (
+            <>
+              <Button
+                size="xs"
+                variant="outline"
+                className="h-6 gap-1.5"
+                onClick={handleCopyBrowserAnnotations}
+              >
+                {browserAnnotationsCopied ? (
+                  <CircleCheck className="size-3" />
+                ) : (
+                  <Copy className="size-3" />
+                )}
+                {browserAnnotationsCopied ? 'Copied' : 'Copy All'}
+              </Button>
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                className="h-6 w-6"
+                onClick={handleClearBrowserAnnotations}
+                aria-label="Clear browser annotations"
+              >
+                <Trash2 className="size-3" />
+              </Button>
+            </>
+          ) : null}
           <button
             className="ml-auto shrink-0 rounded px-2 py-0.5 text-muted-foreground transition-colors hover:text-foreground"
-            onClick={grab.cancel}
+            onClick={() => {
+              setPendingAnnotationPayload(null)
+              grab.cancel()
+            }}
           >
             Cancel
           </button>
@@ -2016,10 +3169,92 @@ function BrowserPagePane({
             </div>
           </div>
         ) : null}
+        {pendingAnnotationPayload ? (
+          <PendingBrowserAnnotationCard
+            payload={pendingAnnotationPayload}
+            anchor={getBrowserOverlayAnchor(
+              pendingAnnotationPayload,
+              containerRef.current,
+              webviewRef.current,
+              browserOverlayViewport
+            )}
+            portalContainer={containerRef.current}
+            onAdd={handleAddBrowserAnnotation}
+            onCancel={handleCancelPendingBrowserAnnotation}
+          />
+        ) : null}
+        {browserAnnotations.length > 0 && browserAnnotationTrayOpen ? (
+          <div className="absolute right-3 bottom-3 z-30 flex max-h-[45%] w-[min(20rem,calc(100%-1.5rem))] flex-col overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-[0_10px_24px_rgba(0,0,0,0.18)]">
+            <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+              <MessageSquarePlus className="size-4 text-muted-foreground" />
+              <div className="min-w-0 flex-1 text-sm font-medium">
+                {browserAnnotations.length} annotation{browserAnnotations.length === 1 ? '' : 's'}
+              </div>
+              <Button
+                size="xs"
+                variant="outline"
+                className="gap-1.5"
+                onClick={handleCopyBrowserAnnotations}
+              >
+                {browserAnnotationsCopied ? (
+                  <CircleCheck className="size-3" />
+                ) : (
+                  <Copy className="size-3" />
+                )}
+                {browserAnnotationsCopied ? 'Copied' : 'Copy'}
+              </Button>
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                className="h-6 w-6 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                onClick={handleClearBrowserAnnotations}
+                aria-label="Clear browser annotations"
+              >
+                <Trash2 className="size-3" />
+              </Button>
+            </div>
+            <div className="scrollbar-sleek min-h-0 flex-1 overflow-auto p-1.5">
+              {browserAnnotations.map((annotation, index) => (
+                <div
+                  key={annotation.id}
+                  className="group flex gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-accent focus-within:bg-accent"
+                >
+                  <div className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-primary text-[10px] font-semibold text-primary-foreground">
+                    {index + 1}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-medium text-foreground">
+                      {annotation.payload.target.accessibility.accessibleName ||
+                        annotation.payload.target.textSnippet ||
+                        annotation.payload.target.tagName}
+                    </div>
+                    <div className="mt-0.5 line-clamp-2 text-muted-foreground">
+                      {annotation.comment}
+                    </div>
+                    <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                      <span>{annotation.intent}</span>
+                      <span>-</span>
+                      <span>{annotation.priority}</span>
+                    </div>
+                  </div>
+                  <Button
+                    size="icon-xs"
+                    variant="ghost"
+                    className="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 group-focus-within:opacity-100"
+                    onClick={() => deleteBrowserPageAnnotation(browserTab.id, annotation.id)}
+                    aria-label={`Delete annotation ${index + 1}`}
+                  >
+                    <Trash2 className="size-3" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
         {/* Right-click context dropdown: positioned at the element's center,
             shown when grab.contextMenu is true (user right-clicked). */}
         <DropdownMenu
-          open={grab.state === 'confirming' && grab.contextMenu}
+          open={grab.state === 'confirming' && grab.contextMenu && grabIntent === 'copy'}
           onOpenChange={(open) => {
             if (!open && grab.state === 'confirming') {
               // Why: skip rearm if a menu action (Copy/Screenshot) already
@@ -2116,41 +3351,40 @@ function BrowserPagePane({
                 <OctagonX className="size-4 text-red-500" />
               )}
               <span className="text-sm font-semibold">{grabToast.message}</span>
-              <DropdownMenu
-                onOpenChange={(open) => {
-                  if (open) {
-                    clearTimeout(grabToastTimerRef.current)
-                  } else {
-                    grabToastTimerRef.current = setTimeout(() => dismissGrabToast(), 1200)
-                  }
-                }}
-              >
-                <DropdownMenuTrigger asChild>
-                  <button className="flex size-6 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-black/10 hover:text-gray-700">
-                    <span className="text-sm font-bold leading-none">···</span>
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" sideOffset={4}>
-                  <DropdownMenuItem
-                    onSelect={() => {
-                      const dataUrl = grabToast.payload?.screenshot?.dataUrl
-                      if (dataUrl?.startsWith('data:image/png;base64,')) {
-                        void window.api.ui.writeClipboardImage(dataUrl)
-                        setGrabToast((prev) =>
-                          prev ? { ...prev, message: 'Screenshotted' } : null
-                        )
-                      }
-                    }}
-                    disabled={
-                      !grabToast.payload?.screenshot?.dataUrl?.startsWith('data:image/png;base64,')
+              {grabToast.payload?.screenshot?.dataUrl?.startsWith('data:image/png;base64,') ? (
+                <DropdownMenu
+                  onOpenChange={(open) => {
+                    if (open) {
+                      clearTimeout(grabToastTimerRef.current)
+                    } else {
+                      grabToastTimerRef.current = setTimeout(() => dismissGrabToast(), 1200)
                     }
-                  >
-                    <Image className="size-3.5" />
-                    Copy Screenshot
-                    <DropdownMenuShortcut>S</DropdownMenuShortcut>
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+                  }}
+                >
+                  <DropdownMenuTrigger asChild>
+                    <button className="flex size-6 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-black/10 hover:text-gray-700">
+                      <span className="text-sm font-bold leading-none">···</span>
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" sideOffset={4}>
+                    <DropdownMenuItem
+                      onSelect={() => {
+                        const dataUrl = grabToast.payload?.screenshot?.dataUrl
+                        if (dataUrl?.startsWith('data:image/png;base64,')) {
+                          void window.api.ui.writeClipboardImage(dataUrl)
+                          setGrabToast((prev) =>
+                            prev ? { ...prev, message: 'Screenshotted' } : null
+                          )
+                        }
+                      }}
+                    >
+                      <Image className="size-3.5" />
+                      Copy Screenshot
+                      <DropdownMenuShortcut>S</DropdownMenuShortcut>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : null}
             </div>
           </div>
         ) : null}

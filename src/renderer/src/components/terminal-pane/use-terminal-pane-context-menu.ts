@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import type { ManagedPane, PaneManager } from '@/lib/pane-manager/pane-manager'
 import type { PtyTransport } from './pty-transport'
 import { resolveSplitCwd, type PaneCwdMap } from './resolve-split-cwd'
+import type { TerminalQuickCommand } from '../../../../shared/types'
+import { sendTerminalQuickCommandToPane } from './terminal-quick-command-dispatch'
 
 const CLOSE_ALL_CONTEXT_MENUS_EVENT = 'orca-close-all-context-menus'
 
@@ -28,8 +30,10 @@ type TerminalMenuState = {
   onPaste: () => Promise<void>
   onSplitRight: () => void
   onSplitDown: () => void
+  onEqualizePaneSizes: () => void
   onClosePane: () => void
   onClearScreen: () => void
+  onQuickCommand: (command: TerminalQuickCommand) => void
   onToggleExpand: () => void
   onSetTitle: () => void
 }
@@ -145,6 +149,16 @@ export function useTerminalPaneContextMenu({
   const onSplitRight = (): void => splitWithInheritedCwd('vertical')
   const onSplitDown = (): void => splitWithInheritedCwd('horizontal')
 
+  const onEqualizePaneSizes = (): void => {
+    const pane = resolveMenuPane()
+    const manager = managerRef.current
+    if (!pane || !manager) {
+      return
+    }
+    manager.equalizePaneSizes()
+    pane.terminal.focus()
+  }
+
   const onClosePane = (): void => {
     const pane = resolveMenuPane()
     if (pane && (managerRef.current?.getPanes().length ?? 0) > 1) {
@@ -157,6 +171,18 @@ export function useTerminalPaneContextMenu({
     if (pane) {
       pane.terminal.clear()
     }
+  }
+
+  const onQuickCommand = (command: TerminalQuickCommand): void => {
+    const pane = resolveMenuPane()
+    if (!pane) {
+      return
+    }
+    sendTerminalQuickCommandToPane({
+      command,
+      pane,
+      transport: paneTransportsRef.current.get(pane.id)
+    })
   }
 
   const onToggleExpand = (): void => {
@@ -226,8 +252,10 @@ export function useTerminalPaneContextMenu({
     onPaste,
     onSplitRight,
     onSplitDown,
+    onEqualizePaneSizes,
     onClosePane,
     onClearScreen,
+    onQuickCommand,
     onToggleExpand,
     onSetTitle: handleSetTitle
   }
