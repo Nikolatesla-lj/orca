@@ -130,6 +130,7 @@ export default function ArchitecturePanel({
     redoModelChange,
     addNode,
     updateSelectedNode,
+    persistNodePatchById,
     updateSelectedNodeDraft,
     selectNode,
     selectEdge,
@@ -546,6 +547,7 @@ export default function ArchitecturePanel({
       onDeleteEdge={deleteSelectedEdge}
       onUpdateNodeDraft={updateSelectedNodeDraft}
       onUpdateNode={updateSelectedNode}
+      onPersistNodeById={persistNodePatchById}
       onUpdateEdge={updateSelectedEdge}
       onSourcePatternChange={setSourcePattern}
       onSaveSourcePattern={saveSourcePattern}

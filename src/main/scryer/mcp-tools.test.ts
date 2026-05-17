@@ -527,4 +527,38 @@ describe('callScryerTool', () => {
     })
     expect(valid.ok).toBe(true)
   })
+
+  it('warns when a node description mentions a missing sibling', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-mention-missing-'))
+    await callScryerTool(projectPath, {
+      toolName: 'set_model',
+      arguments: {
+        data: JSON.stringify({
+          nodes: [
+            {
+              id: 'system',
+              data: { name: 'Shop', description: 'Commerce system', kind: 'system' }
+            },
+            {
+              id: 'api',
+              parentId: 'system',
+              data: {
+                name: 'API',
+                description: 'Calls @[MissingWorker]',
+                kind: 'container'
+              }
+            }
+          ],
+          edges: []
+        })
+      }
+    })
+
+    const invalid = await callScryerTool(projectPath, {
+      toolName: 'validate_model',
+      arguments: {}
+    })
+    expect(invalid.ok).toBe(false)
+    expect(invalid.content).toContain('API mentions MissingWorker but no sibling node matches it')
+  })
 })

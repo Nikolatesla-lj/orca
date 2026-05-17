@@ -9,10 +9,13 @@ import {
   listProjectModels,
   migrateGlobalModelToProject,
   markSynced,
+  patchNodeData,
   readModel,
+  readModelDocument,
   saveProjectModelAs,
   sanitizeProjectModelName,
-  writeModel
+  writeModel,
+  writeModelDocument
 } from '../scryer/model-store'
 import { checkDrift } from '../scryer/drift'
 import { callScryerTool } from '../scryer/mcp-tools'
@@ -24,7 +27,7 @@ import {
   nodeFillPrompt,
   serializeModelForPrompt
 } from '../../shared/scryer/prompts'
-import type { C4ModelData, ScryerToolCall } from '../../shared/scryer/model-types'
+import type { C4ModelData, C4NodeData, ScryerToolCall } from '../../shared/scryer/model-types'
 import { BUILT_IN_SCRYER_TEMPLATES } from '../../shared/scryer/templates'
 
 const watchers = new Map<string, FSWatcher>()
@@ -70,10 +73,54 @@ export function registerArchitectureHandlers(): void {
   )
 
   ipcMain.handle(
+    'architecture:readModelDocument',
+    (_event, args: { projectPath: string; modelName?: string | null }) =>
+      readModelDocument(args.projectPath, args.modelName)
+  )
+
+  ipcMain.handle(
     'architecture:writeModel',
     async (event, args: { projectPath: string; model: C4ModelData; modelName?: string | null }) => {
       await writeModel(args.projectPath, args.model, args.modelName)
       notifyModelChanged(event, args.projectPath, args.modelName)
+    }
+  )
+
+  ipcMain.handle(
+    'architecture:writeModelDocument',
+    async (
+      event,
+      args: {
+        projectPath: string
+        model: C4ModelData
+        modelName?: string | null
+        baseRevision?: string | null
+      }
+    ) => {
+      const result = await writeModelDocument(args.projectPath, args.model, args.modelName, {
+        baseRevision: args.baseRevision
+      })
+      notifyModelChanged(event, args.projectPath, args.modelName)
+      return result
+    }
+  )
+
+  ipcMain.handle(
+    'architecture:patchNodeData',
+    async (
+      event,
+      args: {
+        projectPath: string
+        nodeId: string
+        patch: Partial<C4NodeData>
+        modelName?: string | null
+        baseRevision?: string | null
+        baseNodeData?: C4NodeData | null
+      }
+    ) => {
+      const result = await patchNodeData(args.projectPath, args)
+      notifyModelChanged(event, args.projectPath, args.modelName)
+      return result
     }
   )
 

@@ -11,11 +11,14 @@ import {
   listProjectModels,
   migrateGlobalModelToProject,
   markSynced,
+  patchNodeData,
   readBaseline,
   readModel,
+  readModelDocument,
   saveProjectModelAs,
   writeBaseline,
-  writeModel
+  writeModel,
+  writeModelDocument
 } from './model-store'
 
 describe('project-local Scryer model store', () => {
@@ -87,6 +90,79 @@ describe('project-local Scryer model store', () => {
     await deleteProjectModel(projectPath, 'roadmap')
     models = await listProjectModels(projectPath, { includeGlobal: false })
     expect(models.map((model) => model.name)).toEqual(['release-plan'])
+  })
+
+  it('tracks revisions and merges non-conflicting node field patches', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-revision-'))
+    await writeModel(projectPath, {
+      nodes: [
+        {
+          id: 'api',
+          type: 'c4',
+          data: { name: 'API', description: 'Initial description', kind: 'system' }
+        }
+      ],
+      edges: [],
+      sourceMap: {},
+      groups: [],
+      flows: []
+    })
+    const base = await readModelDocument(projectPath)
+    const externallyEdited = {
+      ...base.model,
+      nodes: base.model.nodes.map((node) =>
+        node.id === 'api'
+          ? { ...node, data: { ...node.data, description: 'External editor description' } }
+          : node
+      )
+    }
+    await writeModelDocument(projectPath, externallyEdited)
+
+    const patched = await patchNodeData(projectPath, {
+      nodeId: 'api',
+      patch: { name: 'API Local Draft' },
+      baseRevision: base.revision,
+      baseNodeData: base.model.nodes[0]!.data
+    })
+
+    expect(patched.revision).not.toBe(base.revision)
+    expect(patched.model.nodes[0].data).toMatchObject({
+      name: 'API Local Draft',
+      description: 'External editor description'
+    })
+  })
+
+  it('rejects a stale node field patch when the same field changed on disk', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-revision-conflict-'))
+    await writeModel(projectPath, {
+      nodes: [
+        {
+          id: 'api',
+          type: 'c4',
+          data: { name: 'API', description: 'Initial description', kind: 'system' }
+        }
+      ],
+      edges: [],
+      sourceMap: {},
+      groups: [],
+      flows: []
+    })
+    const base = await readModelDocument(projectPath)
+    await patchNodeData(projectPath, {
+      nodeId: 'api',
+      patch: { name: 'External API' },
+      baseRevision: base.revision,
+      baseNodeData: base.model.nodes[0]!.data
+    })
+
+    await expect(
+      patchNodeData(projectPath, {
+        nodeId: 'api',
+        patch: { name: 'API Local Draft' },
+        baseRevision: base.revision,
+        baseNodeData: base.model.nodes[0]!.data
+      })
+    ).rejects.toThrow(/changed on disk/)
   })
 
   it('loads built-in templates into project-local model files', async () => {
