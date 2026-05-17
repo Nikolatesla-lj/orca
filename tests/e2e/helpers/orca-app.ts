@@ -28,6 +28,7 @@ import { TEST_REPO_PATH_FILE } from '../global-setup'
 
 type OrcaTestFixtures = {
   electronApp: ElectronApplication
+  activeTestRepo: TestRepoFixture
   sharedPage: Page
   orcaPage: Page
   // Why: every fresh userData dir paints the first-launch onboarding overlay
@@ -45,6 +46,10 @@ type OrcaWorkerFixtures = {
 type SeededRepo = {
   repoPath: string
   worktreePath: string
+}
+
+type TestRepoFixture = {
+  repoPath: string
 }
 
 // Why: parse + warn at module scope so a bad ORCA_E2E_SLOWMO_MS value logs once
@@ -143,6 +148,10 @@ function shouldUseIsolatedArchitectureRepo(testInfo: TestInfo): boolean {
   return path.basename(testInfo.file).startsWith('architecture-')
 }
 
+function removeTree(pathToRemove: string): void {
+  rmSync(pathToRemove, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+}
+
 /**
  * Extended Playwright test with Orca-specific fixtures.
  *
@@ -167,8 +176,33 @@ export const test = base.extend<OrcaTestFixtures, OrcaWorkerFixtures>({
     { scope: 'worker' }
   ],
 
+  // Test-scoped: Architecture specs get a dedicated git repo and .scryer
+  // directory. electronApp depends on this fixture, so teardown runs only
+  // after Electron closes and releases architecture file watchers.
+  activeTestRepo: async ({ testRepoPath }, provideFixture, testInfo) => {
+    if (shouldUseIsolatedArchitectureRepo(testInfo)) {
+      const isolatedRepo = createSeededTestRepo({
+        persistPathFile: false,
+        repoPrefix: 'orca-e2e-arch-repo',
+        worktreePrefix: 'orca-e2e-arch-worktree'
+      })
+      await provideFixture({ repoPath: isolatedRepo.repoPath })
+      removeTree(isolatedRepo.worktreePath)
+      removeTree(isolatedRepo.repoPath)
+      return
+    }
+
+    const repoPath = isValidGitRepo(testRepoPath) ? testRepoPath : createSeededTestRepo().repoPath
+    await provideFixture({ repoPath })
+  },
+
   // Test-scoped: one Electron app per test
-  electronApp: async ({ dismissOnboarding }, provideFixture, testInfo) => {
+  electronApp: async (
+    { activeTestRepo: _activeTestRepo, dismissOnboarding },
+    provideFixture,
+    testInfo
+  ) => {
+    void _activeTestRepo
     const mainPath = path.join(process.cwd(), 'out', 'main', 'index.js')
     const userDataDir = mkdtempSync(path.join(os.tmpdir(), 'orca-e2e-userdata-'))
 
@@ -263,7 +297,7 @@ export const test = base.extend<OrcaTestFixtures, OrcaWorkerFixtures>({
         }
       }
     }
-    rmSync(userDataDir, { recursive: true, force: true })
+    removeTree(userDataDir)
   },
 
   // Default: dismiss the onboarding overlay so it doesn't intercept clicks.
@@ -271,7 +305,7 @@ export const test = base.extend<OrcaTestFixtures, OrcaWorkerFixtures>({
 
   // Test-scoped: grab the first BrowserWindow, add the test repo, and wait
   // until the session is fully ready with a worktree active.
-  sharedPage: async ({ electronApp, testRepoPath }, provideFixture, testInfo) => {
+  sharedPage: async ({ activeTestRepo, electronApp }, provideFixture) => {
     // Why: the Electron app may take a while to create the first window,
     // especially on cold start with no prior dev userData. Isolated per-test
     // profiles make late-suite launches slower, so use the full test budget.
@@ -281,18 +315,7 @@ export const test = base.extend<OrcaTestFixtures, OrcaWorkerFixtures>({
     // Wait for the store to be available
     await page.waitForFunction(() => Boolean(window.__store), null, { timeout: 30_000 })
 
-    const isolatedRepo = shouldUseIsolatedArchitectureRepo(testInfo)
-      ? createSeededTestRepo({
-          persistPathFile: false,
-          repoPrefix: 'orca-e2e-arch-repo',
-          worktreePrefix: 'orca-e2e-arch-worktree'
-        })
-      : null
-    const repoPath = isolatedRepo
-      ? isolatedRepo.repoPath
-      : isValidGitRepo(testRepoPath)
-        ? testRepoPath
-        : createSeededTestRepo().repoPath
+    const repoPath = activeTestRepo.repoPath
 
     // Add the test repo via the IPC bridge
     // Why: calling window.api.repos.add() goes through the same code path as
@@ -376,10 +399,6 @@ export const test = base.extend<OrcaTestFixtures, OrcaWorkerFixtures>({
     })
 
     await provideFixture(page)
-    if (isolatedRepo) {
-      rmSync(isolatedRepo.worktreePath, { recursive: true, force: true })
-      rmSync(isolatedRepo.repoPath, { recursive: true, force: true })
-    }
   },
 
   // Test-scoped: each test gets the shared page
