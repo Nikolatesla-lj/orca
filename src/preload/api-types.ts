@@ -161,6 +161,7 @@ import type { TelemetryConsentState } from '../shared/telemetry-consent-types'
 import type { AgentKind, LaunchSource, RequestKind } from '../shared/telemetry-events'
 import type {
   C4ModelData,
+  C4NodeData,
   DriftReport,
   ScryerToolCall,
   ScryerToolResult
@@ -384,11 +385,29 @@ export type AppApi = {
 
 export type ArchitectureApi = {
   readModel: (args: { projectPath: string; modelName?: string | null }) => Promise<C4ModelData>
+  readModelDocument: (args: { projectPath: string; modelName?: string | null }) => Promise<{
+    model: C4ModelData
+    revision: string
+  }>
   writeModel: (args: {
     projectPath: string
     model: C4ModelData
     modelName?: string | null
   }) => Promise<void>
+  writeModelDocument: (args: {
+    projectPath: string
+    model: C4ModelData
+    modelName?: string | null
+    baseRevision?: string | null
+  }) => Promise<{ model: C4ModelData; revision: string }>
+  patchNodeData: (args: {
+    projectPath: string
+    nodeId: string
+    patch: Partial<C4NodeData>
+    modelName?: string | null
+    baseRevision?: string | null
+    baseNodeData?: C4NodeData | null
+  }) => Promise<{ model: C4ModelData; revision: string }>
   listModels: (args: { projectPath: string }) => Promise<
     {
       name: string

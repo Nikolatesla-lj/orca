@@ -1,10 +1,38 @@
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'fs/promises'
+/* eslint-disable max-lines -- Why: model-store remains the compatibility facade for existing Scryer storage callers while lower-level path and normalization helpers are split out. */
+import { readFile, readdir, rm, stat } from 'fs/promises'
 import { existsSync } from 'fs'
-import { homedir } from 'os'
-import { dirname, join, resolve } from 'path'
-import type { C4ModelData } from '../../shared/scryer/model-types'
+import { createHash } from 'crypto'
+import { join } from 'path'
+import type { C4ModelData, C4NodeData } from '../../shared/scryer/model-types'
 import { parseModelData, serializeModelData } from '../../shared/scryer/parse-model'
 import { getBuiltInScryerTemplate } from '../../shared/scryer/templates'
+import {
+  atomicWrite,
+  createBlankModel,
+  getGlobalModelPath,
+  getGlobalScryerDir,
+  getProjectBaselinePath,
+  getProjectImplementingPath,
+  getProjectModelPath,
+  getProjectPreSyncSnapshotPath,
+  getProjectScryerDir,
+  getProjectSyncPath,
+  normalizeModelForProject,
+  sanitizeProjectModelName
+} from './model-store-core'
+
+export {
+  createBlankModel,
+  getGlobalModelPath,
+  getGlobalScryerDir,
+  getProjectBaselinePath,
+  getProjectImplementingPath,
+  getProjectModelPath,
+  getProjectPreSyncSnapshotPath,
+  getProjectScryerDir,
+  getProjectSyncPath,
+  sanitizeProjectModelName
+} from './model-store-core'
 
 export type ProjectModelEntry = {
   name: string
@@ -23,88 +51,30 @@ export type GlobalModelOptions = {
   globalHomePath?: string
 }
 
-export function getProjectScryerDir(projectPath: string): string {
-  return join(resolve(projectPath), '.scryer')
+export type ModelDocument = {
+  model: C4ModelData
+  revision: string
 }
 
-export function getGlobalScryerDir(globalHomePath = homedir()): string {
-  return join(resolve(globalHomePath), '.scryer')
-}
-
-export function sanitizeProjectModelName(modelName?: string | null): string {
-  const raw = (modelName ?? 'model').trim().replace(/\.scry$/i, '')
-  const sanitized = raw
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-  return sanitized || 'model'
-}
-
-export function getProjectModelPath(projectPath: string, modelName?: string | null): string {
-  return join(getProjectScryerDir(projectPath), `${sanitizeProjectModelName(modelName)}.scry`)
-}
-
-export function getGlobalModelPath(modelName?: string | null, globalHomePath = homedir()): string {
-  return join(getGlobalScryerDir(globalHomePath), `${sanitizeProjectModelName(modelName)}.scry`)
-}
-
-export function getProjectBaselinePath(projectPath: string): string {
-  return join(getProjectScryerDir(projectPath), 'model.baseline.scry')
-}
-
-export function getProjectSyncPath(projectPath: string): string {
-  return join(getProjectScryerDir(projectPath), '.sync')
-}
-
-export function getProjectImplementingPath(projectPath: string): string {
-  return join(getProjectScryerDir(projectPath), '.implementing')
-}
-
-export function getProjectPreSyncSnapshotPath(projectPath: string): string {
-  return join(getProjectScryerDir(projectPath), 'model.presync.scry')
-}
-
-export function createBlankModel(projectPath: string): C4ModelData {
-  return {
-    nodes: [],
-    edges: [],
-    startingLevel: 'system',
-    sourceMap: {},
-    projectPath: resolve(projectPath),
-    refPositions: {},
-    groups: [],
-    flows: []
-  }
-}
-
-function normalizeModelForProject(projectPath: string, model: C4ModelData): C4ModelData {
-  return {
-    ...model,
-    projectPath: resolve(projectPath),
-    startingLevel: model.startingLevel ?? 'system',
-    sourceMap: model.sourceMap ?? {},
-    refPositions: model.refPositions ?? {},
-    groups: model.groups ?? [],
-    flows: model.flows ?? []
-  }
-}
-
-async function atomicWrite(filePath: string, content: string): Promise<void> {
-  await mkdir(dirname(filePath), { recursive: true })
-  const tmpPath = join(dirname(filePath), `.${Date.now()}-${globalThis.crypto.randomUUID()}.tmp`)
-  await writeFile(tmpPath, content, 'utf8')
-  await rename(tmpPath, filePath)
+function revisionForContent(content: string): string {
+  return createHash('sha256').update(content).digest('hex')
 }
 
 export async function readModel(
   projectPath: string,
   modelName?: string | null
 ): Promise<C4ModelData> {
+  return (await readModelDocument(projectPath, modelName)).model
+}
+
+export async function readModelDocument(
+  projectPath: string,
+  modelName?: string | null
+): Promise<ModelDocument> {
   const modelPath = getProjectModelPath(projectPath, modelName)
   if (!existsSync(modelPath)) {
     const blank = createBlankModel(projectPath)
     await writeModel(projectPath, blank, modelName)
-    return blank
   }
   let raw: string
   try {
@@ -115,7 +85,10 @@ export async function readModel(
     )
   }
   const parsed = parseModelData(raw)
-  return normalizeModelForProject(projectPath, parsed)
+  return {
+    model: normalizeModelForProject(projectPath, parsed),
+    revision: revisionForContent(raw)
+  }
 }
 
 export async function writeModel(
@@ -123,10 +96,68 @@ export async function writeModel(
   model: C4ModelData,
   modelName?: string | null
 ): Promise<void> {
+  await writeModelDocument(projectPath, model, modelName)
+}
+
+export async function writeModelDocument(
+  projectPath: string,
+  model: C4ModelData,
+  modelName?: string | null,
+  options: { baseRevision?: string | null } = {}
+): Promise<ModelDocument> {
+  if (options.baseRevision) {
+    const current = await readModelDocument(projectPath, modelName)
+    if (current.revision !== options.baseRevision) {
+      throw new Error('Scryer model changed on disk. Reload or merge before saving.')
+    }
+  }
+  const content = serializeModelData(normalizeModelForProject(projectPath, model))
   await atomicWrite(
     getProjectModelPath(projectPath, modelName),
-    serializeModelData(normalizeModelForProject(projectPath, model))
+    content
   )
+  return {
+    model: normalizeModelForProject(projectPath, model),
+    revision: revisionForContent(content)
+  }
+}
+
+export async function patchNodeData(
+  projectPath: string,
+  args: {
+    nodeId: string
+    patch: Partial<C4NodeData>
+    modelName?: string | null
+    baseRevision?: string | null
+    baseNodeData?: C4NodeData | null
+  }
+): Promise<ModelDocument> {
+  const current = await readModelDocument(projectPath, args.modelName)
+  const target = current.model.nodes.find((node) => node.id === args.nodeId)
+  if (!target) {
+    throw new Error(`Node '${args.nodeId}' not found`)
+  }
+  if (args.baseRevision && args.baseRevision !== current.revision && args.baseNodeData) {
+    const conflictingKeys = Object.keys(args.patch).filter((key) => {
+      const patchKey = key as keyof C4NodeData
+      return (
+        JSON.stringify(target.data[patchKey]) !== JSON.stringify(args.baseNodeData?.[patchKey]) &&
+        JSON.stringify(target.data[patchKey]) !== JSON.stringify(args.patch[patchKey])
+      )
+    })
+    if (conflictingKeys.length > 0) {
+      throw new Error(
+        `Scryer model changed on disk for ${conflictingKeys.join(', ')}. Reload before saving.`
+      )
+    }
+  }
+  const nextModel = {
+    ...current.model,
+    nodes: current.model.nodes.map((node) =>
+      node.id === args.nodeId ? { ...node, data: { ...node.data, ...args.patch } } : node
+    )
+  }
+  return writeModelDocument(projectPath, nextModel, args.modelName)
 }
 
 async function listModelFiles(

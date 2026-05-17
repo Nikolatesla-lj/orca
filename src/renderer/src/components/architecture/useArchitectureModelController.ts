@@ -32,6 +32,17 @@ import {
   reconcileExpandedPath,
   updateEdgeDataInModel
 } from './c4-model'
+import {
+  sanitizeClientModelName,
+  useArchitectureModelSession,
+  type ArchitectureProjectModelEntry
+} from './useArchitectureModelSession'
+import { useArchitectureAiRunSession } from './useArchitectureAiRunSession'
+
+export type {
+  ArchitectureProjectModelEntry,
+  ArchitectureTemplateEntry
+} from './useArchitectureModelSession'
 
 export type ArchitectureMode = 'topology' | 'flows' | 'groups'
 
@@ -39,19 +50,6 @@ type SyncSessionStatus = SyncStatus
 const EMPTY_PTY_IDS: string[] = []
 export const ARCHITECTURE_HISTORY_LIMIT = 10
 export const ARCHITECTURE_HISTORY_BATCH_MS = 1_000
-
-export type ArchitectureProjectModelEntry = {
-  name: string
-  fileName: string
-  path: string
-  isDefault: boolean
-  scope: 'project' | 'global'
-}
-
-export type ArchitectureTemplateEntry = {
-  id: string
-  name: string
-}
 
 type ActiveArchitectureSyncTerminal = {
   projectPath: string
@@ -201,15 +199,6 @@ function createFlowId(): string {
   return `flow-${globalThis.crypto.randomUUID()}`
 }
 
-function sanitizeClientModelName(modelName?: string | null): string {
-  const raw = (modelName ?? 'model').trim().replace(/\.scry$/i, '')
-  const sanitized = raw
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-  return sanitized || 'model'
-}
-
 function buildAncestorPath(model: C4ModelData, nodeId: string): string[] {
   const path: string[] = []
   let current = model.nodes.find((node) => node.id === nodeId)?.parentId ?? undefined
@@ -258,12 +247,23 @@ function stringArraysEqual(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index])
 }
 
+function isArchitecturePanelEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false
+  }
+  const tagName = target.tagName.toLowerCase()
+  return (
+    !!target.closest('[data-testid="architecture-panel"]') &&
+    (tagName === 'input' || tagName === 'textarea' || target.isContentEditable)
+  )
+}
+
 export function useArchitectureModelController({
   workspace
 }: {
   workspace: ArchitectureWorkspace
 }) {
-  const projectPath = workspace.projectPath
+  const projectPath = workspace.projectPath ?? ''
   const openFile = useAppStore((state) => state.openFile)
   const setPendingEditorReveal = useAppStore((state) => state.setPendingEditorReveal)
   const setArchitectureModelRef = useAppStore((state) => state.setArchitectureModelRef)
@@ -271,13 +271,13 @@ export function useArchitectureModelController({
   const detectedAgentIds = useAppStore((state) => state.detectedAgentIds)
   const [model, setModel] = useState<C4ModelData | null>(null)
   const modelRef = useRef<C4ModelData | null>(null)
-  const activeModelNameRef = useRef(sanitizeClientModelName(workspace.modelRef))
   const loadRequestIdRef = useRef(0)
   const lastKnownModelFingerprintRef = useRef('')
   const undoStackRef = useRef<C4ModelData[]>([])
   const redoStackRef = useRef<C4ModelData[]>([])
   const historyBatchStartedAtRef = useRef<number | null>(null)
   const expandedPathRef = useRef<string[]>([])
+  const lastCodeLevelParentIdRef = useRef<string | null>(null)
   const followExternalChangesRef = useRef(true)
   const selectedNodeIdRef = useRef<string | null>(null)
   const sourcePatternSyncRef = useRef<{ nodeId: string | null; pattern: string } | null>(null)
@@ -285,12 +285,12 @@ export function useArchitectureModelController({
   const syncTerminalHadPtyRef = useRef(false)
   const syncTerminalPtyIdsRef = useRef<Set<string>>(new Set())
   const autoFinishingSyncRef = useRef(false)
+  const syncResolutionRef = useRef<'cancel' | 'finish' | null>(null)
+  const activeModelReloadRef = useRef<() => void>(() => {})
+  const activeModelRemovedRef = useRef<
+    (removedModelName: string, knownModels: ArchitectureProjectModelEntry[]) => void
+  >(() => {})
   const [architectureMode, setArchitectureMode] = useState<ArchitectureMode>('topology')
-  const [activeModelName, setActiveModelName] = useState(() =>
-    sanitizeClientModelName(workspace.modelRef)
-  )
-  const [projectModels, setProjectModels] = useState<ArchitectureProjectModelEntry[]>([])
-  const [templates, setTemplates] = useState<ArchitectureTemplateEntry[]>([])
   const [activeFlowId, setActiveFlowId] = useState<string | null>(null)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
@@ -314,6 +314,34 @@ export function useArchitectureModelController({
   const [historyRevision, setHistoryRevision] = useState(0)
   const [message, setMessage] = useState<string>('')
   const [error, setError] = useState<string>('')
+  const aiRunSession = useArchitectureAiRunSession()
+
+  const handleModelSessionError = useCallback((sessionError: unknown) => {
+    setError(sessionError instanceof Error ? sessionError.message : String(sessionError))
+  }, [])
+
+  const modelSession = useArchitectureModelSession({
+    workspace,
+    projectPath,
+    setArchitectureModelRef,
+    isActiveModelEditableTarget: () => isArchitecturePanelEditableTarget(document.activeElement),
+    onActiveModelReload: () => activeModelReloadRef.current(),
+    onActiveModelRemoved: (removedModelName, knownModels) =>
+      activeModelRemovedRef.current(removedModelName, knownModels),
+    onError: handleModelSessionError
+  })
+  const {
+    activeModelName,
+    activeModelNameRef,
+    projectModels,
+    templates,
+    readModelDocument,
+    acceptLoadedModelDocument,
+    refreshProjectModels,
+    scheduleModelWrite,
+    writePendingModelNow,
+    patchActiveNodeData
+  } = modelSession
 
   const currentParentId = expandedPath.at(-1)
   const currentParent = useMemo(
@@ -328,7 +356,7 @@ export function useArchitectureModelController({
     currentParentKind !== 'component' &&
     multiSelectedNodeIds.length >= 2
 
-  const selectedNode = useMemo(
+  const selectedNodeById = useMemo(
     () => model?.nodes.find((node) => node.id === selectedNodeId) ?? null,
     [model, selectedNodeId]
   )
@@ -341,10 +369,6 @@ export function useArchitectureModelController({
     [model, selectedGroupId]
   )
 
-  const selectedSourcePattern = selectedNode
-    ? (model?.sourceMap?.[selectedNode.id]?.[0]?.pattern ?? '')
-    : ''
-
   const driftedNodeIds = useMemo(
     () => new Set((drift?.nodes ?? []).map((node) => node.nodeId)),
     [drift]
@@ -354,6 +378,35 @@ export function useArchitectureModelController({
     () => (model?.flows ?? []).find((flow) => flow.id === activeFlowId) ?? null,
     [activeFlowId, model]
   )
+  const codeLevelNodes = useMemo(
+    () =>
+      model && currentParentKind === 'component' && currentParentId
+        ? model.nodes.filter(
+            (node) =>
+              node.parentId === currentParentId &&
+              (node.data.kind === 'operation' ||
+                node.data.kind === 'process' ||
+                node.data.kind === 'model')
+          )
+        : [],
+    [currentParentId, currentParentKind, model]
+  )
+  const selectedNode = useMemo(() => {
+    if (selectedNodeById) {
+      return selectedNodeById
+    }
+    if (currentParentKind !== 'component') {
+      return null
+    }
+    return (
+      codeLevelNodes.find((node) => node.id === selectedNodeIdRef.current) ??
+      codeLevelNodes[0] ??
+      null
+    )
+  }, [codeLevelNodes, currentParentKind, selectedNodeById])
+  const selectedSourcePattern = selectedNode
+    ? (model?.sourceMap?.[selectedNode.id]?.[0]?.pattern ?? '')
+    : ''
 
   const activeAgent = useMemo(() => {
     if (!projectPath) {
@@ -388,8 +441,10 @@ export function useArchitectureModelController({
   }, [expandedPath])
 
   useEffect(() => {
-    activeModelNameRef.current = activeModelName
-  }, [activeModelName])
+    if (currentParentKind === 'component' && currentParentId) {
+      lastCodeLevelParentIdRef.current = currentParentId
+    }
+  }, [currentParentId, currentParentKind])
 
   useEffect(() => {
     followExternalChangesRef.current = followExternalChanges
@@ -415,20 +470,6 @@ export function useArchitectureModelController({
     }
   }, [architectureMode])
 
-  const refreshProjectModels = useCallback(async () => {
-    if (!projectPath) {
-      setProjectModels([])
-      setTemplates([])
-      return
-    }
-    const [models, nextTemplates] = await Promise.all([
-      window.api.architecture.listModels({ projectPath }),
-      window.api.architecture.listTemplates()
-    ])
-    setProjectModels(models)
-    setTemplates(nextTemplates)
-  }, [projectPath])
-
   const loadModel = useCallback(
     async (requestedModelName?: string | null) => {
       const requestId = loadRequestIdRef.current + 1
@@ -448,13 +489,11 @@ export function useArchitectureModelController({
       )
       try {
         setError('')
-        const loaded = await window.api.architecture.readModel({
-          projectPath,
-          modelName: nextActiveModelName
-        })
+        const loadedDocument = await readModelDocument(nextActiveModelName)
         if (requestId !== loadRequestIdRef.current) {
           return
         }
+        const loaded = loadedDocument.model
         const loadedFingerprint = fingerprintArchitectureModel(loaded)
         const previous = modelRef.current
         const currentSelectedNodeId = selectedNodeIdRef.current
@@ -513,9 +552,7 @@ export function useArchitectureModelController({
         }
 
         lastKnownModelFingerprintRef.current = loadedFingerprint
-        activeModelNameRef.current = nextActiveModelName
-        setActiveModelName(nextActiveModelName)
-        setArchitectureModelRef(workspace.id, nextActiveModelName)
+        acceptLoadedModelDocument(nextActiveModelName, loadedDocument.revision)
         modelRef.current = nextModel
         setModel(nextModel)
         setExpandedPath((current) => nextExpandedPath ?? reconcileExpandedPath(nextModel, current))
@@ -561,7 +598,13 @@ export function useArchitectureModelController({
         setError(loadError instanceof Error ? loadError.message : String(loadError))
       }
     },
-    [projectPath, refreshProjectModels, setArchitectureModelRef, workspace.id]
+    [
+      acceptLoadedModelDocument,
+      activeModelNameRef,
+      projectPath,
+      readModelDocument,
+      refreshProjectModels
+    ]
   )
 
   const loadFallbackModelAfterRemoval = useCallback(
@@ -570,7 +613,6 @@ export function useArchitectureModelController({
         return
       }
       const remaining = knownModels ?? (await window.api.architecture.listModels({ projectPath }))
-      setProjectModels(remaining)
       const nextName =
         remaining.find((entry) => entry.name !== removedModelName)?.name ??
         remaining[0]?.name ??
@@ -579,70 +621,9 @@ export function useArchitectureModelController({
         await window.api.architecture.createModel({ projectPath, modelName: nextName })
       }
       await loadModel(nextName)
+      void refreshProjectModels()
     },
-    [loadModel, projectPath]
-  )
-
-  const pendingModelWriteRef = useRef<{
-    projectPath: string
-    modelName: string
-    model: C4ModelData
-    previousFingerprint: string
-  } | null>(null)
-  const pendingModelWriteTimerRef = useRef<number | null>(null)
-
-  const writePendingModelNow = useCallback(async () => {
-    const pending = pendingModelWriteRef.current
-    if (!pending) {
-      return
-    }
-    pendingModelWriteRef.current = null
-    if (pendingModelWriteTimerRef.current !== null) {
-      window.clearTimeout(pendingModelWriteTimerRef.current)
-      pendingModelWriteTimerRef.current = null
-    }
-    try {
-      await window.api.architecture.writeModel({
-        projectPath: pending.projectPath,
-        model: pending.model,
-        modelName: pending.modelName
-      })
-    } catch (writeError) {
-      lastKnownModelFingerprintRef.current = pending.previousFingerprint
-      setError(writeError instanceof Error ? writeError.message : String(writeError))
-      throw writeError
-    }
-  }, [])
-
-  const scheduleModelWrite = useCallback(
-    (nextModel: C4ModelData, previousFingerprint: string) => {
-      if (!projectPath) {
-        return
-      }
-      pendingModelWriteRef.current = {
-        projectPath,
-        modelName: activeModelNameRef.current,
-        model: nextModel,
-        previousFingerprint
-      }
-      if (pendingModelWriteTimerRef.current !== null) {
-        window.clearTimeout(pendingModelWriteTimerRef.current)
-      }
-      pendingModelWriteTimerRef.current = window.setTimeout(() => {
-        void writePendingModelNow()
-      }, 500)
-    },
-    [projectPath, writePendingModelNow]
-  )
-
-  useEffect(
-    () => () => {
-      if (pendingModelWriteTimerRef.current !== null) {
-        window.clearTimeout(pendingModelWriteTimerRef.current)
-      }
-      void writePendingModelNow()
-    },
-    [writePendingModelNow]
+    [loadModel, projectPath, refreshProjectModels]
   )
 
   const persist = useCallback(
@@ -669,12 +650,11 @@ export function useArchitectureModelController({
         redoStackRef.current = []
         setHistoryRevision((revision) => revision + 1)
       }
-      const previousKnownFingerprint = lastKnownModelFingerprintRef.current
       const nextFingerprint = fingerprintArchitectureModel(nextModel)
       modelRef.current = nextModel
       setModel(nextModel)
       lastKnownModelFingerprintRef.current = nextFingerprint
-      scheduleModelWrite(nextModel, previousKnownFingerprint)
+      scheduleModelWrite(nextModel)
       setMessage(nextMessage)
     },
     [projectPath, scheduleModelWrite]
@@ -750,29 +730,11 @@ export function useArchitectureModelController({
   }, [loadModel])
 
   useEffect(() => {
-    if (!projectPath) {
-      return
+    activeModelReloadRef.current = () => void loadModel()
+    activeModelRemovedRef.current = (removedModelName, knownModels) => {
+      void loadFallbackModelAfterRemoval(removedModelName, knownModels)
     }
-    void window.api.architecture.watchModel({ projectPath })
-    return window.api.architecture.onModelChanged((event) => {
-      if (event.projectPath !== projectPath) {
-        return
-      }
-      if (event.fileName === `${activeModelNameRef.current}.scry`) {
-        void (async () => {
-          const remaining = await window.api.architecture.listModels({ projectPath })
-          if (remaining.some((entry) => entry.fileName === event.fileName)) {
-            setProjectModels(remaining)
-            await loadModel()
-            return
-          }
-          await loadFallbackModelAfterRemoval(activeModelNameRef.current, remaining)
-        })()
-        return
-      }
-      void refreshProjectModels()
-    })
-  }, [loadFallbackModelAfterRemoval, loadModel, projectPath, refreshProjectModels])
+  }, [loadFallbackModelAfterRemoval, loadModel])
 
   const createBlankProjectModel = useCallback(
     async (modelName: string) => {
@@ -848,7 +810,7 @@ export function useArchitectureModelController({
       setHistoryRevision((revision) => revision + 1)
       await loadModel(result.modelName)
     },
-    [editingLocked, loadModel, projectPath, writePendingModelNow]
+    [activeModelNameRef, editingLocked, loadModel, projectPath, writePendingModelNow]
   )
 
   const deleteProjectModelByName = useCallback(
@@ -910,6 +872,54 @@ export function useArchitectureModelController({
     setTargetNodeId('')
   }, [selectedNodeId])
 
+  useEffect(() => {
+    if (
+      currentParentKind !== 'component' ||
+      selectedNodeId ||
+      selectedEdgeId ||
+      codeLevelNodes.length === 0
+    ) {
+      return
+    }
+    const fallbackNodeId =
+      codeLevelNodes.find((node) => node.id === selectedNodeIdRef.current)?.id ??
+      codeLevelNodes[0]?.id
+    if (!fallbackNodeId) {
+      return
+    }
+    selectedNodeIdRef.current = fallbackNodeId
+    setSelectedNodeId(fallbackNodeId)
+  }, [codeLevelNodes, currentParentKind, selectedEdgeId, selectedNodeId])
+
+  useEffect(() => {
+    if (selectedNodeId || selectedEdgeId || architectureMode !== 'topology' || !model) {
+      return
+    }
+    const lastCodeLevelParentId = lastCodeLevelParentIdRef.current
+    if (!lastCodeLevelParentId) {
+      return
+    }
+    const lastParent = model.nodes.find((node) => node.id === lastCodeLevelParentId)
+    if (!lastParent || lastParent.data.kind !== 'component') {
+      return
+    }
+    const children = model.nodes.filter((node) => node.parentId === lastCodeLevelParentId)
+    if (children.length === 0) {
+      return
+    }
+    const nextExpandedPath = [
+      ...buildAncestorPath(model, lastCodeLevelParentId),
+      lastCodeLevelParentId
+    ]
+    const fallbackNodeId =
+      children.find((node) => node.id === selectedNodeIdRef.current)?.id ?? children[0]!.id
+    selectedNodeIdRef.current = fallbackNodeId
+    setExpandedPath((current) =>
+      stringArraysEqual(current, nextExpandedPath) ? current : nextExpandedPath
+    )
+    setSelectedNodeId(fallbackNodeId)
+  }, [architectureMode, model, selectedEdgeId, selectedNodeId])
+
   const addNode = useCallback(async () => {
     if (!model || editingLocked) {
       return
@@ -928,20 +938,55 @@ export function useArchitectureModelController({
     }
   }, [editingLocked, model, persist, selectedNode])
 
-  const updateSelectedNode = useCallback(
-    async (patch: Partial<C4Node['data']>) => {
-      if (!model || !selectedNode || editingLocked) {
+  const persistNodePatchById = useCallback(
+    async (nodeId: string, patch: Partial<C4Node['data']>) => {
+      const current = modelRef.current ?? model
+      if (!current || editingLocked) {
         return
       }
-      const nextModel = {
-        ...model,
-        nodes: model.nodes.map((node) =>
-          node.id === selectedNode.id ? { ...node, data: { ...node.data, ...patch } } : node
-        )
+      const target = current.nodes.find((node) => node.id === nodeId)
+      if (!target) {
+        return
       }
-      await persist(nextModel, `Saved ${selectedNode.data.name}`)
+      if (fingerprintArchitectureModel(current) !== fingerprintArchitectureModel({
+        ...current,
+        nodes: current.nodes.map((node) =>
+          node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node
+        )
+      })) {
+        const history = pushArchitectureUndoSnapshot(undoStackRef.current, current, {
+          batchStartedAt: historyBatchStartedAtRef.current,
+          now: Date.now()
+        })
+        undoStackRef.current = history.stack
+        historyBatchStartedAtRef.current = history.batchStartedAt
+        redoStackRef.current = []
+        setHistoryRevision((revision) => revision + 1)
+      }
+      try {
+        const result = await patchActiveNodeData(nodeId, patch, target.data)
+        const nextFingerprint = fingerprintArchitectureModel(result.model)
+        modelRef.current = result.model
+        setModel(result.model)
+        lastKnownModelFingerprintRef.current = nextFingerprint
+        setMessage(`Saved ${target.data.name}`)
+      } catch (patchError) {
+        const text = patchError instanceof Error ? patchError.message : String(patchError)
+        setError(text)
+        toast.error(text)
+      }
     },
-    [editingLocked, model, persist, selectedNode]
+    [editingLocked, model, patchActiveNodeData]
+  )
+
+  const updateSelectedNode = useCallback(
+    async (patch: Partial<C4Node['data']>) => {
+      if (!selectedNode) {
+        return
+      }
+      await persistNodePatchById(selectedNode.id, patch)
+    },
+    [persistNodePatchById, selectedNode]
   )
 
   const updateSelectedNodeDraft = useCallback((nodeId: string, patch: Partial<C4Node['data']>) => {
@@ -1044,28 +1089,39 @@ export function useArchitectureModelController({
     [editingLocked, model, persist]
   )
 
-  const addEdge = useCallback(async () => {
-    if (
-      !model ||
-      !selectedNode ||
-      !targetNodeId ||
-      selectedNode.id === targetNodeId ||
-      editingLocked
-    ) {
+  const addEdge = useCallback(async (requestedSourceNodeId?: string, requestedTargetNodeId?: string) => {
+    const current = modelRef.current ?? model
+    const sourceNodeId = requestedSourceNodeId ?? selectedNode?.id
+    const nextTargetNodeId = requestedTargetNodeId ?? targetNodeId
+    if (!current || editingLocked) {
       return
     }
-    const id = `edge-${selectedNode.id}-${targetNodeId}`
-    if (model.edges.some((edge) => edge.id === id)) {
+    if (!sourceNodeId || !nextTargetNodeId) {
+      setMessage('Select a relationship target')
+      return
+    }
+    if (sourceNodeId === nextTargetNodeId) {
+      setMessage('Choose a different relationship target')
+      return
+    }
+    const sourceNode = current.nodes.find((node) => node.id === sourceNodeId)
+    const targetNode = current.nodes.find((node) => node.id === nextTargetNodeId)
+    if (!sourceNode || !targetNode) {
+      setMessage('Relationship source or target is no longer available')
+      return
+    }
+    const id = `edge-${sourceNodeId}-${nextTargetNodeId}`
+    if (current.edges.some((edge) => edge.id === id)) {
       setMessage('Edge already exists')
       return
     }
     const edge: C4Edge = {
       id,
-      source: selectedNode.id,
-      target: targetNodeId,
+      source: sourceNodeId,
+      target: nextTargetNodeId,
       data: { label: 'depends on' }
     }
-    await persist({ ...model, edges: [...model.edges, edge] }, 'Saved architecture edge')
+    await persist({ ...current, edges: [...current.edges, edge] }, 'Saved architecture edge')
   }, [editingLocked, model, persist, selectedNode, targetNodeId])
 
   const deleteSelected = useCallback(async () => {
@@ -1432,6 +1488,9 @@ export function useArchitectureModelController({
     if (!projectPath) {
       return
     }
+    if (!aiRunSession.beginRun('build', 'Preparing Build with AI prompt')) {
+      return
+    }
     try {
       await writePendingModelNow()
       const result = await window.api.architecture.prepareInitialModelPrompt({
@@ -1443,16 +1502,27 @@ export function useArchitectureModelController({
         'Could not launch an Orca agent terminal for architecture modeling.'
       )
       setMessage('Build with AI prompt sent')
+      aiRunSession.markRun('build', 'done', 'Build with AI prompt sent')
     } catch (aiError) {
       const text = aiError instanceof Error ? aiError.message : String(aiError)
       setError(text)
+      aiRunSession.markRun('build', 'failed', text)
       toast.error(text)
     }
-  }, [launchArchitectureAgentPrompt, projectPath, writePendingModelNow])
+  }, [
+    activeModelNameRef,
+    aiRunSession,
+    launchArchitectureAgentPrompt,
+    projectPath,
+    writePendingModelNow
+  ])
 
   const fillNodeWithAi = useCallback(
     async (nodeId: string) => {
       if (!projectPath) {
+        return
+      }
+      if (!aiRunSession.beginRun('fill', 'Preparing Fill with AI prompt')) {
         return
       }
       try {
@@ -1467,17 +1537,28 @@ export function useArchitectureModelController({
           'Could not launch an Orca agent terminal for architecture node fill.'
         )
         setMessage('Fill with AI prompt sent')
+        aiRunSession.markRun('fill', 'done', 'Fill with AI prompt sent')
       } catch (aiError) {
         const text = aiError instanceof Error ? aiError.message : String(aiError)
         setError(text)
+        aiRunSession.markRun('fill', 'failed', text)
         toast.error(text)
       }
     },
-    [launchArchitectureAgentPrompt, projectPath, writePendingModelNow]
+    [
+      activeModelNameRef,
+      aiRunSession,
+      launchArchitectureAgentPrompt,
+      projectPath,
+      writePendingModelNow
+    ]
   )
 
   const startAdvisorReview = useCallback(async () => {
     if (!projectPath) {
+      return
+    }
+    if (!aiRunSession.beginRun('review', 'Preparing advisor review prompt')) {
       return
     }
     try {
@@ -1491,12 +1572,20 @@ export function useArchitectureModelController({
         'Could not launch an Orca agent terminal for architecture review.'
       )
       setMessage('Advisor review prompt sent')
+      aiRunSession.markRun('review', 'done', 'Advisor review prompt sent')
     } catch (aiError) {
       const text = aiError instanceof Error ? aiError.message : String(aiError)
       setError(text)
+      aiRunSession.markRun('review', 'failed', text)
       toast.error(text)
     }
-  }, [launchArchitectureAgentPrompt, projectPath, writePendingModelNow])
+  }, [
+    activeModelNameRef,
+    aiRunSession,
+    launchArchitectureAgentPrompt,
+    projectPath,
+    writePendingModelNow
+  ])
 
   const writeMcpConfig = useCallback(async () => {
     if (!projectPath) {
@@ -1516,10 +1605,14 @@ export function useArchitectureModelController({
     if (!projectPath || syncStatus === 'running') {
       return
     }
+    if (!aiRunSession.beginRun('sync', 'Preparing architecture sync prompt')) {
+      return
+    }
     let began = false
     try {
       setError('')
       await writePendingModelNow()
+      syncResolutionRef.current = null
       setSyncStatus('running')
       setSyncMessage(null)
       setSyncLog(['Preparing architecture sync prompt'])
@@ -1540,6 +1633,7 @@ export function useArchitectureModelController({
       if (!launched) {
         throw new Error('Could not launch an Orca agent terminal for architecture sync.')
       }
+      aiRunSession.markRun('sync', 'running', 'Architecture sync is running')
       syncTerminalHadPtyRef.current = false
       setSyncTerminalTabId(launched.tabId)
       trackArchitectureSyncTerminal(projectPath, launched.tabId)
@@ -1553,14 +1647,27 @@ export function useArchitectureModelController({
       const text = syncError instanceof Error ? syncError.message : String(syncError)
       setError(text)
       setSyncMessage(text)
+      aiRunSession.markRun('sync', 'failed', text)
       toast.error(text)
     }
-  }, [activeAgent, projectPath, syncStatus, workspace.worktreeId, writePendingModelNow])
+  }, [
+    activeAgent,
+    activeModelNameRef,
+    aiRunSession,
+    projectPath,
+    syncStatus,
+    workspace.worktreeId,
+    writePendingModelNow
+  ])
 
   const cancelSync = useCallback(async () => {
     if (!projectPath) {
       return
     }
+    if (syncResolutionRef.current) {
+      return
+    }
+    syncResolutionRef.current = 'cancel'
     try {
       const restored = await window.api.architecture.cancelSync({ projectPath })
       modelRef.current = restored
@@ -1578,19 +1685,27 @@ export function useArchitectureModelController({
       setSyncTerminalTabId(null)
       setImplementing(false)
       setSyncMessage('Restored pre-sync architecture model')
+      aiRunSession.markRun('sync', 'cancelled', 'Architecture sync cancelled')
     } catch (syncError) {
       const text = syncError instanceof Error ? syncError.message : String(syncError)
       setSyncStatus('error')
       setSyncMessage(text)
       setError(text)
+      aiRunSession.markRun('sync', 'failed', text)
       toast.error(text)
+    } finally {
+      syncResolutionRef.current = null
     }
-  }, [projectPath])
+  }, [aiRunSession, projectPath])
 
   const finishSync = useCallback(async () => {
     if (!projectPath) {
       return
     }
+    if (syncResolutionRef.current) {
+      return
+    }
+    syncResolutionRef.current = 'finish'
     try {
       await window.api.architecture.finishSync({ projectPath })
       setSyncStatus('idle')
@@ -1601,14 +1716,18 @@ export function useArchitectureModelController({
       setChangedNodeIds(new Set())
       setNodeDiffs(new Map())
       setSyncMessage('Architecture sync finished')
+      aiRunSession.markRun('sync', 'done', 'Architecture sync finished')
     } catch (syncError) {
       const text = syncError instanceof Error ? syncError.message : String(syncError)
       setSyncStatus('error')
       setSyncMessage(text)
       setError(text)
+      aiRunSession.markRun('sync', 'failed', text)
       toast.error(text)
+    } finally {
+      syncResolutionRef.current = null
     }
-  }, [projectPath])
+  }, [aiRunSession, projectPath])
 
   const dismissSyncMessage = useCallback(() => {
     setSyncMessage(null)
@@ -1711,16 +1830,6 @@ export function useArchitectureModelController({
   }, [])
 
   const flows = model?.flows ?? []
-  const codeLevelNodes =
-    model && currentParentKind === 'component' && currentParentId
-      ? model.nodes.filter(
-          (node) =>
-            node.parentId === currentParentId &&
-            (node.data.kind === 'operation' ||
-              node.data.kind === 'process' ||
-              node.data.kind === 'model')
-        )
-      : []
 
   return {
     projectPath,
@@ -1784,6 +1893,7 @@ export function useArchitectureModelController({
     redoModelChange,
     addNode,
     updateSelectedNode,
+    persistNodePatchById,
     updateSelectedNodeDraft,
     selectNode,
     selectEdge,

@@ -210,7 +210,11 @@ function validateMentionEdges(model: C4ModelData): string[] {
           candidate.data.name === mention ||
           candidate.data.name.toLowerCase() === mention.toLowerCase()
       )
-      if (!target || target.id === node.id) {
+      if (!target) {
+        errors.push(`${node.data.name} mentions ${mention} but no sibling node matches it`)
+        continue
+      }
+      if (target.id === node.id) {
         continue
       }
       if (!edgeKeys.has(`${node.id}->${target.id}`)) {
