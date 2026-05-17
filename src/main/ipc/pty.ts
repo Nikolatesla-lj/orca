@@ -306,6 +306,7 @@ export function buildPtyHostEnv(
   // mirror overlay that lets the user's plugins and Orca's status plugin
   // load together — same pattern Pi uses below for PI_CODING_AGENT_DIR. See
   // docs/opencode-config-dir-collision.md.
+  delete baseEnv.ORCA_OPENCODE_CONFIG_DIR
   Object.assign(baseEnv, openCodeHookService.buildPtyEnv(id, preexistingOpenCodeConfigDir))
   if (baseEnv.OPENCODE_CONFIG_DIR) {
     // Why: ~/.zshrc can re-export the user's default after spawn; shell-ready
@@ -339,6 +340,7 @@ export function buildPtyHostEnv(
   // restarts by design. A future reader should NOT "simplify" id allocation
   // back to a fresh UUID per spawn; that would discard user Pi state on
   // every daemon reconnect.
+  delete baseEnv.ORCA_PI_CODING_AGENT_DIR
   Object.assign(baseEnv, piTitlebarExtensionService.buildPtyEnv(id, preexistingPiAgentDir))
   if (baseEnv.PI_CODING_AGENT_DIR) {
     // Why: ~/.zshrc can re-export the user's default after spawn; shell-ready
