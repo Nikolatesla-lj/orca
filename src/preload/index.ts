@@ -1330,11 +1330,29 @@ const api = {
   architecture: {
     readModel: (args: { projectPath: string; modelName?: string | null }): Promise<unknown> =>
       ipcRenderer.invoke('architecture:readModel', args),
+    readModelDocument: (args: {
+      projectPath: string
+      modelName?: string | null
+    }): Promise<unknown> => ipcRenderer.invoke('architecture:readModelDocument', args),
     writeModel: (args: {
       projectPath: string
       model: unknown
       modelName?: string | null
     }): Promise<void> => ipcRenderer.invoke('architecture:writeModel', args),
+    writeModelDocument: (args: {
+      projectPath: string
+      model: unknown
+      modelName?: string | null
+      baseRevision?: string | null
+    }): Promise<unknown> => ipcRenderer.invoke('architecture:writeModelDocument', args),
+    patchNodeData: (args: {
+      projectPath: string
+      nodeId: string
+      patch: unknown
+      modelName?: string | null
+      baseRevision?: string | null
+      baseNodeData?: unknown
+    }): Promise<unknown> => ipcRenderer.invoke('architecture:patchNodeData', args),
     listModels: (args: { projectPath: string }): Promise<unknown> =>
       ipcRenderer.invoke('architecture:listModels', args),
     createModel: (args: {

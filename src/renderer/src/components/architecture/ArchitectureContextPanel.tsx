@@ -9,6 +9,7 @@ import type {
   Contract,
   ContractItem,
   Group,
+  ModelProperty,
   SourceLocation,
   Status
 } from '../../../../shared/scryer/model-types'
@@ -51,12 +52,13 @@ type ArchitectureContextPanelProps = {
   onDeleteEdge: () => void | Promise<void>
   onUpdateNodeDraft: (nodeId: string, patch: Partial<C4Node['data']>) => void
   onUpdateNode: (patch: Partial<C4Node['data']>) => void | Promise<void>
+  onPersistNodeById: (nodeId: string, patch: Partial<C4Node['data']>) => void | Promise<void>
   onUpdateEdge: (patch: { label?: string; method?: string }) => void | Promise<void>
   onSourcePatternChange: (pattern: string) => void
   onSaveSourcePattern: (pattern: string) => void | Promise<void>
   onSaveSourceLocations: (nodeId: string, locations: SourceLocation[]) => void | Promise<void>
   onTargetNodeChange: (nodeId: string) => void
-  onAddEdge: () => void | Promise<void>
+  onAddEdge: (sourceNodeId: string, targetNodeId: string) => void | Promise<void>
   onCreateGroupFromSelection: (name: string) => void | Promise<void>
   onAddSelectionToGroup: (groupId: string) => void | Promise<void>
   onUpdateGroup: (patch: Partial<Group>) => void | Promise<void>
@@ -84,6 +86,7 @@ export function ArchitectureContextPanel({
   onDeleteEdge,
   onUpdateNodeDraft,
   onUpdateNode,
+  onPersistNodeById,
   onUpdateEdge,
   onSourcePatternChange,
   onSaveSourcePattern,
@@ -162,6 +165,7 @@ export function ArchitectureContextPanel({
             syncing={syncing}
             onUpdateNodeDraft={onUpdateNodeDraft}
             onUpdateNode={onUpdateNode}
+            onPersistNodeById={onPersistNodeById}
             onSourcePatternChange={onSourcePatternChange}
             onSaveSourcePattern={onSaveSourcePattern}
             onSaveSourceLocations={onSaveSourceLocations}
@@ -442,6 +446,7 @@ function NodeEditor({
   syncing,
   onUpdateNodeDraft,
   onUpdateNode,
+  onPersistNodeById,
   onSourcePatternChange,
   onSaveSourcePattern,
   onSaveSourceLocations,
@@ -458,11 +463,12 @@ function NodeEditor({
   syncing: boolean
   onUpdateNodeDraft: (nodeId: string, patch: Partial<C4Node['data']>) => void
   onUpdateNode: (patch: Partial<C4Node['data']>) => void | Promise<void>
+  onPersistNodeById: (nodeId: string, patch: Partial<C4Node['data']>) => void | Promise<void>
   onSourcePatternChange: (pattern: string) => void
   onSaveSourcePattern: (pattern: string) => void | Promise<void>
   onSaveSourceLocations: (nodeId: string, locations: SourceLocation[]) => void | Promise<void>
   onTargetNodeChange: (nodeId: string) => void
-  onAddEdge: () => void | Promise<void>
+  onAddEdge: (sourceNodeId: string, targetNodeId: string) => void | Promise<void>
   onDeleteNode: () => void | Promise<void>
   nodeDiff?: C4Node['data']
   onDismissNodeDiff?: (nodeId: string) => void
@@ -471,12 +477,20 @@ function NodeEditor({
   const [sourceRows, setSourceRows] = useState<SourceLocation[]>([])
   const [sourceRowsDirty, setSourceRowsDirty] = useState(false)
   const sourceRowsNodeIdRef = useRef(node.id)
+  const [propertyRows, setPropertyRows] = useState<ModelProperty[]>([])
+  const [propertyRowsDirty, setPropertyRowsDirty] = useState(false)
+  const propertyRowsNodeIdRef = useRef(node.id)
+  const propertyRowsRef = useRef<HTMLDivElement | null>(null)
+  const edgeTargetSelectRef = useRef<HTMLSelectElement | null>(null)
+  const edgeTargetIdRef = useRef(targetNodeId)
+  const skipAddEdgeClickRef = useRef(false)
   const [statusDraft, setStatusDraft] = useState<Status | ''>(node.data.status ?? '')
   const [statusReason, setStatusReason] = useState('')
   const nodeSourceLocations = useMemo(
     () => model.sourceMap?.[node.id] ?? [],
     [model.sourceMap, node.id]
   )
+  const nodeProperties = useMemo(() => node.data.properties ?? [], [node.data.properties])
   const verifiedBlockers = useMemo(() => getVerifiedBlockers(model, node.id), [model, node.id])
   const mentionItems = useMemo(() => buildMentionItems(model, node), [model, node])
   const mentionWarnings = useMemo(() => getMentionEdgeWarnings(model, node), [model, node])
@@ -492,11 +506,18 @@ function NodeEditor({
   const statusChanged = statusDraft !== (node.data.status ?? '')
   const statusReasonRequired = statusChanged && !!statusDraft
   const verifiedBlocked = statusDraft === 'verified' && verifiedBlockers.length > 0
+  const addRelationship = () => {
+    void onAddEdge(node.id, edgeTargetIdRef.current || edgeTargetSelectRef.current?.value || '')
+  }
 
   useEffect(() => {
     setStatusDraft(node.data.status ?? '')
     setStatusReason('')
   }, [node.data.status, node.id])
+
+  useEffect(() => {
+    edgeTargetIdRef.current = targetNodeId
+  }, [targetNodeId])
 
   useEffect(() => {
     if (sourceRowsNodeIdRef.current !== node.id) {
@@ -511,9 +532,42 @@ function NodeEditor({
     }
   }, [node.id, nodeSourceLocations, sourceRowsDirty])
 
+  useEffect(() => {
+    if (propertyRowsNodeIdRef.current !== node.id) {
+      propertyRowsNodeIdRef.current = node.id
+      setPropertyRows(nodeProperties)
+      setPropertyRowsDirty(false)
+      return
+    }
+
+    if (!propertyRowsDirty) {
+      setPropertyRows(nodeProperties)
+    }
+  }, [node.id, nodeProperties, propertyRowsDirty])
+
   const updateSourceRows = (updater: (rows: SourceLocation[]) => SourceLocation[]): void => {
     setSourceRows((rows) => updater(rows))
     setSourceRowsDirty(true)
+  }
+
+  const normalizePropertyRows = (rows: ModelProperty[]): ModelProperty[] =>
+    rows
+      .map((property) => ({
+        label: property.label.trim(),
+        description: property.description.trim()
+      }))
+      .filter((property) => property.label)
+
+  const updatePropertyRows = (updater: (rows: ModelProperty[]) => ModelProperty[]): void => {
+    setPropertyRows((rows) => {
+      const nextRows = updater(rows)
+      void onPersistNodeById(node.id, {
+        properties:
+          normalizePropertyRows(nextRows).length > 0 ? normalizePropertyRows(nextRows) : undefined
+      })
+      return nextRows
+    })
+    setPropertyRowsDirty(true)
   }
 
   const saveSourceRows = async (): Promise<void> => {
@@ -528,6 +582,27 @@ function NodeEditor({
     await onSaveSourceLocations(node.id, locations)
     setSourceRows(locations)
     setSourceRowsDirty(false)
+  }
+
+  const saveModelProperties = async (): Promise<void> => {
+    const propertiesFromDom = propertyRowsRef.current
+      ? [...propertyRowsRef.current.querySelectorAll<HTMLElement>('[data-property-row]')]
+          .map((row) => {
+            const inputs = row.querySelectorAll<HTMLInputElement>('input')
+            return {
+              label: inputs[0]?.value.trim() ?? '',
+              description: inputs[1]?.value.trim() ?? ''
+            }
+          })
+          .filter((property) => property.label)
+      : []
+    const properties = normalizePropertyRows(
+      propertiesFromDom.length > 0 ? propertiesFromDom : propertyRows
+    )
+
+    await onPersistNodeById(node.id, { properties: properties.length > 0 ? properties : undefined })
+    setPropertyRows(properties)
+    setPropertyRowsDirty(false)
   }
 
   return (
@@ -637,6 +712,87 @@ function NodeEditor({
             data-testid="architecture-mention-warning"
           >
             {mentionWarnings.join('; ')}
+          </div>
+        ) : null}
+
+        {node.data.kind === 'model' ? (
+          <div
+            className="grid gap-2 rounded border border-border p-2"
+            data-testid="architecture-model-properties"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-muted-foreground">Properties</span>
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() =>
+                  updatePropertyRows((rows) => [...rows, { label: '', description: '' }])
+                }
+                disabled={syncing}
+                data-testid="architecture-model-property-add"
+              >
+                <Plus className="size-3" />
+                Add
+              </Button>
+            </div>
+            <div ref={propertyRowsRef} className="grid gap-2">
+              {propertyRows.map((property, index) => (
+                <div key={index} className="grid grid-cols-[1fr_1fr_auto] gap-2" data-property-row>
+                  <input
+                    className="rounded border border-border bg-background px-2 py-1 font-mono"
+                    defaultValue={property.label}
+                    placeholder="id"
+                    onChange={() => setPropertyRowsDirty(true)}
+                    disabled={syncing}
+                    data-testid="architecture-model-property-label"
+                    onBlur={() => {
+                      if (propertyRowsDirty) {
+                        void saveModelProperties()
+                      }
+                    }}
+                  />
+                  <input
+                    className="rounded border border-border bg-background px-2 py-1"
+                    defaultValue={property.description}
+                    placeholder="Unique task id"
+                    onChange={() => setPropertyRowsDirty(true)}
+                    disabled={syncing}
+                    data-testid="architecture-model-property-description"
+                    onBlur={() => {
+                      if (propertyRowsDirty) {
+                        void saveModelProperties()
+                      }
+                    }}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    onClick={() =>
+                      updatePropertyRows((rows) => rows.filter((_, rowIndex) => rowIndex !== index))
+                    }
+                    disabled={syncing}
+                    data-testid="architecture-model-property-delete"
+                  >
+                    <Trash2 className="size-3" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+            {propertyRows.length === 0 ? (
+              <div className="rounded border border-dashed border-border px-2 py-3 text-center text-xs text-muted-foreground">
+                No properties yet
+              </div>
+            ) : null}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void saveModelProperties()}
+              disabled={syncing || !propertyRowsDirty}
+              data-testid="architecture-model-property-save"
+            >
+              <Save className="size-3" />
+              Save properties
+            </Button>
           </div>
         ) : null}
 
@@ -819,9 +975,13 @@ function NodeEditor({
         <PanelTitle title="Relationships" />
         <div className="flex gap-2">
           <select
+            ref={edgeTargetSelectRef}
             className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1"
             value={targetNodeId}
-            onChange={(event) => onTargetNodeChange(event.currentTarget.value)}
+            onChange={(event) => {
+              edgeTargetIdRef.current = event.currentTarget.value
+              onTargetNodeChange(event.currentTarget.value)
+            }}
             data-testid="architecture-edge-target"
             disabled={syncing}
           >
@@ -835,9 +995,24 @@ function NodeEditor({
               ))}
           </select>
           <Button
+            type="button"
             variant="outline"
             size="sm"
-            onClick={() => void onAddEdge()}
+            onPointerDown={(event) => {
+              if (event.pointerType !== 'mouse') {
+                return
+              }
+              skipAddEdgeClickRef.current = true
+              event.preventDefault()
+              addRelationship()
+            }}
+            onClick={() => {
+              if (skipAddEdgeClickRef.current) {
+                skipAddEdgeClickRef.current = false
+                return
+              }
+              addRelationship()
+            }}
             disabled={syncing}
             data-testid="architecture-add-edge"
           >
@@ -1340,7 +1515,11 @@ function getMentionEdgeWarnings(model: C4ModelData, node: C4Node): string[] {
         candidate.data.name === rawName ||
         candidate.data.name.toLowerCase() === rawName.toLowerCase()
     )
-    if (target && !edgeKeys.has(`${node.id}->${target.id}`)) {
+    if (!target) {
+      warnings.push(`Mention ${rawName} does not match a sibling node`)
+      continue
+    }
+    if (!edgeKeys.has(`${node.id}->${target.id}`)) {
       warnings.push(`Mention ${target.data.name} needs a relationship edge`)
     }
   }

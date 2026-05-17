@@ -81,6 +81,61 @@ describe('registerArchitectureHandlers', () => {
     })
   })
 
+  it('bridges revisioned document reads and node patches through IPC', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-revision-'))
+    const send = vi.fn()
+
+    const first = (await handlers.get('architecture:writeModelDocument')!(
+      { sender: { send } },
+      {
+        projectPath,
+        model: {
+          nodes: [
+            {
+              id: 'api',
+              type: 'c4',
+              data: { name: 'API', description: 'Initial description', kind: 'system' }
+            }
+          ],
+          edges: [],
+          sourceMap: {},
+          groups: [],
+          flows: []
+        }
+      }
+    )) as { model: { nodes: { data: Record<string, unknown> }[] }; revision: string }
+    expect(first).toMatchObject({
+      model: expect.objectContaining({ nodes: expect.any(Array) }),
+      revision: expect.any(String)
+    })
+
+    const patched = await handlers.get('architecture:patchNodeData')!(
+      { sender: { send } },
+      {
+        projectPath,
+        nodeId: 'api',
+        patch: { name: 'API Local Draft' },
+        baseRevision: first.revision,
+        baseNodeData: first.model.nodes[0]!.data
+      }
+    )
+
+    expect(patched).toMatchObject({
+      model: expect.objectContaining({
+        nodes: [
+          expect.objectContaining({
+            data: expect.objectContaining({ name: 'API Local Draft' })
+          })
+        ]
+      }),
+      revision: expect.any(String)
+    })
+    expect(send).toHaveBeenLastCalledWith('architecture:modelChanged', {
+      projectPath,
+      fileName: 'model.scry'
+    })
+  })
+
   it('bridges project model management and AI prompt preparation through IPC', async () => {
     const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-models-'))
 
