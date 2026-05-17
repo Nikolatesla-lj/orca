@@ -33,7 +33,8 @@ const {
   registerAppHandlersMock,
   registerLinearHandlersMock,
   registerExportHandlersMock,
-  registerOnboardingHandlersMock
+  registerOnboardingHandlersMock,
+  registerArchitectureHandlersMock
 } = vi.hoisted(() => ({
   registerCliHandlersMock: vi.fn(),
   registerPreflightHandlersMock: vi.fn(),
@@ -67,7 +68,8 @@ const {
   registerAppHandlersMock: vi.fn(),
   registerLinearHandlersMock: vi.fn(),
   registerExportHandlersMock: vi.fn(),
-  registerOnboardingHandlersMock: vi.fn()
+  registerOnboardingHandlersMock: vi.fn(),
+  registerArchitectureHandlersMock: vi.fn()
 }))
 
 vi.mock('./onboarding', () => ({
@@ -193,6 +195,10 @@ vi.mock('./linear', () => ({
   registerLinearHandlers: registerLinearHandlersMock
 }))
 
+vi.mock('./architecture', () => ({
+  registerArchitectureHandlers: registerArchitectureHandlersMock
+}))
+
 import { registerCoreHandlers } from './register-core-handlers'
 
 describe('registerCoreHandlers', () => {
@@ -229,6 +235,7 @@ describe('registerCoreHandlers', () => {
     registerAppHandlersMock.mockReset()
     registerLinearHandlersMock.mockReset()
     registerExportHandlersMock.mockReset()
+    registerArchitectureHandlersMock.mockReset()
   })
 
   it('passes the store through to handler registrars that need it', () => {
@@ -279,6 +286,7 @@ describe('registerCoreHandlers', () => {
     expect(registerUpdaterHandlersMock).toHaveBeenCalled()
     expect(setTrustedBrowserRendererWebContentsIdMock).toHaveBeenCalledWith(null)
     expect(registerBrowserHandlersMock).toHaveBeenCalled()
+    expect(registerArchitectureHandlersMock).toHaveBeenCalled()
     expect(registerFilesystemWatcherHandlersMock).toHaveBeenCalled()
   })
 
@@ -312,6 +320,7 @@ describe('registerCoreHandlers', () => {
     expect(registerCliHandlersMock).not.toHaveBeenCalled()
     expect(registerPreflightHandlersMock).not.toHaveBeenCalled()
     expect(registerBrowserHandlersMock).not.toHaveBeenCalled()
+    expect(registerArchitectureHandlersMock).not.toHaveBeenCalled()
     // Why: ipcMain.handle throws on duplicate channel registration, so the
     // memory handler must not be wired up a second time on reactivation.
     expect(registerMemoryHandlersMock).not.toHaveBeenCalled()

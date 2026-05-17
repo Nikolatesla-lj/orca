@@ -137,4 +137,71 @@ test.describe('Architecture model session regressions', () => {
       .toBeGreaterThan(before)
     expect(await terminalTabCount(orcaPage)).toBe(before + 1)
   })
+
+  test('opens a dirty model with warnings instead of blanking the architecture panel', async ({
+    orcaPage
+  }) => {
+    const worktreePath = await getActiveWorktreePath(orcaPage)
+    rmSync(path.join(worktreePath, '.scryer'), { recursive: true, force: true })
+    const modelDir = path.join(worktreePath, '.scryer')
+    const modelPath = getModelPath(worktreePath)
+    await orcaPage.evaluate(async (projectPath) => {
+      await window.api.architecture.writeModel({
+        projectPath,
+        model: { nodes: [], edges: [] }
+      })
+    }, worktreePath)
+    const dirtyModel = {
+      nodes: [
+        {
+          id: 'api',
+          data: {
+            name: 'API',
+            description: 'Calls @[Ghost API]',
+            kind: 'container',
+            contract: {
+              expect: [
+                {
+                  text: 'Attach evidence',
+                  image: {
+                    filename: 'evidence.png',
+                    mimeType: 'image/png',
+                    dataUrl: 'data:image/png;base64,abc123'
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      edges: [],
+      sourceMap: {
+        api: [{ pattern: ' src/api.ts ', line: 9, endLine: 2 }],
+        ghost: [{ pattern: 'src/ghost.ts' }]
+      },
+      groups: [{ id: 'backend', name: 'Backend', nodeIds: ['api', 'ghost'] }],
+      flows: [
+        {
+          id: 'flow-1',
+          name: 'Dirty Flow',
+          steps: [
+            {
+              id: 'step-1',
+              branches: [{ condition: 42, steps: [{ id: 'branch-step' }] }]
+            }
+          ]
+        }
+      ]
+    }
+    expect(modelDir).toBe(path.dirname(modelPath))
+    writeFileSync(modelPath, `${JSON.stringify(dirtyModel, null, 2)}\n`)
+
+    await openArchitectureTab(orcaPage)
+
+    await expect(orcaPage.getByTestId('architecture-panel')).toBeVisible({ timeout: 30_000 })
+    await expect(orcaPage.getByTestId('architecture-model-warning')).toContainText('model warning')
+    await expect(
+      orcaPage.getByTestId('architecture-node-title').filter({ hasText: 'API' })
+    ).toBeVisible()
+  })
 })

@@ -10,7 +10,11 @@ vi.mock('electron', () => ({
   ipcMain: { handle: handleMock }
 }))
 
-import { registerArchitectureHandlers, shouldNotifyModelFile } from './architecture'
+import {
+  registerArchitectureHandlers,
+  shouldNotifyModelFile,
+  type ArchitectureIpcRegistrar
+} from './architecture'
 
 describe('registerArchitectureHandlers', () => {
   beforeEach(() => {
@@ -218,5 +222,27 @@ describe('registerArchitectureHandlers', () => {
     expect(await readFile(join(projectPath, '.codex', 'config.toml'), 'utf8')).toContain(
       'mcp_servers.scryer'
     )
+  })
+
+  it('can register against an injected IPC registrar for isolated tests', async () => {
+    const injectedHandlers = new Map<string, (_event: unknown, args: unknown) => unknown>()
+    const registrar: ArchitectureIpcRegistrar = {
+      handle: (channel, handler) => {
+        injectedHandlers.set(channel, handler as (_event: unknown, args: unknown) => unknown)
+      }
+    }
+    const handleSpy = vi.spyOn(registrar, 'handle')
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-injected-'))
+
+    registerArchitectureHandlers(registrar)
+
+    expect(handleSpy).toHaveBeenCalledWith('architecture:readModel', expect.any(Function))
+    expect(
+      await injectedHandlers.get('architecture:readModel')!(null, { projectPath })
+    ).toMatchObject({
+      nodes: [],
+      edges: [],
+      projectPath
+    })
   })
 })

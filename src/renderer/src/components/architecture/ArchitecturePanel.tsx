@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- Why: this panel still composes the migrated C4 canvas, flow, group, sync, and inspector surfaces while controller logic now lives in useArchitectureModelController. */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type React from 'react'
 import {
   Bot,
@@ -19,6 +19,7 @@ import { ArchitectureCanvas } from './ArchitectureCanvas'
 import { ArchitectureCommandPalette } from './ArchitectureCommandPalette'
 import { ArchitectureContextPanel } from './ArchitectureContextPanel'
 import { ArchitectureModelTree } from './ArchitectureModelTree'
+import { ArchitectureSectionBoundary } from './ArchitectureSectionBoundary'
 import { ArchitectureThemeEditor } from './ArchitectureThemeEditor'
 import { CodeLevelRack } from './CodeLevelRack'
 import { FlowScriptView } from './FlowScriptView'
@@ -33,6 +34,7 @@ import {
   normalizeScryerTheme,
   type ScryerThemeSettings
 } from '../../../../shared/scryer/theme'
+import { recordArchitecturePerformanceMetric } from './architecture-performance'
 
 const ARCHITECTURE_THEME_STORAGE_KEY = 'orca-scryer:architecture-theme'
 
@@ -68,6 +70,8 @@ export default function ArchitecturePanel({
 }: {
   workspace: ArchitectureWorkspace
 }): React.JSX.Element {
+  const renderStartedAtRef = useRef(performance.now())
+  renderStartedAtRef.current = performance.now()
   const {
     projectPath,
     model,
@@ -184,6 +188,10 @@ export default function ArchitecturePanel({
       color: 'var(--architecture-role-foreground)'
     } as React.CSSProperties
   }, [architectureTheme])
+
+  useEffect(() => {
+    recordArchitecturePerformanceMetric('render', performance.now() - renderStartedAtRef.current)
+  })
 
   useEffect(() => {
     try {
@@ -333,7 +341,17 @@ export default function ArchitecturePanel({
         >
           {activeModelName}.scry
         </span>
-        {message ? (
+        {model?.validationWarnings?.length ? (
+          <span
+            className="min-w-0 flex-1 truncate text-xs text-amber-600 dark:text-amber-300"
+            data-testid="architecture-model-warning"
+            title={model.validationWarnings.map((warning) => warning.message).join('\n')}
+          >
+            {model.validationWarnings.length} model warning
+            {model.validationWarnings.length === 1 ? '' : 's'}:{' '}
+            {model.validationWarnings[0].message}
+          </span>
+        ) : message ? (
           <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{message}</span>
         ) : (
           <span className="flex-1" />
@@ -455,7 +473,12 @@ export default function ArchitecturePanel({
       </div>
 
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
-        {mainContent}
+        <ArchitectureSectionBoundary
+          name="Architecture workspace"
+          resetKey={`${activeModelName}:${architectureMode}:${activeFlowId ?? ''}:${currentParentId ?? ''}`}
+        >
+          {mainContent}
+        </ArchitectureSectionBoundary>
         {showBuildWithAi ? (
           <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-background/40">
             <div className="pointer-events-auto grid w-[380px] gap-2 rounded border border-border bg-background p-4 shadow-lg">
@@ -525,60 +548,67 @@ export default function ArchitecturePanel({
   )
 
   const contextPanel = (
-    <ArchitectureContextPanel
-      model={model}
-      selectedNode={selectedNode}
-      selectedEdge={selectedEdge}
-      selectedGroup={selectedGroup}
-      multiSelectedNodeIds={multiSelectedNodeIds}
-      totalSelected={totalSelected}
-      canGroupSelection={canGroupMultiSelection}
-      targetNodeId={targetNodeId}
-      sourcePattern={sourcePattern}
-      syncing={editingLocked}
-      onAddNode={addNode}
-      onSave={() => {
-        if (model) {
-          return persist(model, 'Saved architecture model')
-        }
-        return undefined
-      }}
-      onDeleteNode={deleteSelected}
-      onDeleteEdge={deleteSelectedEdge}
-      onUpdateNodeDraft={updateSelectedNodeDraft}
-      onUpdateNode={updateSelectedNode}
-      onPersistNodeById={persistNodePatchById}
-      onUpdateEdge={updateSelectedEdge}
-      onSourcePatternChange={setSourcePattern}
-      onSaveSourcePattern={saveSourcePattern}
-      onSaveSourceLocations={saveSourceLocations}
-      onTargetNodeChange={setTargetNodeId}
-      onAddEdge={addEdge}
-      onCreateGroupFromSelection={createGroupFromSelection}
-      onAddSelectionToGroup={addSelectionToGroup}
-      onUpdateGroup={patchSelectedGroup}
-      onDeleteGroup={deleteSelectedGroup}
-      onRemoveGroupMember={removeSelectedGroupMember}
-      groupsPaletteMode={architectureMode === 'groups' && !!model}
-      nodeDiff={selectedNode ? nodeDiffs.get(selectedNode.id) : undefined}
-      onDismissNodeDiff={dismissNodeDiff}
-    />
+    <ArchitectureSectionBoundary
+      name="Architecture inspector"
+      resetKey={`${activeModelName}:${selectedNodeId ?? ''}:${selectedEdgeId ?? ''}:${selectedGroupId ?? ''}`}
+    >
+      <ArchitectureContextPanel
+        model={model}
+        selectedNode={selectedNode}
+        selectedEdge={selectedEdge}
+        selectedGroup={selectedGroup}
+        multiSelectedNodeIds={multiSelectedNodeIds}
+        totalSelected={totalSelected}
+        canGroupSelection={canGroupMultiSelection}
+        targetNodeId={targetNodeId}
+        sourcePattern={sourcePattern}
+        syncing={editingLocked}
+        onAddNode={addNode}
+        onSave={() => {
+          if (model) {
+            return persist(model, 'Saved architecture model')
+          }
+          return undefined
+        }}
+        onDeleteNode={deleteSelected}
+        onDeleteEdge={deleteSelectedEdge}
+        onUpdateNodeDraft={updateSelectedNodeDraft}
+        onUpdateNode={updateSelectedNode}
+        onPersistNodeById={persistNodePatchById}
+        onUpdateEdge={updateSelectedEdge}
+        onSourcePatternChange={setSourcePattern}
+        onSaveSourcePattern={saveSourcePattern}
+        onSaveSourceLocations={saveSourceLocations}
+        onTargetNodeChange={setTargetNodeId}
+        onAddEdge={addEdge}
+        onCreateGroupFromSelection={createGroupFromSelection}
+        onAddSelectionToGroup={addSelectionToGroup}
+        onUpdateGroup={patchSelectedGroup}
+        onDeleteGroup={deleteSelectedGroup}
+        onRemoveGroupMember={removeSelectedGroupMember}
+        groupsPaletteMode={architectureMode === 'groups' && !!model}
+        nodeDiff={selectedNode ? nodeDiffs.get(selectedNode.id) : undefined}
+        onDismissNodeDiff={dismissNodeDiff}
+      />
+    </ArchitectureSectionBoundary>
   )
 
   const modelTree = model ? (
-    <ArchitectureModelTree
-      model={model}
-      selectedNodeId={selectedNodeId}
-      activeFlowId={activeFlowId}
-      onSelectNode={(nodeId) => {
-        setArchitectureMode('topology')
-        navigateToNode(nodeId)
-      }}
-      onSelectFlow={(flowId) => {
-        setArchitectureMode('flows')
-        setActiveFlowId(flowId)
-      }}
-    />
+    <ArchitectureSectionBoundary name="Architecture tree" resetKey={activeModelName}>
+      <ArchitectureModelTree
+        model={model}
+        selectedNodeId={selectedNodeId}
+        activeFlowId={activeFlowId}
+        onSelectNode={(nodeId) => {
+          setArchitectureMode('topology')
+          navigateToNode(nodeId)
+        }}
+        onSelectFlow={(flowId) => {
+          setArchitectureMode('flows')
+          setActiveFlowId(flowId)
+        }}
+      />
+    </ArchitectureSectionBoundary>
   ) : null
 
   const panelContent =

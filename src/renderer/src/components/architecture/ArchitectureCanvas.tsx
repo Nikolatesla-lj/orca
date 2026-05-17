@@ -38,6 +38,7 @@ import { Button } from '../ui/button'
 import { edgeTypes, type ArchitectureFlowEdge } from './edges'
 import { autoLayoutVisibleNodes, decorateEdgesForRouting } from './layout/architecture-layout'
 import { nodeTypes, type ArchitectureFlowNode } from './nodes'
+import { createArchitecturePerformanceRecorder } from './architecture-performance'
 
 type ArchitectureCanvasProps = {
   model: C4ModelData
@@ -94,6 +95,7 @@ function ArchitectureCanvasInner({
 }: ArchitectureCanvasProps): React.JSX.Element {
   const suppressNativeSelectionRef = useRef(false)
   const reactFlow = useReactFlow<ArchitectureFlowNode, ArchitectureFlowEdge>()
+  const performanceRecorder = useMemo(() => createArchitecturePerformanceRecorder(), [])
   const [contextMenu, setContextMenu] = useState<{
     x: number
     y: number
@@ -366,10 +368,12 @@ function ArchitectureCanvasInner({
     if (syncing) {
       return
     }
-    const layoutNodes = autoLayoutVisibleNodes(view.visibleNodes, view.visibleEdges, {
-      codeLevel: view.currentParentKind === 'component',
-      fullRelayout: true
-    })
+    const layoutNodes = performanceRecorder.measure('auto-layout', () =>
+      autoLayoutVisibleNodes(view.visibleNodes, view.visibleEdges, {
+        codeLevel: view.currentParentKind === 'component',
+        fullRelayout: true
+      })
+    )
     const positions = new Map(
       layoutNodes
         .filter((node) => !node.data._reference && node.position)
@@ -393,7 +397,14 @@ function ArchitectureCanvasInner({
       })
       return changed ? { ...current, nodes } : null
     }, 'Saved auto layout')
-  }, [onModelChange, syncing, view.currentParentKind, view.visibleEdges, view.visibleNodes])
+  }, [
+    onModelChange,
+    performanceRecorder,
+    syncing,
+    view.currentParentKind,
+    view.visibleEdges,
+    view.visibleNodes
+  ])
 
   const navigateToRoot = useCallback(() => onExpandedPathChange([]), [onExpandedPathChange])
   const navigateToBreadcrumb = useCallback(

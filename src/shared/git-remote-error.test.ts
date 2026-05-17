@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isNoUpstreamError } from './git-remote-error'
+import { isNoUpstreamError, normalizeGitErrorMessage } from './git-remote-error'
 
 describe('isNoUpstreamError', () => {
   it('treats a missing HEAD@{u} tracking ref as no upstream', () => {
@@ -18,5 +18,22 @@ describe('isNoUpstreamError', () => {
     )
 
     expect(isNoUpstreamError(error)).toBe(false)
+  })
+})
+
+describe('normalizeGitErrorMessage', () => {
+  it('normalizes git-version-specific non-repository messages', () => {
+    expect(
+      normalizeGitErrorMessage(
+        new Error('fatal: not a git repository (or any of the parent directories): .git'),
+        'upstream'
+      )
+    ).toBe('Not a git repository.')
+    expect(
+      normalizeGitErrorMessage(
+        new Error('fatal: Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).'),
+        'upstream'
+      )
+    ).toBe('Not a git repository.')
   })
 })

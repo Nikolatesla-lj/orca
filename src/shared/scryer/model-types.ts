@@ -41,6 +41,13 @@ export type SourceLocation = {
   command?: string
 }
 
+export type ModelValidationWarning = {
+  kind: 'missing-mention'
+  path: string
+  reference: string
+  message: string
+}
+
 export type ModelProperty = {
   label: string
   description: string
@@ -141,6 +148,7 @@ export type C4ModelData = {
   refPositions?: Record<string, { x: number; y: number }>
   groups?: Group[]
   flows?: Flow[]
+  validationWarnings?: ModelValidationWarning[]
 }
 
 export type DriftedNode = {

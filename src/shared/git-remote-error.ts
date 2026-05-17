@@ -64,6 +64,10 @@ export function normalizeGitErrorMessage(error: unknown, operation?: GitRemoteOp
     return 'Branch has no upstream. Publish the branch first.'
   }
 
+  if (raw.includes('not a git repository') || raw.includes('Stopping at filesystem boundary')) {
+    return 'Not a git repository.'
+  }
+
   // Fallthrough: extract only the tail stderr line. `raw` was already
   // credential-scrubbed at the top of the function, so no further scrub needed.
   return extractTailLine(raw)

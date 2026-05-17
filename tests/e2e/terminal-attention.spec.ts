@@ -176,35 +176,19 @@ test.describe('Terminal attention', () => {
     const activePtyId = await waitForActivePanePtyId(orcaPage)
     await proveShellReadyWithSingleWrite(orcaPage, activePtyId)
 
-    // Emit the BEL, then a deterministic OSC title marker. When the marker
-    // title lands, all prior PTY bytes (including the BEL) have been
-    // processed — we can then safely assert unread state without racing the
-    // async PTY pipeline.
+    // Emit the BEL, then a deterministic visible marker. When the marker lands
+    // in the terminal buffer, all prior PTY bytes (including the BEL) have been
+    // processed. Do not use OSC title as the marker: shell prompt hooks can
+    // immediately overwrite titles with cwd/user info, making the poll flaky.
     await emitBell(orcaPage, activePtyId)
-    const MARKER_TITLE = 'focused-tab-bell-marker'
-    await execInTerminal(
-      orcaPage,
-      activePtyId,
-      `node -e "process.stdout.write('\\u001b]0;${MARKER_TITLE}\\u0007')"`
-    )
+    const FLUSH_MARKER = `__FOCUSED_TAB_BELL_FLUSH_${Date.now()}__`
+    await execInTerminal(orcaPage, activePtyId, `printf '${FLUSH_MARKER}\\n'`)
 
     await expect
-      .poll(
-        async () =>
-          orcaPage.evaluate((want) => {
-            const store = window.__store
-            if (!store) {
-              return false
-            }
-            return Object.values(store.getState().tabsByWorktree ?? {})
-              .flat()
-              .some((tab) => tab.title === want)
-          }, MARKER_TITLE),
-        {
-          timeout: 10_000,
-          message: 'Marker title did not land — byte stream may not have been flushed'
-        }
-      )
+      .poll(async () => (await getTerminalContent(orcaPage)).includes(FLUSH_MARKER), {
+        timeout: 10_000,
+        message: 'Flush marker did not land — byte stream may not have been processed'
+      })
       .toBe(true)
 
     // The focused tab is now unread — the bell persists until the user

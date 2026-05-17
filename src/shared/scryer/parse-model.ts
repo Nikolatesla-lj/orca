@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Why: this shared parser owns all legacy Scryer model normalization so malformed models are cleaned before they reach IPC, MCP, or the renderer. */
 import type {
   C4Edge,
   C4Kind,
@@ -5,11 +6,15 @@ import type {
   C4Node,
   C4NodeData,
   Contract,
+  ContractImage,
   ContractItem,
   Flow,
+  FlowBranch,
   FlowStep,
   FlowTransition,
   Group,
+  ModelValidationWarning,
+  SourceLocation,
   Status
 } from './model-types'
 
@@ -19,8 +24,47 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
-function isContractItem(value: unknown): value is ContractItem {
-  return typeof value === 'string' || (isRecord(value) && typeof value.text === 'string')
+function normalizeContractImage(raw: unknown): ContractImage | undefined {
+  if (!isRecord(raw)) {
+    return undefined
+  }
+  const dataUrl = typeof raw.dataUrl === 'string' ? raw.dataUrl : undefined
+  const rawData = typeof raw.data === 'string' ? raw.data : dataUrl
+  if (!rawData) {
+    return undefined
+  }
+  const match = rawData.match(/^data:([^;,]+);base64,(.*)$/)
+  const data = match ? match[2] : rawData
+  const mimeType =
+    typeof raw.mimeType === 'string'
+      ? raw.mimeType
+      : typeof raw.type === 'string'
+        ? raw.type
+        : (match?.[1] ?? 'application/octet-stream')
+  return {
+    filename:
+      typeof raw.filename === 'string' && raw.filename.trim() ? raw.filename.trim() : 'image',
+    mimeType,
+    data
+  }
+}
+
+function normalizeContractItem(value: unknown): ContractItem | null {
+  if (typeof value === 'string') {
+    return value.trim()
+  }
+  if (!isRecord(value) || typeof value.text !== 'string') {
+    return null
+  }
+  const image = normalizeContractImage(value.image)
+  const url = typeof value.url === 'string' ? value.url.trim() || undefined : undefined
+  const item = {
+    text: value.text.trim(),
+    ...(typeof value.passed === 'boolean' ? { passed: value.passed } : {}),
+    ...(url ? { url } : {}),
+    ...(image ? { image } : {})
+  }
+  return item
 }
 
 function migrateContract(raw: unknown): Contract {
@@ -30,7 +74,7 @@ function migrateContract(raw: unknown): Contract {
   }
   const migrate = (value: unknown): ContractItem[] => {
     if (Array.isArray(value)) {
-      return value.filter(isContractItem)
+      return value.map(normalizeContractItem).filter((item): item is ContractItem => item !== null)
     }
     if (typeof value === 'string') {
       return value
@@ -44,6 +88,28 @@ function migrateContract(raw: unknown): Contract {
     expect: migrate(raw.expect ?? raw.always),
     ask: migrate(raw.ask),
     never: migrate(raw.never)
+  }
+}
+
+function normalizeFlowStep(rawStep: unknown): FlowStep {
+  const step = isRecord(rawStep) ? rawStep : {}
+  const id =
+    typeof step.id === 'string' && step.id.trim() ? step.id.trim() : globalThis.crypto.randomUUID()
+  const branches = Array.isArray(step.branches) ? step.branches.map(normalizeFlowBranch) : undefined
+  return {
+    ...(step as Partial<FlowStep>),
+    id,
+    label: typeof step.label === 'string' ? step.label : '',
+    description: typeof step.description === 'string' ? step.description : '',
+    branches
+  }
+}
+
+function normalizeFlowBranch(rawBranch: unknown): FlowBranch {
+  const branch = isRecord(rawBranch) ? rawBranch : {}
+  return {
+    condition: typeof branch.condition === 'string' ? branch.condition : '',
+    steps: Array.isArray(branch.steps) ? branch.steps.map(normalizeFlowStep) : []
   }
 }
 
@@ -138,6 +204,131 @@ function normalizeNode(rawNode: unknown): C4Node {
   }
 }
 
+function normalizeSourceLocation(rawLocation: unknown): SourceLocation | null {
+  if (!isRecord(rawLocation) || typeof rawLocation.pattern !== 'string') {
+    return null
+  }
+  const pattern = rawLocation.pattern.trim()
+  if (!pattern) {
+    return null
+  }
+  const rawLine = Number(rawLocation.line)
+  const rawEndLine = Number(rawLocation.endLine)
+  const line = Number.isInteger(rawLine) && rawLine > 0 ? rawLine : undefined
+  const endLine = Number.isInteger(rawEndLine) && rawEndLine > 0 ? rawEndLine : undefined
+  const normalizedLine =
+    line !== undefined && endLine !== undefined && endLine < line ? endLine : line
+  const normalizedEndLine =
+    line !== undefined && endLine !== undefined && endLine < line ? line : endLine
+  const command =
+    typeof rawLocation.command === 'string' && rawLocation.command.trim()
+      ? rawLocation.command.trim()
+      : undefined
+  return {
+    pattern,
+    ...(normalizedLine !== undefined ? { line: normalizedLine } : {}),
+    ...(normalizedEndLine !== undefined ? { endLine: normalizedEndLine } : {}),
+    ...(command ? { command } : {})
+  }
+}
+
+function normalizeSourceMap(
+  rawSourceMap: unknown,
+  validKeys: Set<string>
+): Record<string, SourceLocation[]> {
+  if (!isRecord(rawSourceMap)) {
+    return {}
+  }
+  const sourceMap: Record<string, SourceLocation[]> = {}
+  for (const [key, value] of Object.entries(rawSourceMap)) {
+    if (!validKeys.has(key) || !Array.isArray(value)) {
+      continue
+    }
+    const locations = value
+      .map(normalizeSourceLocation)
+      .filter((location): location is SourceLocation => location !== null)
+    if (locations.length > 0) {
+      sourceMap[key] = locations
+    }
+  }
+  return sourceMap
+}
+
+function normalizeGroups(rawGroups: unknown, nodeIds: Set<string>): Group[] {
+  if (!Array.isArray(rawGroups)) {
+    return []
+  }
+  return rawGroups.flatMap((rawGroup) => {
+    const group = isRecord(rawGroup) ? rawGroup : {}
+    if (typeof group.id !== 'string' || typeof group.name !== 'string') {
+      return []
+    }
+    const rawMemberIds = Array.isArray(group.memberIds)
+      ? group.memberIds
+      : Array.isArray(group.nodeIds)
+        ? group.nodeIds
+        : []
+    const memberIds = rawMemberIds.filter(
+      (memberId): memberId is string => typeof memberId === 'string' && nodeIds.has(memberId)
+    )
+    return [
+      {
+        id: group.id,
+        name: group.name,
+        ...(typeof group.description === 'string' ? { description: group.description } : {}),
+        memberIds,
+        ...(typeof group.parentGroupId === 'string' ? { parentGroupId: group.parentGroupId } : {}),
+        ...(group.contract ? { contract: migrateContract(group.contract) } : {})
+      }
+    ]
+  })
+}
+
+function collectMentionWarnings(model: {
+  nodes: C4Node[]
+  flows: Flow[]
+}): ModelValidationWarning[] {
+  const knownMentions = new Set<string>()
+  for (const node of model.nodes) {
+    knownMentions.add(node.id)
+    knownMentions.add(node.data.name)
+  }
+  const warnings: ModelValidationWarning[] = []
+  const checkText = (text: string | undefined, path: string): void => {
+    if (!text) {
+      return
+    }
+    for (const match of text.matchAll(/@\[([^\]]+)\]/g)) {
+      const reference = match[1]?.trim()
+      if (!reference || knownMentions.has(reference)) {
+        continue
+      }
+      warnings.push({
+        kind: 'missing-mention',
+        path,
+        reference,
+        message: `Mention '${reference}' does not match a model node`
+      })
+    }
+  }
+  const visitSteps = (flowId: string, steps: FlowStep[]): void => {
+    for (const step of steps) {
+      checkText(step.label, `flows.${flowId}.steps.${step.id}.label`)
+      checkText(step.description, `flows.${flowId}.steps.${step.id}.description`)
+      for (const branch of step.branches ?? []) {
+        visitSteps(flowId, branch.steps)
+      }
+    }
+  }
+  for (const node of model.nodes) {
+    checkText(node.data.description, `nodes.${node.id}.description`)
+  }
+  for (const flow of model.flows) {
+    visitSteps(flow.id, flow.steps)
+  }
+  return warnings
+}
+
 export function parseModelData(raw: string): C4ModelData {
   let data: unknown
   try {
@@ -164,7 +355,7 @@ export function parseModelData(raw: string): C4ModelData {
     Array.isArray(root.flows) ? root.flows : Array.isArray(root.scenarios) ? root.scenarios : []
   ).map((flow): Flow => {
     const record = isRecord(flow) ? flow : {}
-    const steps = Array.isArray(record.steps) ? (record.steps as FlowStep[]) : []
+    const steps = Array.isArray(record.steps) ? record.steps.map(normalizeFlowStep) : []
     const transitions = Array.isArray(record.transitions)
       ? (record.transitions as FlowTransition[])
       : []
@@ -176,27 +367,31 @@ export function parseModelData(raw: string): C4ModelData {
       transitions: undefined
     }
   })
+  const nodeIds = new Set(nodes.map((node) => node.id))
+  const validSourceKeys = new Set([...nodeIds, ...flows.map((flow) => flow.id)])
+  const groups = normalizeGroups(root.groups, nodeIds)
+  const sourceMap = normalizeSourceMap(root.sourceMap, validSourceKeys)
+  const validationWarnings = collectMentionWarnings({ nodes, flows })
 
-  return {
+  const parsed: C4ModelData = {
     nodes,
     edges,
     startingLevel:
       root.startingLevel === 'container' || root.startingLevel === 'component'
         ? root.startingLevel
         : 'system',
-    sourceMap: isRecord(root.sourceMap) ? (root.sourceMap as C4ModelData['sourceMap']) : {},
+    sourceMap,
     projectPath: typeof root.projectPath === 'string' ? root.projectPath : undefined,
     refPositions: isRecord(root.refPositions)
       ? (root.refPositions as C4ModelData['refPositions'])
       : {},
-    groups: (Array.isArray(root.groups) ? root.groups : []).map((group) => {
-      const { kind: _kind, ...rest } = isRecord(group) ? group : {}
-      return rest as unknown as Group
-    }),
+    groups,
     flows
   }
+  return validationWarnings.length > 0 ? { ...parsed, validationWarnings } : parsed
 }
 
 export function serializeModelData(model: C4ModelData): string {
-  return JSON.stringify(model, null, 2)
+  const { validationWarnings: _validationWarnings, ...serializable } = model
+  return JSON.stringify(serializable, null, 2)
 }

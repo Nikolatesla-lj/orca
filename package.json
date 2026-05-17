@@ -10,6 +10,7 @@
   },
   "main": "./out/main/index.js",
   "scripts": {
+    "preflight:node": "node config/scripts/verify-node-version.mjs",
     "format": "oxfmt --write .",
     "lint": "oxlint",
     "prepare": "husky",
@@ -31,6 +32,7 @@
     "build:release": "pnpm run build:relay && pnpm run build:electron-vite && pnpm run build:cli",
     "postinstall": "pnpm rebuild electron && node config/scripts/rebuild-native-deps.mjs",
     "rebuild:electron": "node config/scripts/rebuild-native-deps.mjs",
+    "rebuild:native:node": "node config/scripts/rebuild-node-native-deps.mjs",
     "build:unpack": "pnpm run build && electron-builder --config config/electron-builder.config.cjs --dir",
     "build:win": "pnpm run build && electron-builder --config config/electron-builder.config.cjs --win",
     "build:icons": "bash resources/icon-source/generate.sh",
