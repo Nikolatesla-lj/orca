@@ -30,7 +30,6 @@ type PendingModelWrite = {
   projectPath: string
   modelName: string
   model: C4ModelData
-  baseRevision: string | null
 }
 
 export function sanitizeClientModelName(modelName?: string | null): string {
@@ -66,6 +65,7 @@ export function useArchitectureModelSession({
   const revisionRef = useRef<string | null>(null)
   const pendingModelWriteRef = useRef<PendingModelWrite | null>(null)
   const pendingModelWriteTimerRef = useRef<number | null>(null)
+  const inFlightModelWriteRef = useRef<Promise<void> | null>(null)
   const [activeModelName, setActiveModelName] = useState(() =>
     sanitizeClientModelName(workspace.modelRef)
   )
@@ -107,33 +107,48 @@ export function useArchitectureModelSession({
   )
 
   const writePendingModelNow = useCallback(async () => {
-    const pending = pendingModelWriteRef.current
-    if (!pending) {
-      return
-    }
-    pendingModelWriteRef.current = null
     if (pendingModelWriteTimerRef.current !== null) {
       window.clearTimeout(pendingModelWriteTimerRef.current)
       pendingModelWriteTimerRef.current = null
     }
+
+    const inFlightWrite = inFlightModelWriteRef.current
+    if (inFlightWrite) {
+      await inFlightWrite
+      return
+    }
+
+    const write = (async () => {
+      while (pendingModelWriteRef.current) {
+        const pending = pendingModelWriteRef.current
+        pendingModelWriteRef.current = null
+        const selfWritePath = joinPath(
+          joinPath(pending.projectPath, '.scryer'),
+          `${pending.modelName}.scry`
+        )
+        recordArchitectureSelfWrite(selfWritePath)
+        const result = await performanceRecorderRef.current.measureAsync('save', () =>
+          window.api.architecture.writeModelDocument({
+            projectPath: pending.projectPath,
+            model: pending.model,
+            modelName: pending.modelName,
+            baseRevision: revisionRef.current
+          })
+        )
+        revisionRef.current = result.revision
+      }
+    })()
+
+    inFlightModelWriteRef.current = write
     try {
-      const selfWritePath = joinPath(
-        joinPath(pending.projectPath, '.scryer'),
-        `${pending.modelName}.scry`
-      )
-      recordArchitectureSelfWrite(selfWritePath)
-      const result = await performanceRecorderRef.current.measureAsync('save', () =>
-        window.api.architecture.writeModelDocument({
-          projectPath: pending.projectPath,
-          model: pending.model,
-          modelName: pending.modelName,
-          baseRevision: pending.baseRevision
-        })
-      )
-      revisionRef.current = result.revision
+      await write
     } catch (writeError) {
       onError(writeError)
       throw writeError
+    } finally {
+      if (inFlightModelWriteRef.current === write) {
+        inFlightModelWriteRef.current = null
+      }
     }
   }, [onError])
 
@@ -145,8 +160,7 @@ export function useArchitectureModelSession({
       pendingModelWriteRef.current = {
         projectPath,
         modelName: activeModelNameRef.current,
-        model: nextModel,
-        baseRevision: revisionRef.current
+        model: nextModel
       }
       if (pendingModelWriteTimerRef.current !== null) {
         window.clearTimeout(pendingModelWriteTimerRef.current)

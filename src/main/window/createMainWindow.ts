@@ -32,6 +32,14 @@ function forceRepaint(window: BrowserWindow): void {
   }, 32)
 }
 
+function isCtrlTabSwitchKey(input: Electron.Input): boolean {
+  return input.code === 'Tab' && input.control && !input.meta && !input.alt
+}
+
+function isControlKeyRelease(input: Electron.Input): boolean {
+  return input.type === 'keyUp' && (input.code === 'ControlLeft' || input.code === 'ControlRight')
+}
+
 // Why: the titlebar is 36px (border-box, 1px border-bottom).  The visual
 // center of the CSS-centered content sits at ~18 CSS px from the top.
 // At zoom factor z that becomes 18·z window px.  Traffic lights are
@@ -60,6 +68,19 @@ type CreateMainWindowOptions = {
    *  latch must be cleared or later window closes will be misclassified as
    *  quit attempts. */
   onQuitAborted?: () => void
+  onRendererProcessGone?: (details: Electron.RenderProcessGoneDetails) => void
+  /** Why: main-process startup must register IPC handlers before the renderer
+   *  begins booting, or eager renderer calls can race into missing channels. */
+  deferLoad?: boolean
+  title?: string
+}
+
+export function loadMainWindow(mainWindow: BrowserWindow): void {
+  if (is.dev && process.env.ELECTRON_RENDERER_URL) {
+    void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
+  } else {
+    void mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+  }
 }
 
 export function createMainWindow(
@@ -128,6 +149,12 @@ export function createMainWindow(
   })()
 
   const settings = store?.getSettings()
+  browserManager.setDictationShortcutForwardingPredicate(() => {
+    // Why: focused webview guests do not expose a safe transcript insertion
+    // target yet. Let Cmd/Ctrl+E continue to the page instead of starting a
+    // dictation session whose final text would be dropped.
+    return false
+  })
   const blur = settings?.windowBackgroundBlur ?? false
   // Why: native blur requires platform-specific Electron APIs. macOS uses
   // vibrancy (needs transparent: true), Windows uses backgroundMaterial.
@@ -147,6 +174,7 @@ export function createMainWindow(
     ...(savedBounds ? { x: savedBounds.x, y: savedBounds.y } : {}),
     minWidth: MIN_WIDTH,
     minHeight: MIN_HEIGHT,
+    title: opts?.title ?? 'Orca',
     show: false,
     // Why: on macOS the menu lives in the system menu bar, so the in-window
     // menu bar is irrelevant. On Windows/Linux we auto-hide so the menu bar
@@ -186,13 +214,21 @@ export function createMainWindow(
     }
   })
 
-  if (process.platform === 'darwin') {
+  const e2eConfig = getMainE2EConfig()
+
+  if (process.platform === 'darwin' || e2eConfig.headless) {
     // Why: persistent parked webviews use separate compositor layers, and on
     // recent macOS releases those layers can fail to repaint after occlusion or
     // restore. Disabling main-window throttling and forcing a repaint on
     // visibility transitions hardens Orca against the same black-surface
     // failure mode seen during browser-tab restore and tab switching.
+    // Why: E2E headless keeps the window hidden. On Linux/Electron 41 that can
+    // pause requestAnimationFrame, which makes Playwright actionability checks
+    // wait forever for elements to become "stable" before clicking.
     mainWindow.webContents.setBackgroundThrottling(false)
+  }
+
+  if (process.platform === 'darwin') {
     mainWindow.on('restore', () => {
       forceRepaint(mainWindow)
     })
@@ -223,11 +259,12 @@ export function createMainWindow(
     }
     handledInitialReadyToShow = true
 
-    // Why: in E2E headless mode, the window stays hidden to avoid stealing
-    // focus and screen real estate during test runs. Playwright interacts
-    // with the renderer via CDP, which works without a visible window.
-    const e2eConfig = getMainE2EConfig()
     if (e2eConfig.headless) {
+      // Why: Playwright's actionability checks wait for requestAnimationFrame
+      // before clicking. Electron 41 on Linux can pause rAF for fully hidden
+      // windows even with background throttling disabled, so keep the window
+      // visible but unfocused in the virtual/display-backed E2E environment.
+      mainWindow.showInactive()
       return
     }
     if (savedMaximized) {
@@ -454,26 +491,51 @@ export function createMainWindow(
   const resetMarkdownEditorFocus = (): void => {
     markdownEditorFocused = false
   }
-  mainWindow.webContents.on('render-process-gone', resetMarkdownEditorFocus)
+  let rendererProcessGone = false
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    rendererProcessGone = true
+    resetMarkdownEditorFocus()
+    opts?.onRendererProcessGone?.(details)
+    console.error('[window] Renderer process gone; close confirmation will be bypassed', details)
+  })
   mainWindow.webContents.on('destroyed', resetMarkdownEditorFocus)
   mainWindow.webContents.on('did-start-navigation', (_e, _url, _isInPlace, isMainFrame) => {
     if (isMainFrame) {
       resetMarkdownEditorFocus()
     }
   })
+  mainWindow.webContents.on('did-finish-load', () => {
+    rendererProcessGone = false
+  })
 
+  let ctrlTabSwitching = false
   mainWindow.webContents.on('before-input-event', (event, input) => {
-    if (input.type !== 'keyDown') {
-      return
-    }
-
-    if (is.dev && input.code === 'F12') {
+    if (input.type === 'keyDown' && is.dev && input.code === 'F12') {
       event.preventDefault()
       if (mainWindow.webContents.isDevToolsOpened()) {
         mainWindow.webContents.closeDevTools()
       } else {
         mainWindow.webContents.openDevTools({ mode: 'undocked' })
       }
+      return
+    }
+
+    if (isCtrlTabSwitchKey(input)) {
+      // Why: Ctrl+Tab is a held-key interaction. Route both press and release
+      // through IPC so renderer keyup suppression from preventDefault cannot
+      // leave the switcher overlay stranded.
+      event.preventDefault()
+      if (input.type === 'keyDown') {
+        ctrlTabSwitching = true
+        mainWindow.webContents.send('ui:ctrlTabKeyDown', { shiftKey: input.shift === true })
+      }
+      return
+    }
+
+    if (ctrlTabSwitching && isControlKeyRelease(input)) {
+      event.preventDefault()
+      ctrlTabSwitching = false
+      mainWindow.webContents.send('ui:ctrlTabKeyUp')
       return
     }
 
@@ -503,6 +565,34 @@ export function createMainWindow(
       return
     }
 
+    if (input.type !== 'keyDown') {
+      return
+    }
+
+    // Why: in hold mode, Cmd+E must NOT be intercepted here. Calling
+    // preventDefault() in before-input-event suppresses ALL subsequent DOM
+    // events for the key combo — including the keyUp the renderer needs to
+    // detect release. By letting the event through, the renderer's
+    // capture-phase DOM listeners handle both keydown and keyup normally.
+    // Toggle mode still uses the IPC path since it doesn't need keyUp.
+    if (action.type === 'dictationKeyDown') {
+      const voiceSettings = store?.getSettings().voice
+      if (!voiceSettings?.enabled || !voiceSettings.sttModel) {
+        return
+      }
+      const dictationMode = voiceSettings.dictationMode ?? 'toggle'
+      if (dictationMode === 'hold') {
+        return
+      }
+      if (input.isAutoRepeat) {
+        event.preventDefault()
+        return
+      }
+      event.preventDefault()
+      mainWindow.webContents.send('ui:dictationKeyDown')
+      return
+    }
+
     event.preventDefault()
 
     if (action.type === 'zoom') {
@@ -529,8 +619,12 @@ export function createMainWindow(
       return
     }
 
+    if (action.type === 'toggleFloatingTerminal') {
+      mainWindow.webContents.send('ui:toggleFloatingTerminal')
+      return
+    }
+
     if (action.type === 'openQuickOpen') {
-      // Forward Cmd/Ctrl+P to trigger Quick Open
       mainWindow.webContents.send('ui:openQuickOpen')
       return
     }
@@ -544,7 +638,6 @@ export function createMainWindow(
     }
 
     if (action.type === 'jumpToWorktreeIndex') {
-      // Forward Cmd/Ctrl+1-9 for quick worktree switching
       mainWindow.webContents.send('ui:jumpToWorktreeIndex', action.index)
       return
     }
@@ -583,6 +676,18 @@ export function createMainWindow(
       // teardown events can't clobber the user's saved window size — which
       // would otherwise make the post-update relaunch come up at minWidth ×
       // minHeight (issue surfaced in v1.3.26-rc2).
+      windowClosing = true
+      if (boundsTimer) {
+        clearTimeout(boundsTimer)
+        boundsTimer = null
+      }
+      return
+    }
+    const isRendererCrashed = mainWindow.webContents.isCrashed?.() ?? false
+    if (rendererProcessGone || isRendererCrashed) {
+      // Why: after a native renderer crash the renderer cannot answer
+      // window:close-requested. Let Cmd+Q / OS close complete instead of
+      // trapping the user in a blank, unquittable window.
       windowClosing = true
       if (boundsTimer) {
         clearTimeout(boundsTimer)
@@ -679,6 +784,7 @@ export function createMainWindow(
     ipcMain.removeListener(trafficLightChannel, onSyncTrafficLights)
     ipcMain.removeListener(minimizeChannel, onMinimize)
     ipcMain.removeListener(maximizeChannel, onMaximize)
+    browserManager.setDictationShortcutForwardingPredicate(null)
     ipcMain.removeListener(requestCloseChannel, onRequestClose)
     ipcMain.removeListener(popupMenuChannel, onPopupMenu)
     ipcMain.removeHandler(isMaximizedChannel)
@@ -691,10 +797,8 @@ export function createMainWindow(
     app.removeListener('before-quit', freezeBoundsOnQuit)
   })
 
-  if (is.dev && process.env.ELECTRON_RENDERER_URL) {
-    mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
-  } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+  if (!opts?.deferLoad) {
+    loadMainWindow(mainWindow)
   }
 
   return mainWindow

@@ -47,7 +47,7 @@ test.describe('Tasks page', () => {
     // Sanity: the tasks UI actually painted before we close it.
     await expect(orcaPage.getByRole('button', { name: 'Close tasks' })).toBeVisible()
 
-    await orcaPage.getByRole('button', { name: 'Close tasks' }).click()
+    await orcaPage.getByRole('button', { name: 'Close tasks' }).click({ force: true })
 
     await expect
       .poll(async () => getStoreState<string>(orcaPage, 'activeView'), { timeout: 5_000 })

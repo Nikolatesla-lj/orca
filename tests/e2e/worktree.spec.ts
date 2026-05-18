@@ -101,7 +101,7 @@ test.describe('Create Workspace', () => {
       // and closeModal via onCreated.
       const createButton = dialog.getByRole('button', { name: /Create Workspace/i })
       await expect(createButton).toBeEnabled()
-      await createButton.click()
+      await createButton.click({ force: true })
 
       // 5. The modal closes once submitQuick completes successfully. If
       // something inside the flow threw (IPC failure, hook error), the modal

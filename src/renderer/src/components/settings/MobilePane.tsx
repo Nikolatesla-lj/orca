@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { Check, Copy, Maximize2, RefreshCw, Smartphone, Trash2, Wifi } from 'lucide-react'
+import { Check, Copy, Maximize2, Smartphone, Trash2 } from 'lucide-react'
 import { Button } from '../ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import type { SettingsSearchEntry } from './settings-search'
 import { useAppStore } from '../../store'
+import { useMobilePairingDevicePolling } from './mobile-pairing-device-polling'
+import {
+  selectRefreshedNetworkAddress,
+  type MobileNetworkInterface
+} from './mobile-network-interface-selection'
+import { MobileNetworkInterfaceSection } from './MobileNetworkInterfaceSection'
 
 // Why: the section heading "When you leave the mobile app" carries the
 // "what happens" framing so the option labels only need to vary on the
@@ -40,7 +46,19 @@ export const MOBILE_PANE_SEARCH_ENTRIES: SettingsSearchEntry[] = [
   {
     title: 'Network Interface',
     description: 'Choose which network address to use for mobile pairing.',
-    keywords: ['network', 'interface', 'tailscale', 'vpn', 'overlay', 'ip', 'address', 'wifi']
+    keywords: [
+      'network',
+      'interface',
+      'tailscale',
+      'tailnet',
+      'vpn',
+      'overlay',
+      'ip',
+      'address',
+      'wifi',
+      'lan',
+      'remote'
+    ]
   },
   {
     title: 'When you leave the mobile app',
@@ -69,11 +87,6 @@ type PairedDevice = {
   lastSeenAt: number
 }
 
-type NetworkInterface = {
-  name: string
-  address: string
-}
-
 export function MobilePane(): React.JSX.Element {
   const autoRestoreFitMs = useAppStore((s) => s.settings?.mobileAutoRestoreFitMs ?? null)
   const updateSettings = useAppStore((s) => s.updateSettings)
@@ -83,8 +96,9 @@ export function MobilePane(): React.JSX.Element {
   const [loading, setLoading] = useState(false)
   const [devices, setDevices] = useState<PairedDevice[]>([])
   const [qrEnlarged, setQrEnlarged] = useState(false)
-  const [networkInterfaces, setNetworkInterfaces] = useState<NetworkInterface[]>([])
+  const [networkInterfaces, setNetworkInterfaces] = useState<MobileNetworkInterface[]>([])
   const [selectedAddress, setSelectedAddress] = useState<string | undefined>(undefined)
+  const [refreshingNetworkInterfaces, setRefreshingNetworkInterfaces] = useState(false)
   const [codeCopied, setCodeCopied] = useState(false)
 
   const loadDevices = useCallback(async () => {
@@ -96,17 +110,22 @@ export function MobilePane(): React.JSX.Element {
     }
   }, [])
 
-  const loadNetworkInterfaces = useCallback(async () => {
+  const loadNetworkInterfaces = useCallback(async (opts: { notifyOnError?: boolean } = {}) => {
+    setRefreshingNetworkInterfaces(true)
     try {
       const result = await window.api.mobile.listNetworkInterfaces()
       setNetworkInterfaces(result.interfaces)
-      if (result.interfaces.length > 0 && !selectedAddress) {
-        setSelectedAddress(result.interfaces[0]!.address)
-      }
+      setSelectedAddress((currentAddress) =>
+        selectRefreshedNetworkAddress(currentAddress, result.interfaces)
+      )
     } catch {
-      // Silently fail
+      if (opts.notifyOnError) {
+        toast.error('Failed to refresh network interfaces')
+      }
+    } finally {
+      setRefreshingNetworkInterfaces(false)
     }
-  }, [selectedAddress])
+  }, [])
 
   const generateQR = useCallback(
     async (opts: { rotate?: boolean } = {}) => {
@@ -153,13 +172,11 @@ export function MobilePane(): React.JSX.Element {
     setDeviceCountAtQr(devices.length)
   }, [qrDataUrl]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    if (deviceCountAtQr === null || devices.length > deviceCountAtQr) {
-      return
-    }
-    const interval = setInterval(() => void loadDevices(), 3000)
-    return () => clearInterval(interval)
-  }, [deviceCountAtQr, devices.length, loadDevices])
+  useMobilePairingDevicePolling({
+    deviceCountAtQr,
+    currentDeviceCount: devices.length,
+    loadDevices
+  })
 
   async function copyPairingCode() {
     if (!pairingUrl) {
@@ -187,47 +204,18 @@ export function MobilePane(): React.JSX.Element {
     }
   }
 
-  function formatInterfaceLabel(iface: NetworkInterface): string {
-    return `${iface.address} (${iface.name})`
-  }
-
   return (
     <div className="space-y-6">
-      {/* Network interface selector + generate */}
-      <div className="rounded-lg border border-border/60 p-4">
-        <div className="mb-3 flex items-center gap-2">
-          <Wifi className="size-4 text-muted-foreground" />
-          <span className="text-sm font-medium">Network Interface</span>
-        </div>
-        <p className="text-muted-foreground mb-3 text-xs">
-          Choose which network address to advertise in the QR code. Use your LAN address for
-          same-network pairing, or an overlay network address (Tailscale, ZeroTier) for
-          cross-network access.
-        </p>
-        <div className="flex items-center gap-3">
-          <Select value={selectedAddress} onValueChange={setSelectedAddress}>
-            <SelectTrigger size="sm" className="min-w-[220px]">
-              <SelectValue placeholder="No interfaces found" />
-            </SelectTrigger>
-            <SelectContent>
-              {networkInterfaces.map((iface) => (
-                <SelectItem key={`${iface.name}-${iface.address}`} value={iface.address}>
-                  {formatInterfaceLabel(iface)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button
-            onClick={() => void generateQR({ rotate: qrDataUrl != null })}
-            disabled={loading || !selectedAddress}
-            size="sm"
-            className="gap-1.5"
-          >
-            <RefreshCw className={`size-3.5 ${loading ? 'animate-spin' : ''}`} />
-            {qrDataUrl ? 'Regenerate' : 'Generate QR Code'}
-          </Button>
-        </div>
-      </div>
+      <MobileNetworkInterfaceSection
+        networkInterfaces={networkInterfaces}
+        selectedAddress={selectedAddress}
+        onSelectedAddressChange={setSelectedAddress}
+        refreshingNetworkInterfaces={refreshingNetworkInterfaces}
+        onRefreshNetworkInterfaces={() => void loadNetworkInterfaces({ notifyOnError: true })}
+        loading={loading}
+        hasQrCode={qrDataUrl != null}
+        onGenerateQr={() => void generateQR({ rotate: qrDataUrl != null })}
+      />
 
       {/* QR code display */}
       {qrDataUrl && (

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef } from 'react'
 import {
   ChevronRight,
+  CircleSlash,
   Copy,
   ExternalLink,
   Eye,
@@ -25,10 +26,12 @@ import {
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store'
 import { detectLanguage } from '@/lib/language-detect'
+import { getFileTypeIcon } from '@/lib/file-type-icons'
 import type { GitFileStatus } from '../../../../shared/types'
 import { STATUS_LABELS } from './status-display'
 import type { TreeNode } from './file-explorer-types'
 import { useFileExplorerRowDrag } from './useFileExplorerRowDrag'
+import { isLocalPathOpenBlocked, showLocalPathOpenBlockedToast } from '@/lib/local-path-open-guard'
 
 const ORCA_PATH_MIME = 'text/x-orca-file-path'
 
@@ -196,12 +199,15 @@ type FileExplorerRowProps = {
   isFlashing: boolean
   nodeStatus: GitFileStatus | null
   statusColor: string | null
+  isIgnored: boolean
   deleteShortcutLabel: string
   targetDir: string
   targetDepth: number
-  onClick: () => void
+  selectionSize: number
+  onClick: (event: React.MouseEvent<HTMLButtonElement>) => void
   onDoubleClick: () => void
-  onSelect: () => void
+  onContextMenuSelect: () => void
+  onCopyPaths: (pathKind: 'absolute' | 'relative') => void
   onStartNew: (type: 'file' | 'folder', dir: string, depth: number) => void
   onStartRename: (node: TreeNode) => void
   onDuplicate: (node: TreeNode) => void
@@ -222,12 +228,15 @@ export function FileExplorerRow({
   isFlashing,
   nodeStatus,
   statusColor,
+  isIgnored,
   deleteShortcutLabel,
   targetDir,
   targetDepth,
+  selectionSize,
   onClick,
   onDoubleClick,
-  onSelect,
+  onContextMenuSelect,
+  onCopyPaths,
   onStartNew,
   onStartRename,
   onDuplicate,
@@ -241,6 +250,7 @@ export function FileExplorerRow({
 }: FileExplorerRowProps): React.JSX.Element {
   const openMarkdownPreview = useAppStore((s) => s.openMarkdownPreview)
   const activeWorktreeId = useAppStore((s) => s.activeWorktreeId)
+  const FileIcon = getFileTypeIcon(node.relativePath || node.name)
   const rowDropDir = node.isDirectory ? node.path : targetDir
   const { handleDragOver, handleDragEnter, handleDragLeave, handleDrop } = useFileExplorerRowDrag({
     rowDropDir,
@@ -279,8 +289,7 @@ export function FileExplorerRow({
           onDrop={handleDrop}
           onClick={onClick}
           onDoubleClick={onDoubleClick}
-          onFocus={onSelect}
-          onContextMenu={onSelect}
+          onContextMenu={onContextMenuSelect}
         >
           {node.isDirectory ? (
             <>
@@ -301,12 +310,22 @@ export function FileExplorerRow({
           ) : (
             <>
               <span className="size-3 shrink-0" />
-              <File className="size-3 shrink-0 text-muted-foreground" />
+              <FileIcon className="size-3 shrink-0 text-muted-foreground" />
             </>
           )}
           <span
-            className={cn('truncate', isSelected && !nodeStatus && 'text-accent-foreground')}
-            style={nodeStatus ? { color: statusColor ?? undefined } : undefined}
+            className={cn(
+              'truncate',
+              isSelected && !nodeStatus && !isIgnored && 'text-accent-foreground',
+              isIgnored && 'italic'
+            )}
+            style={
+              nodeStatus
+                ? { color: statusColor ?? undefined }
+                : isIgnored
+                  ? { color: 'var(--git-decoration-ignored)' }
+                  : undefined
+            }
             onDoubleClick={(e) => {
               // Why: the row itself swallows double-click for "pin preview" /
               // directory toggle. Scope rename to the filename text only so
@@ -318,14 +337,20 @@ export function FileExplorerRow({
           >
             {node.name}
           </span>
-          {nodeStatus && (
+          {nodeStatus ? (
             <span
               className="ml-auto shrink-0 text-[10px] font-semibold tracking-wide mr-2"
               style={{ color: statusColor ?? undefined }}
             >
               {STATUS_LABELS[nodeStatus]}
             </span>
-          )}
+          ) : isIgnored ? (
+            <CircleSlash
+              aria-label="Ignored by .gitignore"
+              className="ml-auto size-3 shrink-0 mr-2"
+              style={{ color: 'var(--git-decoration-ignored)' }}
+            />
+          ) : null}
         </button>
       </ContextMenuTrigger>
       <ContextMenuContent
@@ -341,14 +366,14 @@ export function FileExplorerRow({
           New Folder
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem onSelect={() => window.api.ui.writeClipboardText(node.path)}>
+        <ContextMenuItem onSelect={() => onCopyPaths('absolute')}>
           <Copy />
-          Copy Path
+          {selectionSize > 1 ? 'Copy Paths' : 'Copy Path'}
           <ContextMenuShortcut>{isMac ? '⌥⌘C' : 'Shift+Alt+C'}</ContextMenuShortcut>
         </ContextMenuItem>
-        <ContextMenuItem onSelect={() => window.api.ui.writeClipboardText(node.relativePath)}>
+        <ContextMenuItem onSelect={() => onCopyPaths('relative')}>
           <Copy />
-          Copy Relative Path
+          {selectionSize > 1 ? 'Copy Relative Paths' : 'Copy Relative Path'}
           <ContextMenuShortcut>{isMac ? '⌥⇧⌘C' : 'Ctrl+Shift+Alt+C'}</ContextMenuShortcut>
         </ContextMenuItem>
         {!node.isDirectory && (
@@ -372,7 +397,26 @@ export function FileExplorerRow({
             Open Markdown Preview
           </ContextMenuItem>
         )}
-        <ContextMenuItem onSelect={() => window.api.shell.openPath(node.path)}>
+        <ContextMenuItem
+          onSelect={() => {
+            const state = useAppStore.getState()
+            const activeWorktree = Object.values(state.worktreesByRepo)
+              .flat()
+              .find((worktree) => worktree.id === activeWorktreeId)
+            const activeRepo = activeWorktree
+              ? state.repos.find((repo) => repo.id === activeWorktree.repoId)
+              : null
+            if (
+              isLocalPathOpenBlocked(state.settings, {
+                connectionId: activeRepo?.connectionId ?? null
+              })
+            ) {
+              showLocalPathOpenBlockedToast()
+              return
+            }
+            window.api.shell.openPath(node.path)
+          }}
+        >
           <ExternalLink />
           {revealLabel}
         </ContextMenuItem>

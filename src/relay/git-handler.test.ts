@@ -1,5 +1,8 @@
-/* eslint-disable max-lines */
-import { describe, expect, it, beforeEach, afterEach } from 'vitest'
+/* eslint-disable max-lines -- Why: this file covers ~14 distinct relay git
+   handlers plus the addWorktree state machine (--no-track + push.autoSetupRemote
+   probe/write across four flow branches). Splitting per-handler would scatter
+   related coverage without a meaningful boundary. */
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { GitHandler } from './git-handler'
 import { RelayContext } from './context'
 import * as fs from 'fs/promises'
@@ -34,6 +37,7 @@ describe('GitHandler', () => {
   it('registers all expected handlers', () => {
     const methods = Array.from(dispatcher._requestHandlers.keys())
     expect(methods).toContain('git.status')
+    expect(methods).toContain('git.history')
     expect(methods).toContain('git.commit')
     expect(methods).toContain('git.diff')
     expect(methods).toContain('git.stage')
@@ -41,6 +45,7 @@ describe('GitHandler', () => {
     expect(methods).toContain('git.bulkStage')
     expect(methods).toContain('git.bulkUnstage')
     expect(methods).toContain('git.discard')
+    expect(methods).toContain('git.bulkDiscard')
     expect(methods).toContain('git.conflictOperation')
     expect(methods).toContain('git.branchCompare')
     expect(methods).toContain('git.upstreamStatus')
@@ -53,6 +58,33 @@ describe('GitHandler', () => {
     expect(methods).toContain('git.removeWorktree')
     expect(methods).toContain('git.exec')
     expect(methods).toContain('git.isGitRepo')
+  })
+
+  describe('history', () => {
+    it('returns bounded git history for a repo', async () => {
+      gitInit(tmpDir)
+      writeFileSync(path.join(tmpDir, 'file.txt'), 'hello')
+      gitCommit(tmpDir, 'initial')
+      writeFileSync(path.join(tmpDir, 'file.txt'), 'changed')
+      gitCommit(tmpDir, 'second')
+
+      const result = (await dispatcher.callRequest('git.history', {
+        worktreePath: tmpDir,
+        limit: 10
+      })) as {
+        items: { subject: string; displayId?: string }[]
+        currentRef?: { category?: string; revision?: string }
+        hasMore: boolean
+        limit: number
+      }
+
+      expect(result.items.map((item) => item.subject)).toEqual(['second', 'initial'])
+      expect(result.currentRef?.category).toBe('branches')
+      expect(result.currentRef?.revision).toMatch(/^[0-9a-f]{40}$/)
+      expect(result.items[0]?.displayId).toHaveLength(7)
+      expect(result.hasMore).toBe(false)
+      expect(result.limit).toBe(10)
+    })
   })
 
   describe('status', () => {
@@ -86,6 +118,30 @@ describe('GitHandler', () => {
       expect(untracked).toBeDefined()
       expect(untracked!.status).toBe('untracked')
       expect(untracked!.area).toBe('untracked')
+    })
+
+    it('returns ignored paths only when requested', async () => {
+      gitInit(tmpDir)
+      writeFileSync(path.join(tmpDir, '.gitignore'), 'dist/\n.env\n')
+      gitCommit(tmpDir, 'initial')
+      mkdirSync(path.join(tmpDir, 'dist'), { recursive: true })
+      writeFileSync(path.join(tmpDir, 'dist', 'bundle.js'), 'compiled')
+      writeFileSync(path.join(tmpDir, '.env'), 'TOKEN=secret')
+
+      const defaultResult = (await dispatcher.callRequest('git.status', {
+        worktreePath: tmpDir
+      })) as {
+        ignoredPaths?: string[]
+      }
+      const ignoredResult = (await dispatcher.callRequest('git.status', {
+        worktreePath: tmpDir,
+        includeIgnored: true
+      })) as {
+        ignoredPaths?: string[]
+      }
+
+      expect('ignoredPaths' in defaultResult).toBe(false)
+      expect(ignoredResult.ignoredPaths).toEqual(expect.arrayContaining(['dist/', '.env']))
     })
 
     it('detects modified files', async () => {
@@ -254,12 +310,41 @@ describe('GitHandler', () => {
       await expect(fs.access(path.join(tmpDir, 'new.txt'))).rejects.toThrow()
     })
 
+    it('bulk discards tracked and untracked files', async () => {
+      gitInit(tmpDir)
+      writeFileSync(path.join(tmpDir, 'a.txt'), 'a')
+      writeFileSync(path.join(tmpDir, 'b.txt'), 'b')
+      gitCommit(tmpDir, 'initial')
+      writeFileSync(path.join(tmpDir, 'a.txt'), 'a-modified')
+      writeFileSync(path.join(tmpDir, 'b.txt'), 'b-modified')
+      writeFileSync(path.join(tmpDir, 'new.txt'), 'untracked')
+
+      await dispatcher.callRequest('git.bulkDiscard', {
+        worktreePath: tmpDir,
+        filePaths: ['a.txt', 'b.txt', 'new.txt']
+      })
+
+      await expect(fs.readFile(path.join(tmpDir, 'a.txt'), 'utf-8')).resolves.toBe('a')
+      await expect(fs.readFile(path.join(tmpDir, 'b.txt'), 'utf-8')).resolves.toBe('b')
+      await expect(fs.access(path.join(tmpDir, 'new.txt'))).rejects.toThrow()
+    })
+
     it('rejects path traversal', async () => {
       gitInit(tmpDir)
       await expect(
         dispatcher.callRequest('git.discard', {
           worktreePath: tmpDir,
           filePath: '../../../etc/passwd'
+        })
+      ).rejects.toThrow('outside the worktree')
+    })
+
+    it('rejects bulk discard path traversal', async () => {
+      gitInit(tmpDir)
+      await expect(
+        dispatcher.callRequest('git.bulkDiscard', {
+          worktreePath: tmpDir,
+          filePaths: ['file.txt', '../../../etc/passwd']
         })
       ).rejects.toThrow('outside the worktree')
     })
@@ -496,6 +581,173 @@ describe('GitHandler', () => {
       })) as Record<string, unknown>[]
       expect(result.length).toBeGreaterThanOrEqual(1)
       expect(result[0].isMainWorktree).toBe(true)
+    })
+  })
+
+  describe('addWorktree', () => {
+    // Why: relay handler tests for addWorktree use a mock-injection approach
+    // to deterministically control git exit codes (in particular `--get` exit
+    // 1 vs other non-zero codes) without relying on the test host's global
+    // git config. Mirrors the pattern in src/main/git/worktree.test.ts.
+    function setupMockedHandler(roots: string[]) {
+      const ctx = new RelayContext()
+      for (const r of roots) {
+        ctx.registerRoot(r)
+      }
+      const localDispatcher = createMockDispatcher()
+      const handler = new GitHandler(localDispatcher as unknown as RelayDispatcher, ctx)
+      const gitMock =
+        vi.fn<
+          (
+            args: string[],
+            cwd: string,
+            opts?: { maxBuffer?: number }
+          ) => Promise<{ stdout: string; stderr: string }>
+        >()
+      ;(handler as unknown as { git: typeof gitMock }).git = gitMock
+      return { localDispatcher, gitMock }
+    }
+
+    it('passes --no-track and writes push.autoSetupRemote when unset', async () => {
+      const { localDispatcher, gitMock } = setupMockedHandler(['/relay/repo', '/relay/wt'])
+      gitMock.mockResolvedValueOnce({ stdout: '', stderr: '' }) // worktree add
+      gitMock.mockRejectedValueOnce(Object.assign(new Error('key unset'), { code: 1 })) // --get
+      gitMock.mockResolvedValueOnce({ stdout: '', stderr: '' }) // --local set
+
+      await localDispatcher.callRequest('git.addWorktree', {
+        repoPath: '/relay/repo',
+        branchName: 'feature/test',
+        targetDir: '/relay/wt',
+        base: 'origin/main'
+      })
+
+      expect(gitMock.mock.calls.map((c) => c[0])).toEqual([
+        ['worktree', 'add', '--no-track', '-b', 'feature/test', '/relay/wt', 'origin/main'],
+        ['config', '--get', 'push.autoSetupRemote'],
+        ['config', '--local', 'push.autoSetupRemote', 'true']
+      ])
+      // cwd for worktree add is repoPath; cwd for config calls is targetDir.
+      expect(gitMock.mock.calls[0]?.[1]).toBe('/relay/repo')
+      expect(gitMock.mock.calls[1]?.[1]).toBe('/relay/wt')
+      expect(gitMock.mock.calls[2]?.[1]).toBe('/relay/wt')
+    })
+
+    it('preserves an existing push.autoSetupRemote value (does not overwrite user-set false)', async () => {
+      const { localDispatcher, gitMock } = setupMockedHandler(['/relay/repo', '/relay/wt'])
+      gitMock.mockResolvedValueOnce({ stdout: '', stderr: '' }) // worktree add
+      gitMock.mockResolvedValueOnce({ stdout: 'false\n', stderr: '' }) // --get returns value
+
+      await localDispatcher.callRequest('git.addWorktree', {
+        repoPath: '/relay/repo',
+        branchName: 'feature/preserve',
+        targetDir: '/relay/wt',
+        base: 'main'
+      })
+
+      // No --local set: --get succeeded so we preserve the user's value.
+      expect(gitMock.mock.calls.map((c) => c[0])).toEqual([
+        ['worktree', 'add', '--no-track', '-b', 'feature/preserve', '/relay/wt', 'main'],
+        ['config', '--get', 'push.autoSetupRemote']
+      ])
+    })
+
+    it('treats --get success with empty stdout as "already set" (key present but blank)', async () => {
+      // Why: `git config --get key` exits 0 if the key has any value at any
+      // scope, including an explicitly empty string. We must not fall through
+      // to `--local set true` and overwrite that. Mirrors the local addWorktree
+      // parity case in src/main/git/worktree.test.ts.
+      const { localDispatcher, gitMock } = setupMockedHandler(['/relay/repo', '/relay/wt'])
+      gitMock.mockResolvedValueOnce({ stdout: '', stderr: '' }) // worktree add
+      gitMock.mockResolvedValueOnce({ stdout: '', stderr: '' }) // --get success, empty value
+
+      await localDispatcher.callRequest('git.addWorktree', {
+        repoPath: '/relay/repo',
+        branchName: 'feature/empty',
+        targetDir: '/relay/wt',
+        base: 'main'
+      })
+
+      expect(gitMock.mock.calls.map((c) => c[0])).toEqual([
+        ['worktree', 'add', '--no-track', '-b', 'feature/empty', '/relay/wt', 'main'],
+        ['config', '--get', 'push.autoSetupRemote']
+      ])
+    })
+
+    it('does not write --local when --get fails with non-unset code (corrupt config)', async () => {
+      // Why: exit 1 from `git config --get` means "key unset" — anything else
+      // is a real read failure (parse error, locked file). We must NOT fall
+      // through to `--local set true`, which would silently overwrite
+      // whatever value the user actually has.
+      const { localDispatcher, gitMock } = setupMockedHandler(['/relay/repo', '/relay/wt'])
+      gitMock.mockResolvedValueOnce({ stdout: '', stderr: '' }) // worktree add
+      gitMock.mockRejectedValueOnce(Object.assign(new Error('parse error'), { code: 3 })) // --get non-unset
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      await expect(
+        localDispatcher.callRequest('git.addWorktree', {
+          repoPath: '/relay/repo',
+          branchName: 'feature/corrupt',
+          targetDir: '/relay/wt',
+          base: 'main'
+        })
+      ).resolves.toBeUndefined()
+
+      expect(gitMock.mock.calls.map((c) => c[0])).toEqual([
+        ['worktree', 'add', '--no-track', '-b', 'feature/corrupt', '/relay/wt', 'main'],
+        ['config', '--get', 'push.autoSetupRemote']
+      ])
+      expect(warnSpy).toHaveBeenCalledWith(
+        'relay addWorktree: failed to set push.autoSetupRemote for /relay/wt',
+        expect.any(Error)
+      )
+      warnSpy.mockRestore()
+    })
+
+    it('warns but resolves when --local set fails (write-failure is warn-only)', async () => {
+      const { localDispatcher, gitMock } = setupMockedHandler(['/relay/repo', '/relay/wt'])
+      gitMock.mockResolvedValueOnce({ stdout: '', stderr: '' }) // worktree add
+      gitMock.mockRejectedValueOnce(Object.assign(new Error('key unset'), { code: 1 })) // --get unset
+      gitMock.mockRejectedValueOnce(new Error('config locked')) // --local set fails
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      await expect(
+        localDispatcher.callRequest('git.addWorktree', {
+          repoPath: '/relay/repo',
+          branchName: 'feature/writefail',
+          targetDir: '/relay/wt',
+          base: 'main'
+        })
+      ).resolves.toBeUndefined()
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        'relay addWorktree: failed to set push.autoSetupRemote for /relay/wt',
+        expect.any(Error)
+      )
+      warnSpy.mockRestore()
+    })
+
+    it('does not probe or write config when worktree add itself fails', async () => {
+      // Why: a refactor that moves the config block earlier could try to
+      // probe against a worktree directory that was never created. Pin the
+      // ordering invariant: config calls happen only after worktree add
+      // succeeds.
+      const { localDispatcher, gitMock } = setupMockedHandler(['/relay/repo', '/relay/wt'])
+      gitMock.mockRejectedValueOnce(new Error('worktree add failed'))
+
+      await expect(
+        localDispatcher.callRequest('git.addWorktree', {
+          repoPath: '/relay/repo',
+          branchName: 'feature/fail',
+          targetDir: '/relay/wt',
+          base: 'main'
+        })
+      ).rejects.toThrow('worktree add failed')
+
+      expect(gitMock.mock.calls.map((c) => c[0])).toEqual([
+        ['worktree', 'add', '--no-track', '-b', 'feature/fail', '/relay/wt', 'main']
+      ])
     })
   })
 })

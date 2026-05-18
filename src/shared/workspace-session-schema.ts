@@ -16,10 +16,15 @@ import type {
   TerminalPaneLayoutNode,
   WorkspaceSessionState
 } from './types'
+import { normalizeBrowserHistoryEntries } from './workspace-session-browser-history'
 
 // ─── Terminal pane layout (recursive) ───────────────────────────────
 
 const terminalPaneSplitDirectionSchema = z.enum(['vertical', 'horizontal'])
+const terminalTabIdSchema = z
+  .string()
+  .min(1)
+  .refine((value) => !value.includes(':'), 'terminal tab id must not contain ":"')
 
 // Why: z.lazy + type annotation keeps the recursive inference working without
 // forcing zod to resolve the whole tree at definition time.
@@ -51,7 +56,7 @@ const terminalLayoutSnapshotSchema = z.object({
 // ─── Terminal tab (legacy) ──────────────────────────────────────────
 
 const terminalTabSchema = z.object({
-  id: z.string(),
+  id: terminalTabIdSchema,
   ptyId: z.string().nullable(),
   worktreeId: z.string(),
   title: z.string(),
@@ -124,7 +129,8 @@ const persistedOpenFileSchema = z.object({
   relativePath: z.string(),
   worktreeId: z.string(),
   language: z.string(),
-  isPreview: z.boolean().optional()
+  isPreview: z.boolean().optional(),
+  runtimeEnvironmentId: z.string().optional()
 })
 
 // ─── Browser ────────────────────────────────────────────────────────
@@ -202,6 +208,10 @@ const architectureWorkspaceSchema: z.ZodType<ArchitectureWorkspace> = z.object({
   createdAt: z.number()
 })
 
+const browserHistoryEntriesSchema = z
+  .array(browserHistoryEntrySchema)
+  .transform((entries) => normalizeBrowserHistoryEntries(entries))
+
 // ─── Workspace session ──────────────────────────────────────────────
 
 export const workspaceSessionStateSchema: z.ZodType<WorkspaceSessionState> = z.object({
@@ -209,7 +219,7 @@ export const workspaceSessionStateSchema: z.ZodType<WorkspaceSessionState> = z.o
   activeWorktreeId: z.string().nullable(),
   activeTabId: z.string().nullable(),
   tabsByWorktree: z.record(z.string(), z.array(terminalTabSchema)),
-  terminalLayoutsByTabId: z.record(z.string(), terminalLayoutSnapshotSchema),
+  terminalLayoutsByTabId: z.record(terminalTabIdSchema, terminalLayoutSnapshotSchema),
   activeWorktreeIdsOnShutdown: z.array(z.string()).optional(),
   openFilesByWorktree: z.record(z.string(), z.array(persistedOpenFileSchema)).optional(),
   activeFileIdByWorktree: z.record(z.string(), z.string().nullable()).optional(),
@@ -219,14 +229,14 @@ export const workspaceSessionStateSchema: z.ZodType<WorkspaceSessionState> = z.o
   architectureTabsByWorktree: z.record(z.string(), z.array(architectureWorkspaceSchema)).optional(),
   activeArchitectureTabIdByWorktree: z.record(z.string(), z.string().nullable()).optional(),
   activeTabTypeByWorktree: z.record(z.string(), workspaceVisibleTabTypeSchema).optional(),
-  browserUrlHistory: z.array(browserHistoryEntrySchema).optional(),
+  browserUrlHistory: browserHistoryEntriesSchema.optional(),
   activeTabIdByWorktree: z.record(z.string(), z.string().nullable()).optional(),
   unifiedTabs: z.record(z.string(), z.array(tabSchema)).optional(),
   tabGroups: z.record(z.string(), z.array(tabGroupSchema)).optional(),
   tabGroupLayouts: z.record(z.string(), tabGroupLayoutNodeSchema).optional(),
   activeGroupIdByWorktree: z.record(z.string(), z.string()).optional(),
   activeConnectionIdsAtShutdown: z.array(z.string()).optional(),
-  remoteSessionIdsByTabId: z.record(z.string(), z.string()).optional(),
+  remoteSessionIdsByTabId: z.record(terminalTabIdSchema, z.string()).optional(),
   // Why: the sort comparator in order-empty-query-worktrees.ts would produce
   // NaN (undefined sort order) if a corrupted session file carried NaN or
   // Infinity here. Parse leniently: drop individual bad entries rather than

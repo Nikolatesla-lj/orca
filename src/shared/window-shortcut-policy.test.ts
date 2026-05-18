@@ -26,13 +26,19 @@ describe('resolveWindowShortcutAction', () => {
     const nonMacCases: WindowShortcutInput[] = [
       { code: 'KeyR', key: 'r', meta: false, control: true, alt: false, shift: false },
       { code: 'KeyU', key: 'u', meta: false, control: true, alt: false, shift: false },
-      { code: 'KeyE', key: 'e', meta: false, control: true, alt: false, shift: false },
       { code: 'KeyJ', key: 'j', meta: false, control: true, alt: false, shift: false }
     ]
 
     for (const input of nonMacCases) {
       expect(resolveWindowShortcutAction(input, 'linux')).toBeNull()
     }
+
+    expect(
+      resolveWindowShortcutAction(
+        { code: 'KeyE', key: 'e', meta: false, control: true, alt: false, shift: false },
+        'linux'
+      )
+    ).toEqual({ type: 'dictationKeyDown' })
   })
 
   it('resolves the explicit window shortcut allowlist on macOS', () => {
@@ -72,6 +78,22 @@ describe('resolveWindowShortcutAction', () => {
         'win32'
       )
     ).toEqual({ type: 'toggleWorktreePalette' })
+  })
+
+  it('resolves dictation using the layout-aware key value', () => {
+    expect(
+      resolveWindowShortcutAction(
+        { code: 'KeyD', key: 'e', meta: true, control: false, alt: false, shift: false },
+        'darwin'
+      )
+    ).toEqual({ type: 'dictationKeyDown' })
+
+    expect(
+      resolveWindowShortcutAction(
+        { code: 'KeyE', key: 'd', meta: true, control: false, alt: false, shift: false },
+        'darwin'
+      )
+    ).toBeNull()
   })
 
   it('accepts all supported zoom key variants', () => {
@@ -150,6 +172,66 @@ describe('resolveWindowShortcutAction', () => {
         'linux'
       )
     ).toEqual({ type: 'worktreeHistoryNavigate', direction: 'back' })
+  })
+
+  it('resolves the floating terminal chord despite carrying Alt', () => {
+    expect(
+      resolveWindowShortcutAction(
+        {
+          code: 'KeyT',
+          key: 't',
+          meta: true,
+          control: false,
+          alt: true,
+          shift: false
+        },
+        'darwin'
+      )
+    ).toEqual({ type: 'toggleFloatingTerminal' })
+
+    expect(
+      resolveWindowShortcutAction(
+        {
+          code: 'KeyT',
+          key: 't',
+          meta: false,
+          control: true,
+          alt: true,
+          shift: false
+        },
+        'linux'
+      )
+    ).toEqual({ type: 'toggleFloatingTerminal' })
+  })
+
+  it('rejects floating terminal chord variants with Shift or opposite primary modifier', () => {
+    expect(
+      resolveWindowShortcutAction(
+        {
+          code: 'KeyT',
+          key: 't',
+          meta: true,
+          control: false,
+          alt: true,
+          shift: true
+        },
+        'darwin'
+      )
+    ).toBeNull()
+
+    expect(
+      resolveWindowShortcutAction(
+        {
+          code: 'KeyT',
+          key: 't',
+          meta: true,
+          control: true,
+          alt: true,
+          shift: false
+        },
+        'linux'
+      )
+    ).toBeNull()
   })
 
   it('rejects the history chord when Shift is also held', () => {
@@ -253,13 +335,13 @@ describe('resolveWindowShortcutAction', () => {
   it('still returns null for other Cmd/Ctrl+Alt combos (not an allowlist escape)', () => {
     // Why: regression guard — the history early-return must not swallow
     // unrelated primary+alt chords in a way that changes their old null
-    // result. A future addition that intentionally consumes e.g. Cmd+Alt+KeyT
+    // result. A future addition that intentionally consumes e.g. Cmd+Alt+KeyY
     // must add a new branch explicitly.
     expect(
       resolveWindowShortcutAction(
         {
-          code: 'KeyB',
-          key: 'b',
+          code: 'KeyY',
+          key: 'y',
           meta: true,
           control: false,
           alt: true,

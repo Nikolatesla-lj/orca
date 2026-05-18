@@ -8,18 +8,36 @@ import type {
   PersistedTrustedOrcaHooks,
   PersistedUIState,
   StatusBarItem,
+  TaskProvider,
   TaskResumeState,
   TaskViewPresetId,
   TuiAgent,
   UpdateStatus,
+  WorkspaceStatusDefinition,
   WorktreeCardProperty
 } from '../../../../shared/types'
 import { PET_SIZE_DEFAULT, PET_SIZE_MAX, PET_SIZE_MIN } from '../../../../shared/types'
+import {
+  WORKSPACE_CLEANUP_CLASSIFIER_VERSION,
+  type WorkspaceCleanupDismissal
+} from '../../../../shared/workspace-cleanup'
 import { PER_REPO_FETCH_LIMIT } from '../../../../shared/work-items'
+import {
+  normalizeVisibleTaskProviders,
+  resolveVisibleTaskProvider
+} from '../../../../shared/task-providers'
 import {
   DEFAULT_STATUS_BAR_ITEMS,
   DEFAULT_WORKTREE_CARD_PROPERTIES
 } from '../../../../shared/constants'
+import {
+  WORKSPACE_BOARD_COLUMN_WIDTH_DEFAULT,
+  clampWorkspaceBoardColumnWidth,
+  clampWorkspaceBoardOpacity,
+  cloneDefaultWorkspaceStatuses,
+  normalizeWorkspaceBoardCompact,
+  normalizeWorkspaceStatuses
+} from '../../../../shared/workspace-statuses'
 import { normalizeKagiSessionLink } from '../../../../shared/browser-url'
 import type { OrcaHookScriptKind } from '../../lib/orca-hook-trust'
 import { DEFAULT_PET_ID, isBundledPetId } from '../../components/pet/pet-models'
@@ -76,6 +94,12 @@ const MAX_LEFT_SIDEBAR_WIDTH = 500
 // cap on wide displays. Use a large hard ceiling purely as a safety net for
 // corrupted/manually-edited values rather than as a product limit.
 const MAX_RIGHT_SIDEBAR_WIDTH = 4000
+// Why: bound disk growth for acknowledgedAgentsByPaneKey across hard quits —
+// in-session cleanup (agent-status.ts) prunes on pane lifecycle, but crash/
+// forced-kill paths leave entries pinned. Mirrors HYDRATE_MAX_AGE_MS in
+// src/main/agent-hooks/server.ts for parallel reasoning with the sibling
+// hook-status entries these acks pair with.
+const HYDRATE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 const VALID_TASK_PRESETS = new Set<TaskViewPresetId>([
   'all',
   'issues',
@@ -109,6 +133,68 @@ function sanitizePersistedSidebarWidth(width: unknown, fallback: number, maxWidt
     return fallback
   }
   return Math.min(maxWidth, Math.max(MIN_SIDEBAR_WIDTH, width))
+}
+
+// Why: persisted JSON can be tampered with or carry legacy/corrupt shapes.
+// Reject arrays (typeof [] === 'object'), prototype-pollution keys, and
+// non-positive-finite values; drop entries past the TTL so hard-quit leaks
+// don't accumulate forever.
+function sanitizeAcknowledgedAgentsByPaneKey(value: unknown): Record<string, number> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return {}
+  }
+  const cutoff = Date.now() - HYDRATE_MAX_AGE_MS
+  const out: Record<string, number> = {}
+  for (const [key, ackAt] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof key !== 'string') {
+      continue
+    }
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+      continue
+    }
+    if (typeof ackAt !== 'number' || !Number.isFinite(ackAt) || ackAt <= 0) {
+      continue
+    }
+    if (ackAt < cutoff) {
+      continue
+    }
+    out[key] = ackAt
+  }
+  return out
+}
+
+function sanitizeWorkspaceCleanupDismissals(
+  value: unknown
+): Record<string, WorkspaceCleanupDismissal> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return {}
+  }
+  const out: Record<string, WorkspaceCleanupDismissal> = {}
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+      continue
+    }
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+      continue
+    }
+    const input = raw as Record<string, unknown>
+    if (
+      typeof input.worktreeId !== 'string' ||
+      typeof input.dismissedAt !== 'number' ||
+      !Number.isFinite(input.dismissedAt) ||
+      typeof input.fingerprint !== 'string' ||
+      input.classifierVersion !== WORKSPACE_CLEANUP_CLASSIFIER_VERSION
+    ) {
+      continue
+    }
+    out[key] = {
+      worktreeId: input.worktreeId,
+      dismissedAt: input.dismissedAt,
+      fingerprint: input.fingerprint,
+      classifierVersion: input.classifierVersion
+    }
+  }
+  return out
 }
 
 function sanitizeTaskResumeState(value: unknown): TaskResumeState | undefined {
@@ -154,25 +240,24 @@ export type UISlice = {
    *  the user clicks an agent row or its parent workspace card from the
    *  dashboard. A row is considered unvisited when no ack exists OR the
    *  agent's current stateStartedAt is newer than the last ack (i.e. the
-   *  agent has transitioned state since the user last saw it). Session-only
-   *  — restart resets everyone to unvisited, which is harmless since the
-   *  first visit after launch is a legitimate "need to see" moment. */
+   *  agent has transitioned state since the user last saw it). Persisted
+   *  via PersistedUIState because agent rows themselves now survive restart —
+   *  without this, rows you'd already visited come back bold on relaunch. */
   acknowledgedAgentsByPaneKey: Record<string, number>
   acknowledgeAgents: (paneKeys: string[]) => void
-  /** Per-worktree collapsed state for the inline agents section shown inside
-   *  each workspace card. Session-only — a restart defaults back to expanded,
-   *  which matches the expected default (people rarely want agents hidden
-   *  across launches). */
-  collapsedInlineAgentsByWorktreeId: Record<string, boolean>
-  toggleInlineAgentsCollapsed: (worktreeId: string) => void
-  activeView: 'terminal' | 'settings' | 'tasks'
-  previousViewBeforeTasks: 'terminal' | 'settings'
-  previousViewBeforeSettings: 'terminal' | 'tasks'
+  unacknowledgeAgents: (paneKeys: string[]) => void
+  activeView: 'terminal' | 'settings' | 'tasks' | 'activity' | 'automations' | 'space' | 'skills'
+  previousViewBeforeTasks: 'terminal' | 'settings' | 'activity' | 'automations' | 'space' | 'skills'
+  previousViewBeforeSettings: 'terminal' | 'tasks' | 'activity' | 'automations' | 'space' | 'skills'
+  previousViewBeforeActivity: 'terminal' | 'settings' | 'tasks' | 'automations' | 'space' | 'skills'
+  previousViewBeforeAutomations: 'terminal' | 'settings' | 'tasks' | 'activity' | 'space' | 'skills'
+  previousViewBeforeSpace: 'terminal' | 'settings' | 'tasks' | 'activity' | 'automations' | 'skills'
+  previousViewBeforeSkills: 'terminal' | 'settings' | 'tasks' | 'activity' | 'automations' | 'space'
   setActiveView: (view: UISlice['activeView']) => void
   taskPageData: {
     preselectedRepoId?: string
     prefilledName?: string
-    taskSource?: 'github' | 'linear'
+    taskSource?: TaskProvider
   }
   taskResumeState: TaskResumeState | undefined
   setTaskResumeState: (updates: Partial<TaskResumeState>) => void
@@ -183,7 +268,7 @@ export type UISlice = {
     note: string
     attachments: string[]
     linkedWorkItem: {
-      type: 'issue' | 'pr'
+      type: 'issue' | 'pr' | 'mr'
       number: number
       title: string
       url: string
@@ -191,12 +276,26 @@ export type UISlice = {
     agent: TuiAgent
     linkedIssue: string
     linkedPR: number | null
+    /** GitLab parallels — number for an issue, iid for an MR. Optional so
+     *  drafts saved before GitLab support keep loading without migration. */
+    linkedGitLabIssue?: number | null
+    linkedGitLabMR?: number | null
     // Why: repo-scoped start ref selected via the "Start from" picker.
     // Absent means "use the repo's effective base ref".
     baseBranch?: string
   } | null
   openTaskPage: (data?: UISlice['taskPageData']) => void
   closeTaskPage: () => void
+  openActivityPage: () => void
+  closeActivityPage: () => void
+  selectedAutomationId: string | null
+  setSelectedAutomationId: (id: string | null) => void
+  openAutomationsPage: () => void
+  closeAutomationsPage: () => void
+  openSpacePage: () => void
+  closeSpacePage: () => void
+  openSkillsPage: () => void
+  closeSkillsPage: () => void
   setNewWorkspaceDraft: (draft: NonNullable<UISlice['newWorkspaceDraft']>) => void
   clearNewWorkspaceDraft: () => void
   openSettingsPage: () => void
@@ -206,13 +305,19 @@ export type UISlice = {
       | 'general'
       | 'browser'
       | 'appearance'
+      | 'input'
+      | 'tasks'
       | 'terminal'
+      | 'computer-use'
       | 'developer-permissions'
       | 'shortcuts'
       | 'repo'
       | 'agents'
       | 'accounts'
+      | 'voice'
       | 'experimental'
+      | 'servers'
+      | 'mobile'
       | 'ssh'
     repoId: string | null
     sectionId?: string
@@ -229,11 +334,16 @@ export type UISlice = {
     | 'add-repo'
     | 'quick-open'
     | 'worktree-palette'
+    | 'workspace-cleanup'
+    | 'feature-wall'
     | 'new-workspace-composer'
     | 'confirm-orca-yaml-hooks'
   modalData: Record<string, unknown>
   openModal: (modal: UISlice['activeModal'], data?: Record<string, unknown>) => void
   closeModal: () => void
+  featureTourNudgeVisible: boolean
+  showFeatureTourNudge: () => void
+  dismissFeatureTourNudge: () => void
   trustedOrcaHooks: PersistedTrustedOrcaHooks
   markOrcaHookScriptConfirmed: (
     repoId: string,
@@ -242,8 +352,10 @@ export type UISlice = {
   ) => void
   markOrcaHookRepoAlwaysTrusted: (repoId: string) => void
   clearOrcaHookTrustForRepo: (repoId: string) => void
-  groupBy: 'none' | 'repo' | 'pr-status'
+  groupBy: 'none' | 'workspace-status' | 'repo' | 'pr-status'
   setGroupBy: (g: UISlice['groupBy']) => void
+  showWorkspaceLineage: boolean
+  setShowWorkspaceLineage: (v: boolean) => void
   sortBy: 'name' | 'smart' | 'recent' | 'repo'
   setSortBy: (s: UISlice['sortBy']) => void
   showActiveOnly: boolean
@@ -256,6 +368,14 @@ export type UISlice = {
   toggleCollapsedGroup: (key: string) => void
   worktreeCardProperties: WorktreeCardProperty[]
   toggleWorktreeCardProperty: (prop: WorktreeCardProperty) => void
+  workspaceStatuses: WorkspaceStatusDefinition[]
+  setWorkspaceStatuses: (statuses: WorkspaceStatusDefinition[]) => void
+  workspaceBoardOpacity: number
+  setWorkspaceBoardOpacity: (opacity: number) => void
+  workspaceBoardCompact: boolean
+  setWorkspaceBoardCompact: (compact: boolean) => void
+  workspaceBoardColumnWidth: number
+  setWorkspaceBoardColumnWidth: (width: number) => void
   statusBarItems: StatusBarItem[]
   toggleStatusBarItem: (item: StatusBarItem) => void
   statusBarVisible: boolean
@@ -353,22 +473,30 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       }
       return next ? { acknowledgedAgentsByPaneKey: next } : s
     }),
-  collapsedInlineAgentsByWorktreeId: {},
-  toggleInlineAgentsCollapsed: (worktreeId) =>
+  unacknowledgeAgents: (paneKeys) =>
     set((s) => {
-      const current = s.collapsedInlineAgentsByWorktreeId[worktreeId] === true
-      const next = { ...s.collapsedInlineAgentsByWorktreeId }
-      if (current) {
-        delete next[worktreeId]
-      } else {
-        next[worktreeId] = true
+      if (paneKeys.length === 0) {
+        return s
       }
-      return { collapsedInlineAgentsByWorktreeId: next }
+      let next: Record<string, number> | null = null
+      for (const key of paneKeys) {
+        if (s.acknowledgedAgentsByPaneKey[key] !== undefined) {
+          if (next === null) {
+            next = { ...s.acknowledgedAgentsByPaneKey }
+          }
+          delete next[key]
+        }
+      }
+      return next ? { acknowledgedAgentsByPaneKey: next } : s
     }),
 
   activeView: 'terminal',
   previousViewBeforeTasks: 'terminal',
   previousViewBeforeSettings: 'terminal',
+  previousViewBeforeActivity: 'terminal',
+  previousViewBeforeAutomations: 'terminal',
+  previousViewBeforeSpace: 'terminal',
+  previousViewBeforeSkills: 'terminal',
   setActiveView: (view) => set({ activeView: view }),
   taskPageData: {},
   taskResumeState: undefined,
@@ -393,7 +521,11 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
     // be deduped. This removes ~300–800ms of perceived latency on initial
     // page load.
     const state = get()
-    const resolvedSource = data.taskSource ?? state.settings?.defaultTaskSource ?? 'github'
+    const visibleTaskProviders = normalizeVisibleTaskProviders(state.settings?.visibleTaskProviders)
+    const resolvedSource = resolveVisibleTaskProvider(
+      data.taskSource ?? state.settings?.defaultTaskSource,
+      visibleTaskProviders
+    )
     const resolvedMode = state.taskResumeState?.githubMode ?? 'items'
     if (resolvedSource === 'github' && resolvedMode === 'items') {
       const eligibleRepos = state.repos.filter((repo) => isGitRepoKind(repo) && repo.path)
@@ -460,6 +592,48 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
         worktreeNavHistoryIndex: nextHistoryIndex
       }
     }),
+  openActivityPage: () =>
+    set((state) => ({
+      activeView: 'activity',
+      previousViewBeforeActivity:
+        state.activeView === 'activity' ? state.previousViewBeforeActivity : state.activeView
+    })),
+  closeActivityPage: () =>
+    set((state) => ({
+      activeView: state.previousViewBeforeActivity
+    })),
+  selectedAutomationId: null,
+  setSelectedAutomationId: (id) => set({ selectedAutomationId: id }),
+  openAutomationsPage: () =>
+    set((state) => ({
+      activeView: 'automations',
+      previousViewBeforeAutomations:
+        state.activeView === 'automations' ? state.previousViewBeforeAutomations : state.activeView
+    })),
+  closeAutomationsPage: () =>
+    set((state) => ({
+      activeView: state.previousViewBeforeAutomations
+    })),
+  openSpacePage: () =>
+    set((state) => ({
+      activeView: 'space',
+      previousViewBeforeSpace:
+        state.activeView === 'space' ? state.previousViewBeforeSpace : state.activeView
+    })),
+  closeSpacePage: () =>
+    set((state) => ({
+      activeView: state.previousViewBeforeSpace
+    })),
+  openSkillsPage: () =>
+    set((state) => ({
+      activeView: 'skills',
+      previousViewBeforeSkills:
+        state.activeView === 'skills' ? state.previousViewBeforeSkills : state.activeView
+    })),
+  closeSkillsPage: () =>
+    set((state) => ({
+      activeView: state.previousViewBeforeSkills
+    })),
   setNewWorkspaceDraft: (draft) => set({ newWorkspaceDraft: draft }),
   clearNewWorkspaceDraft: () => set({ newWorkspaceDraft: null }),
   openSettingsPage: () =>
@@ -482,8 +656,20 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
 
   activeModal: 'none',
   modalData: {},
-  openModal: (modal, data = {}) => set({ activeModal: modal, modalData: data }),
+  openModal: (modal, data = {}) =>
+    set((state) => ({
+      activeModal: modal,
+      modalData: data,
+      featureTourNudgeVisible: modal === 'feature-wall' ? false : state.featureTourNudgeVisible
+    })),
   closeModal: () => set({ activeModal: 'none', modalData: {} }),
+  featureTourNudgeVisible: false,
+  showFeatureTourNudge: () => {
+    if (get().activeModal !== 'feature-wall') {
+      set({ featureTourNudgeVisible: true })
+    }
+  },
+  dismissFeatureTourNudge: () => set({ featureTourNudgeVisible: false }),
 
   trustedOrcaHooks: {},
   markOrcaHookScriptConfirmed: (repoId, kind, contentHash) =>
@@ -537,6 +723,9 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
     set({ groupBy: g, collapsedGroups: new Set<string>() })
   },
 
+  showWorkspaceLineage: false,
+  setShowWorkspaceLineage: (v) => set({ showWorkspaceLineage: v }),
+
   sortBy: 'recent',
   setSortBy: (s) => set({ sortBy: s }),
 
@@ -572,6 +761,34 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       window.api.ui.set({ worktreeCardProperties: updated }).catch(console.error)
       return { worktreeCardProperties: updated }
     }),
+
+  workspaceStatuses: cloneDefaultWorkspaceStatuses(),
+  setWorkspaceStatuses: (statuses) => {
+    const normalized = normalizeWorkspaceStatuses(statuses)
+    window.api.ui.set({ workspaceStatuses: normalized }).catch(console.error)
+    set({ workspaceStatuses: normalized })
+  },
+
+  workspaceBoardOpacity: 1,
+  setWorkspaceBoardOpacity: (opacity) => {
+    const clamped = clampWorkspaceBoardOpacity(opacity)
+    window.api.ui.set({ workspaceBoardOpacity: clamped }).catch(console.error)
+    set({ workspaceBoardOpacity: clamped })
+  },
+
+  workspaceBoardCompact: false,
+  setWorkspaceBoardCompact: (compact) => {
+    const normalized = normalizeWorkspaceBoardCompact(compact)
+    window.api.ui.set({ workspaceBoardCompact: normalized }).catch(console.error)
+    set({ workspaceBoardCompact: normalized })
+  },
+
+  workspaceBoardColumnWidth: WORKSPACE_BOARD_COLUMN_WIDTH_DEFAULT,
+  setWorkspaceBoardColumnWidth: (width) => {
+    const clamped = clampWorkspaceBoardColumnWidth(width)
+    window.api.ui.set({ workspaceBoardColumnWidth: clamped }).catch(console.error)
+    set({ workspaceBoardColumnWidth: clamped })
+  },
 
   statusBarItems: [...DEFAULT_STATUS_BAR_ITEMS],
   toggleStatusBarItem: (item) =>
@@ -700,7 +917,8 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
           s.rightSidebarWidth,
           MAX_RIGHT_SIDEBAR_WIDTH
         ),
-        groupBy: ui.groupBy,
+        groupBy: (ui.groupBy as UISlice['groupBy'] | 'parent') === 'parent' ? 'repo' : ui.groupBy,
+        showWorkspaceLineage: ui.showWorkspaceLineage ?? false,
         sortBy,
         // Why: "Active only" is part of the user's sidebar working set, not a
         // transient render detail. Restoring it on launch keeps the filtered
@@ -712,6 +930,10 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
         uiZoomLevel: ui.uiZoomLevel ?? 0,
         editorFontZoomLevel: ui.editorFontZoomLevel ?? 0,
         worktreeCardProperties: ui.worktreeCardProperties ?? [...DEFAULT_WORKTREE_CARD_PROPERTIES],
+        workspaceStatuses: normalizeWorkspaceStatuses(ui.workspaceStatuses),
+        workspaceBoardOpacity: clampWorkspaceBoardOpacity(ui.workspaceBoardOpacity),
+        workspaceBoardCompact: normalizeWorkspaceBoardCompact(ui.workspaceBoardCompact),
+        workspaceBoardColumnWidth: clampWorkspaceBoardColumnWidth(ui.workspaceBoardColumnWidth),
         statusBarItems: migrateStatusBarItems(ui.statusBarItems),
         statusBarVisible: ui.statusBarVisible ?? true,
         // Why: absent → true so existing users see the pet the first time
@@ -745,6 +967,19 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
         trustedOrcaHooks: filterTrustedOrcaHooksToValidRepos(
           ui.trustedOrcaHooks ?? {},
           validRepoIds
+        ),
+        // Why: restore visited-row acks alongside the persisted hook entries
+        // they pair with. Stale acks for paneKeys whose tab/PTY no longer
+        // exists are inert (no row references them); a paneKey reuse stamps a
+        // fresh stateStartedAt that beats the old ack via the ackAt <
+        // stateStartedAt comparison in WorktreeCardAgents. Sanitizer drops
+        // entries past HYDRATE_MAX_AGE_MS so hard-quit/crash paths that miss
+        // the in-session cleanup in agent-status.ts can't accumulate forever.
+        acknowledgedAgentsByPaneKey: sanitizeAcknowledgedAgentsByPaneKey(
+          ui.acknowledgedAgentsByPaneKey
+        ),
+        workspaceCleanupDismissals: sanitizeWorkspaceCleanupDismissals(
+          ui.workspaceCleanup?.dismissals
         ),
         persistedUIReady: true
       }

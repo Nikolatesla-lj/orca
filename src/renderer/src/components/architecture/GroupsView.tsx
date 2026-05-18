@@ -4,6 +4,7 @@ import {
   DndContext,
   DragOverlay,
   PointerSensor,
+  pointerWithin,
   useDraggable,
   useDroppable,
   useSensor,
@@ -343,7 +344,12 @@ export function GroupsDndProvider({
   }
 
   return (
-    <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
+    <DndContext
+      sensors={sensors}
+      collisionDetection={pointerWithin}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+    >
       <GroupsDndContext.Provider value={value}>{children}</GroupsDndContext.Provider>
       <DragOverlay>
         {active ? <DragGhost item={active} nodeById={nodeById} groups={visibleGroups} /> : null}
@@ -825,7 +831,19 @@ function NewGroupDrop({
         variant="outline"
         size="sm"
         className="w-full border-dashed"
-        onClick={() => onCreateEmpty()}
+        onPointerDown={(event) => {
+          if (event.button !== 0) {
+            return
+          }
+          event.preventDefault()
+          event.stopPropagation()
+          onCreateEmpty()
+        }}
+        onClick={(event) => {
+          if (event.detail === 0) {
+            onCreateEmpty()
+          }
+        }}
         data-testid="architecture-group-create"
       >
         <Plus className="size-3" />

@@ -9,6 +9,7 @@ import type {
   TerminalTab,
   Worktree
 } from '../../../../shared/types'
+import { isTerminalLeafId } from '../../../../shared/stable-pane-id'
 
 // Mock sonner (imported by repos.ts)
 vi.mock('sonner', () => ({ toast: { info: vi.fn(), success: vi.fn(), error: vi.fn() } }))
@@ -83,6 +84,22 @@ const mockApi = {
     getDaily: vi.fn().mockResolvedValue([]),
     getBreakdown: vi.fn().mockResolvedValue([]),
     getRecentSessions: vi.fn().mockResolvedValue([])
+  },
+  openCodeUsage: {
+    getScanState: vi.fn().mockResolvedValue({
+      enabled: false,
+      isScanning: false,
+      lastScanStartedAt: null,
+      lastScanCompletedAt: null,
+      lastScanError: null,
+      hasAnyOpenCodeData: false
+    }),
+    setEnabled: vi.fn().mockResolvedValue({}),
+    refresh: vi.fn().mockResolvedValue({}),
+    getSummary: vi.fn().mockResolvedValue(null),
+    getDaily: vi.fn().mockResolvedValue([]),
+    getBreakdown: vi.fn().mockResolvedValue([]),
+    getRecentSessions: vi.fn().mockResolvedValue([])
   }
 }
 
@@ -97,12 +114,15 @@ import { createTabsSlice } from './tabs'
 import { createUISlice } from './ui'
 import { createSettingsSlice } from './settings'
 import { createGitHubSlice } from './github'
+import { createHostedReviewSlice } from './hosted-review'
 import { createLinearSlice } from './linear'
 import { createEditorSlice } from './editor'
 import { createStatsSlice } from './stats'
 import { createMemorySlice } from './memory'
+import { createWorkspaceSpaceSlice } from './workspace-space'
 import { createClaudeUsageSlice } from './claude-usage'
 import { createCodexUsageSlice } from './codex-usage'
+import { createOpenCodeUsageSlice } from './opencode-usage'
 import { createBrowserSlice } from './browser'
 import { createRateLimitSlice } from './rate-limits'
 import { createSshSlice } from './ssh'
@@ -111,6 +131,8 @@ import { createDiffCommentsSlice } from './diffComments'
 import { createDetectedAgentsSlice } from './detected-agents'
 import { createWorktreeNavHistorySlice } from './worktree-nav-history'
 import { createArchitectureSlice } from './architecture'
+import { createDictationSlice } from './dictation'
+import { createWorkspaceCleanupSlice } from './workspace-cleanup'
 
 function createTestStore() {
   return create<AppState>()((...a) => ({
@@ -122,12 +144,15 @@ function createTestStore() {
     ...createUISlice(...a),
     ...createSettingsSlice(...a),
     ...createGitHubSlice(...a),
+    ...createHostedReviewSlice(...a),
     ...createLinearSlice(...a),
     ...createEditorSlice(...a),
     ...createStatsSlice(...a),
     ...createMemorySlice(...a),
+    ...createWorkspaceSpaceSlice(...a),
     ...createClaudeUsageSlice(...a),
     ...createCodexUsageSlice(...a),
+    ...createOpenCodeUsageSlice(...a),
     ...createBrowserSlice(...a),
     ...createRateLimitSlice(...a),
     ...createSshSlice(...a),
@@ -135,7 +160,9 @@ function createTestStore() {
     ...createDiffCommentsSlice(...a),
     ...createDetectedAgentsSlice(...a),
     ...createWorktreeNavHistorySlice(...a),
-    ...createArchitectureSlice(...a)
+    ...createArchitectureSlice(...a),
+    ...createDictationSlice(...a),
+    ...createWorkspaceCleanupSlice(...a)
   }))
 }
 
@@ -153,6 +180,8 @@ function makeWorktree(overrides: Partial<Worktree> & { id: string; repoId: strin
     linkedIssue: null,
     linkedPR: null,
     linkedLinearIssue: null,
+    linkedGitLabMR: null,
+    linkedGitLabIssue: null,
     isArchived: false,
     isUnread: false,
     isPinned: false,
@@ -1299,12 +1328,15 @@ describe('reconnectPersistedTerminals', () => {
     // sees the tab as active (green dot) even before the terminal mounts.
     // connectPanePty reads ptyIdsByLeafId for per-leaf daemon sessions.
     expect(s.tabsByWorktree[wt1][0].ptyId).toBe('daemon-session-B')
-    // ptyIdsByLeafId preserved from hydration for connectPanePty to consume
+    // ptyIdsByLeafId preserved from hydration for connectPanePty to consume,
+    // but legacy pane:* leaves are reminted to durable UUID leaves at hydration.
     const layout = s.terminalLayoutsByTabId['tab1']
-    expect(layout.ptyIdsByLeafId).toEqual({
-      'pane:1': 'daemon-session-A',
-      'pane:3': 'daemon-session-B'
-    })
+    const bindings = layout.ptyIdsByLeafId ?? {}
+    expect(Object.keys(bindings)).toHaveLength(2)
+    expect(Object.keys(bindings).every(isTerminalLeafId)).toBe(true)
+    expect(Object.keys(bindings)).not.toContain('pane:1')
+    expect(Object.keys(bindings)).not.toContain('pane:3')
+    expect(Object.values(bindings).sort()).toEqual(['daemon-session-A', 'daemon-session-B'])
     expect(s.workspaceSessionReady).toBe(true)
   })
 })
@@ -1365,6 +1397,48 @@ describe('hydrateEditorSession', () => {
     expect(s.openFiles[1].isPreview).toBe(true)
     expect(s.activeFileId).toBe('/path/wt1/src/index.ts')
     expect(s.activeTabType).toBe('editor')
+  })
+
+  it('re-detects restored file languages instead of trusting stale session data', () => {
+    const store = createTestStore()
+    const wt = 'repo1::/path/wt1'
+
+    store.setState({
+      repos: [
+        { id: 'repo1', path: '/repo1', displayName: 'Repo 1', badgeColor: '#000', addedAt: 0 }
+      ],
+      worktreesByRepo: {
+        repo1: [makeWorktree({ id: wt, repoId: 'repo1', path: '/path/wt1' })]
+      },
+      activeWorktreeId: wt
+    })
+
+    store.getState().hydrateEditorSession({
+      activeRepoId: 'repo1',
+      activeWorktreeId: wt,
+      activeTabId: null,
+      tabsByWorktree: {},
+      terminalLayoutsByTabId: {},
+      openFilesByWorktree: {
+        [wt]: [
+          {
+            filePath: '/path/wt1/notebooks/example.ipynb',
+            relativePath: 'notebooks/example.ipynb',
+            worktreeId: wt,
+            language: 'json'
+          }
+        ]
+      },
+      activeFileIdByWorktree: { [wt]: '/path/wt1/notebooks/example.ipynb' },
+      activeTabTypeByWorktree: { [wt]: 'editor' }
+    })
+
+    expect(store.getState().openFiles[0]).toEqual(
+      expect.objectContaining({
+        filePath: '/path/wt1/notebooks/example.ipynb',
+        language: 'notebook'
+      })
+    )
   })
 
   it('does nothing when no editor files are persisted', () => {

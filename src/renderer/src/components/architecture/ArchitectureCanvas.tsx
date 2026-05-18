@@ -154,6 +154,16 @@ function ArchitectureCanvasInner({
       })),
     [onSelectedEdgeChange, selectedEdgeId, view.visibleEdges, view.visibleNodes]
   )
+  const selectNodeAfterProgrammaticAdd = useCallback(
+    (nodeId: string) => {
+      suppressNativeSelectionRef.current = true
+      onSelectedNodeChange(nodeId)
+      window.setTimeout(() => {
+        suppressNativeSelectionRef.current = false
+      }, 80)
+    },
+    [onSelectedNodeChange]
+  )
 
   const groupBubbles = useMemo(
     () => getVisibleGroupBubbles(model, view.visibleNodes),
@@ -270,35 +280,47 @@ function ArchitectureCanvasInner({
     if (syncing) {
       return
     }
-    const parent = view.currentParentId
-      ? (model.nodes.find((node) => node.id === view.currentParentId) ?? null)
-      : null
-    const node = createNodeForParent(model, parent)
-    void onModelChange({ ...model, nodes: [...model.nodes, node] }, `Added ${node.data.name}`)
-    onSelectedNodeChange(node.id)
-  }, [model, onModelChange, onSelectedNodeChange, syncing, view.currentParentId])
+    let createdNodeId: string | null = null
+    void onModelChange((current) => {
+      const parent = view.currentParentId
+        ? (current.nodes.find((node) => node.id === view.currentParentId) ?? null)
+        : null
+      const node = createNodeForParent(current, parent)
+      createdNodeId = node.id
+      return { ...current, nodes: [...current.nodes, node] }
+    }, 'Added architecture node')
+    if (createdNodeId) {
+      selectNodeAfterProgrammaticAdd(createdNodeId)
+    }
+  }, [onModelChange, selectNodeAfterProgrammaticAdd, syncing, view.currentParentId])
 
   const addNodeAtCanvasPoint = useCallback(
     (clientX: number, clientY: number) => {
       if (syncing) {
         return
       }
-      const parent = view.currentParentId
-        ? (model.nodes.find((node) => node.id === view.currentParentId) ?? null)
-        : null
       const flowPoint = reactFlow.screenToFlowPosition({ x: clientX, y: clientY })
-      const node = {
-        ...createNodeForParent(model, parent),
-        position: {
-          x: Math.round(flowPoint.x / 20) * 20,
-          y: Math.round(flowPoint.y / 20) * 20
+      let createdNodeId: string | null = null
+      void onModelChange((current) => {
+        const parent = view.currentParentId
+          ? (current.nodes.find((node) => node.id === view.currentParentId) ?? null)
+          : null
+        const node = {
+          ...createNodeForParent(current, parent),
+          position: {
+            x: Math.round(flowPoint.x / 20) * 20,
+            y: Math.round(flowPoint.y / 20) * 20
+          }
         }
+        createdNodeId = node.id
+        return { ...current, nodes: [...current.nodes, node] }
+      }, 'Added architecture node')
+      if (createdNodeId) {
+        selectNodeAfterProgrammaticAdd(createdNodeId)
       }
-      void onModelChange({ ...model, nodes: [...model.nodes, node] }, `Added ${node.data.name}`)
-      onSelectedNodeChange(node.id)
       setContextMenu(null)
     },
-    [model, onModelChange, onSelectedNodeChange, reactFlow, syncing, view.currentParentId]
+    [onModelChange, reactFlow, selectNodeAfterProgrammaticAdd, syncing, view.currentParentId]
   )
 
   const deleteNodeFromMenu = useCallback(
@@ -306,12 +328,14 @@ function ArchitectureCanvasInner({
       if (syncing) {
         return
       }
-      const nextModel = deleteNodesFromModel(model, [nodeId])
-      void onModelChange(nextModel, 'Deleted architecture node')
+      void onModelChange(
+        (current) => deleteNodesFromModel(current, [nodeId]),
+        'Deleted architecture node'
+      )
       onSelectedNodeChange(null)
       setContextMenu(null)
     },
-    [model, onModelChange, onSelectedNodeChange, syncing]
+    [onModelChange, onSelectedNodeChange, syncing]
   )
 
   const deleteEdgeFromMenu = useCallback(
@@ -319,11 +343,14 @@ function ArchitectureCanvasInner({
       if (syncing) {
         return
       }
-      void onModelChange(deleteEdgesFromModel(model, [edgeId]), 'Deleted architecture edge')
+      void onModelChange(
+        (current) => deleteEdgesFromModel(current, [edgeId]),
+        'Deleted architecture edge'
+      )
       onSelectedEdgeChange(null)
       setContextMenu(null)
     },
-    [model, onModelChange, onSelectedEdgeChange, syncing]
+    [onModelChange, onSelectedEdgeChange, syncing]
   )
 
   const deleteSelected = useCallback(() => {
@@ -340,20 +367,26 @@ function ArchitectureCanvasInner({
       return
     }
     if (selectedNode) {
-      const nextModel = deleteNodesFromModel(model, [selectedNode.id])
-      void onModelChange(nextModel, `Deleted ${selectedNode.data.name}`)
-      onSelectedNodeChange(nextModel.nodes[0]?.id ?? null)
+      let nextSelectedNodeId: string | null = null
+      void Promise.resolve(
+        onModelChange((current) => {
+          const nextModel = deleteNodesFromModel(current, [selectedNode.id])
+          nextSelectedNodeId = nextModel.nodes[0]?.id ?? null
+          return nextModel
+        }, `Deleted ${selectedNode.data.name}`)
+      ).then(() => {
+        onSelectedNodeChange(nextSelectedNodeId)
+      })
       return
     }
     if (selectedEdge) {
       void onModelChange(
-        deleteEdgesFromModel(model, [selectedEdge.id]),
+        (current) => deleteEdgesFromModel(current, [selectedEdge.id]),
         `Deleted ${selectedEdge.id}`
       )
       onSelectedEdgeChange(null)
     }
   }, [
-    model,
     onModelChange,
     onSelectedEdgeChange,
     onSelectedNodeChange,
@@ -431,9 +464,28 @@ function ArchitectureCanvasInner({
     },
     [expandedPath, model.nodes, onExpandedPathChange, onSelectedNodeChange]
   )
+  const openCanvasContextMenu = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (event.defaultPrevented) {
+      return
+    }
+    const target = event.target instanceof HTMLElement ? event.target : null
+    if (
+      target?.closest(
+        'button,a,input,textarea,select,[role="button"],[data-testid="architecture-canvas-context-menu"]'
+      )
+    ) {
+      return
+    }
+    event.preventDefault()
+    setContextMenu({ x: event.clientX, y: event.clientY, type: 'canvas' })
+  }, [])
 
   return (
-    <div className="relative min-w-0 flex-1 overflow-hidden" data-testid="architecture-canvas">
+    <div
+      className="relative min-w-0 flex-1 overflow-hidden"
+      data-testid="architecture-canvas"
+      onContextMenu={openCanvasContextMenu}
+    >
       <ReactFlow
         nodes={visibleNodes}
         edges={visibleEdges}

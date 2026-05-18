@@ -12,6 +12,7 @@ import {
   waitForActiveWorktree,
   waitForSessionReady
 } from './helpers/store'
+import { getRendererTitleLog, installRendererTitleLog } from './helpers/terminal-title-log'
 import { POST_REPLAY_MODE_RESET } from '../../src/renderer/src/components/terminal-pane/layout-serialization'
 
 test.describe.configure({ mode: 'serial' })
@@ -24,11 +25,11 @@ async function createTerminalTab(page: Page): Promise<string> {
   const tabsBefore = await countRenderedTabs(page)
   const activeBefore = await getActiveTabId(page)
 
-  await page.getByRole('button', { name: 'New tab' }).click()
+  await page.getByRole('button', { name: 'New tab' }).click({ force: true })
   await page
     .getByRole('menuitem', { name: /New Terminal/i })
     .first()
-    .click()
+    .click({ force: true })
 
   await expect
     .poll(() => countRenderedTabs(page), {
@@ -78,11 +79,13 @@ async function activateTerminalTab(page: Page, tabId: string): Promise<void> {
 }
 
 async function emitBell(page: Page, ptyId: string): Promise<void> {
-  // Why: `tput bel` is the canonical way to emit BEL from the shell — this is
-  // the exact command the user will run to reproduce the attention path. Prefer
-  // it over `node -e` so the test exercises the same PTY byte stream a real
-  // user sees.
-  await execInTerminal(page, ptyId, `tput bel`)
+  // Why: `printf '\a'` emits a raw BEL byte without depending on terminfo or
+  // PATH-resolved binaries. CI shells can launch with a stripped PATH that
+  // excludes `/usr/bin`, breaking `tput` and silently emitting nothing —
+  // the `bash: groups: command not found` startup output in failure
+  // snapshots is the same symptom. printf is a shell builtin, so it works
+  // even when the PATH is broken.
+  await execInTerminal(page, ptyId, `printf '\\a'`)
 }
 
 async function proveShellReadyWithSingleWrite(page: Page, ptyId: string): Promise<void> {
@@ -175,19 +178,20 @@ test.describe('Terminal attention', () => {
     }
     const activePtyId = await waitForActivePanePtyId(orcaPage)
     await proveShellReadyWithSingleWrite(orcaPage, activePtyId)
+    await installRendererTitleLog(orcaPage)
 
-    // Emit the BEL, then a deterministic visible marker. When the marker lands
-    // in the terminal buffer, all prior PTY bytes (including the BEL) have been
-    // processed. Do not use OSC title as the marker: shell prompt hooks can
-    // immediately overwrite titles with cwd/user info, making the poll flaky.
+    // Emit the BEL, then a deterministic title marker. When the renderer logs
+    // the marker, all prior PTY bytes (including the BEL) have been processed.
     await emitBell(orcaPage, activePtyId)
-    const FLUSH_MARKER = `__FOCUSED_TAB_BELL_FLUSH_${Date.now()}__`
-    await execInTerminal(orcaPage, activePtyId, `printf '${FLUSH_MARKER}\\n'`)
+    const MARKER_TITLE = 'focused-tab-bell-marker'
+    // Why: printf is a shell builtin so it works even when CI launches the
+    // shell with a stripped PATH (no /usr/bin → no `node` resolvable).
+    await execInTerminal(orcaPage, activePtyId, `printf '\\033]0;${MARKER_TITLE}\\007'`)
 
     await expect
-      .poll(async () => (await getTerminalContent(orcaPage)).includes(FLUSH_MARKER), {
+      .poll(async () => (await getRendererTitleLog(orcaPage)).includes(MARKER_TITLE), {
         timeout: 10_000,
-        message: 'Flush marker did not land — byte stream may not have been processed'
+        message: 'Marker title did not land — byte stream may not have been flushed'
       })
       .toBe(true)
 

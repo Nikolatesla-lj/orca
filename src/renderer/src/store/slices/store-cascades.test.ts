@@ -60,6 +60,7 @@ import {
   makeWorktree,
   seedStore
 } from './store-test-helpers'
+import { shutdownBufferCaptures } from '@/components/terminal-pane/shutdown-buffer-captures'
 
 // ─── Tests ────────────────────────────────────────────────────────────
 
@@ -166,6 +167,8 @@ describe('removeWorktree cascade', () => {
     // State NOT cleaned up
     expect(s.worktreesByRepo['repo1']).toHaveLength(1)
     expect(s.tabsByWorktree[worktreeId]).toHaveLength(1)
+    expect(s.ptyIdsByTabId['tab1']).toEqual(['pty1'])
+    expect(mockApi.pty.kill).not.toHaveBeenCalled()
     expect(s.activeWorktreeId).toBe(worktreeId)
   })
 
@@ -267,7 +270,7 @@ describe('removeWorktree cascade', () => {
     expect(s.fileSearchStateByWorktree[wt1]).toBeUndefined()
   })
 
-  it('shuts down terminals before asking the backend to remove the worktree', async () => {
+  it('shuts down terminals after the backend confirms worktree removal', async () => {
     const store = createTestStore()
     const worktreeId = 'repo1::/path/wt1'
     const callOrder: string[] = []
@@ -297,7 +300,7 @@ describe('removeWorktree cascade', () => {
     const result = await store.getState().removeWorktree(worktreeId)
 
     expect(result).toEqual({ ok: true })
-    expect(callOrder).toEqual(['kill', 'remove'])
+    expect(callOrder).toEqual(['remove', 'kill'])
   })
 })
 
@@ -403,7 +406,7 @@ describe('setActiveWorktree', () => {
 
     const worktrees = [...store.getState().worktreesByRepo.repo1]
     const repoMap = new Map(store.getState().repos.map((repo) => [repo.id, repo]))
-    worktrees.sort(buildWorktreeComparator('smart', {}, repoMap, null, now))
+    worktrees.sort(buildWorktreeComparator('smart', repoMap, now, new Map()))
 
     expect(worktrees.map((worktree) => worktree.id)).toEqual([backgroundId, focusedId])
   })
@@ -1366,6 +1369,28 @@ describe('shutdownWorktreeTerminals (sleep) — agent status hygiene', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockApi.pty.kill.mockResolvedValue(undefined)
+    shutdownBufferCaptures.clear()
+  })
+
+  it('asks sleep-time buffer capture to skip local scrollback serialization', async () => {
+    const store = createTestStore()
+    const wt = 'repo1::/path/wt1'
+    const capture = vi.fn()
+
+    seedStore(store, {
+      worktreesByRepo: {
+        repo1: [makeWorktree({ id: wt, repoId: 'repo1', path: '/path/wt1' })]
+      },
+      tabsByWorktree: {
+        [wt]: [makeTab({ id: 'tab-1', worktreeId: wt, ptyId: 'pty-1' })]
+      },
+      ptyIdsByTabId: { 'tab-1': ['pty-1'] }
+    })
+    shutdownBufferCaptures.set('tab-1', capture)
+
+    await store.getState().shutdownWorktreeTerminals(wt, { keepIdentifiers: true })
+
+    expect(capture).toHaveBeenCalledWith({ includeLocalBuffers: false })
   })
 
   it('drops live agentStatusByPaneKey entries on sleep so the working row disappears', async () => {
@@ -1611,5 +1636,106 @@ describe('shutdownWorktreeTerminals (sleep) — agent status hygiene', () => {
     expect(s.agentStatusByPaneKey['tab-1:0']).toBeUndefined()
     expect(s.retainedAgentsByPaneKey['tab-1:0']).toBeUndefined()
     expect(s.acknowledgedAgentsByPaneKey['tab-1:0']).toBeUndefined()
+  })
+})
+
+// Why: CLI-spawned background terminals stamp ORCA_PANE_KEY into the PTY env
+// at spawn time. The renderer must adopt the tab under the same id so hook
+// events route to the correct slot.
+describe('createTab tabId hint', () => {
+  it('uses the supplied id when no collision exists', () => {
+    const store = createTestStore()
+    const wt = 'repo1::/path/wt-hint'
+    seedStore(store, {
+      worktreesByRepo: {
+        repo1: [makeWorktree({ id: wt, repoId: 'repo1', path: '/path/wt-hint' })]
+      },
+      groupsByWorktree: {},
+      activeGroupIdByWorktree: {},
+      unifiedTabsByWorktree: {}
+    })
+
+    const hintedId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const tab = store.getState().createTab(wt, undefined, undefined, { id: hintedId })
+
+    expect(tab.id).toBe(hintedId)
+  })
+
+  it('falls back to a fresh id on collision and warns', () => {
+    const store = createTestStore()
+    const wt = 'repo1::/path/wt-collision'
+    const existingId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    seedStore(store, {
+      worktreesByRepo: {
+        repo1: [makeWorktree({ id: wt, repoId: 'repo1', path: '/path/wt-collision' })]
+      },
+      tabsByWorktree: {
+        [wt]: [makeTab({ id: existingId, worktreeId: wt })]
+      },
+      groupsByWorktree: {},
+      activeGroupIdByWorktree: {},
+      unifiedTabsByWorktree: {}
+    })
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const tab = store.getState().createTab(wt, undefined, undefined, { id: existingId })
+      expect(tab.id).not.toBe(existingId)
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(existingId))
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('treats tab ids as global and rejects hints that collide in another worktree', () => {
+    const store = createTestStore()
+    const wtA = 'repo1::/path/wt-a'
+    const wtB = 'repo1::/path/wt-b'
+    const existingId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    seedStore(store, {
+      worktreesByRepo: {
+        repo1: [
+          makeWorktree({ id: wtA, repoId: 'repo1', path: '/path/wt-a' }),
+          makeWorktree({ id: wtB, repoId: 'repo1', path: '/path/wt-b' })
+        ]
+      },
+      tabsByWorktree: {
+        [wtB]: [makeTab({ id: existingId, worktreeId: wtB })]
+      },
+      groupsByWorktree: {},
+      activeGroupIdByWorktree: {},
+      unifiedTabsByWorktree: {}
+    })
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const tab = store.getState().createTab(wtA, undefined, undefined, { id: existingId })
+      expect(tab.id).not.toBe(existingId)
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(existingId))
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('ignores empty string hints instead of persisting an unusable tab id', () => {
+    const store = createTestStore()
+    const wt = 'repo1::/path/wt-empty-hint'
+    seedStore(store, {
+      worktreesByRepo: {
+        repo1: [makeWorktree({ id: wt, repoId: 'repo1', path: '/path/wt-empty-hint' })]
+      },
+      groupsByWorktree: {},
+      activeGroupIdByWorktree: {},
+      unifiedTabsByWorktree: {}
+    })
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const tab = store.getState().createTab(wt, undefined, undefined, { id: '' })
+      expect(tab.id).not.toBe('')
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
   })
 })

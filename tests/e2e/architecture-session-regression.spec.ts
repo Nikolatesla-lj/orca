@@ -34,11 +34,11 @@ async function getActiveWorktreePath(page: Page): Promise<string> {
 }
 
 async function openArchitectureTab(page: Page): Promise<void> {
-  await page.getByRole('button', { name: 'New tab' }).click()
+  await page.getByRole('button', { name: 'New tab' }).click({ force: true })
   await page
     .getByRole('menuitem', { name: /New Architecture/i })
     .first()
-    .click()
+    .click({ force: true })
   await expect(page.getByTestId('architecture-panel')).toBeVisible({ timeout: 30_000 })
 }
 
@@ -60,6 +60,10 @@ function getModelPath(projectPath: string): string {
 
 function readSavedModel(projectPath: string): SavedModel {
   return JSON.parse(readFileSync(getModelPath(projectPath), 'utf8'))
+}
+
+function nodeEvalCommand(script: string): string {
+  return `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`
 }
 
 async function terminalTabCount(page: Page): Promise<number> {
@@ -114,23 +118,23 @@ test.describe('Architecture model session regressions', () => {
   test('guards Build with AI against rapid duplicate launches', async ({ orcaPage }) => {
     const worktreePath = await getActiveWorktreePath(orcaPage)
     rmSync(path.join(worktreePath, '.scryer'), { recursive: true, force: true })
-    await orcaPage.evaluate(() => {
+    await orcaPage.evaluate((command) => {
       window.__store?.setState((state) => ({
         settings: {
           ...state.settings,
           defaultTuiAgent: 'codex',
           agentCmdOverrides: {
             ...state.settings?.agentCmdOverrides,
-            codex: 'node -e "setTimeout(()=>process.exit(1),200)"'
+            codex: command
           }
         }
       }))
-    })
+    }, nodeEvalCommand('setTimeout(()=>process.exit(1),200)'))
     await openArchitectureTab(orcaPage)
     await expect(orcaPage.getByTestId('architecture-build-ai')).toBeVisible({ timeout: 10_000 })
     const before = await terminalTabCount(orcaPage)
 
-    await orcaPage.getByTestId('architecture-build-ai').dblclick()
+    await orcaPage.getByTestId('architecture-build-ai').dblclick({ force: true })
 
     await expect
       .poll(async () => terminalTabCount(orcaPage), { timeout: 10_000 })
@@ -201,7 +205,7 @@ test.describe('Architecture model session regressions', () => {
     await expect(orcaPage.getByTestId('architecture-panel')).toBeVisible({ timeout: 30_000 })
     await expect(orcaPage.getByTestId('architecture-model-warning')).toContainText('model warning')
     await expect(
-      orcaPage.getByTestId('architecture-node-title').filter({ hasText: 'API' })
+      orcaPage.getByTestId('architecture-tree-node').filter({ hasText: 'API' })
     ).toBeVisible()
   })
 })

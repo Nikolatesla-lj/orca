@@ -4,7 +4,8 @@ import {
   pushArchitectureUndoSnapshot,
   createEmptyArchitectureModel,
   findCompletedArchitectureSyncPane,
-  fingerprintArchitectureModel
+  fingerprintArchitectureModel,
+  mergePatchedNodeDocument
 } from './useArchitectureModelController'
 
 describe('architecture model controller helpers', () => {
@@ -80,6 +81,57 @@ describe('architecture model controller helpers', () => {
         }
       })
     ).toEqual({ paneKey: 'tab-sync:0', interrupted: false })
+  })
+
+  it('merges a patched node document without dropping concurrent local edges', () => {
+    const latest: C4ModelData = {
+      nodes: [
+        {
+          id: 'api',
+          type: 'c4',
+          position: { x: 10, y: 20 },
+          data: { kind: 'container', name: 'API', description: '' }
+        },
+        {
+          id: 'worker',
+          type: 'c4',
+          position: { x: 220, y: 20 },
+          data: { kind: 'container', name: 'Container 2', description: '' }
+        }
+      ],
+      edges: [
+        {
+          id: 'edge-worker-api',
+          source: 'worker',
+          target: 'api',
+          data: { label: 'depends on' }
+        }
+      ],
+      startingLevel: 'system',
+      sourceMap: {},
+      projectPath: '/repo',
+      refPositions: {},
+      groups: [],
+      flows: []
+    }
+    const patched: C4ModelData = {
+      ...latest,
+      nodes: latest.nodes.map((node) =>
+        node.id === 'worker' ? { ...node, data: { ...node.data, name: 'Worker Container' } } : node
+      ),
+      edges: []
+    }
+
+    expect(mergePatchedNodeDocument(latest, patched, 'worker')).toMatchObject({
+      nodes: [
+        expect.objectContaining({ id: 'api', data: expect.objectContaining({ name: 'API' }) }),
+        expect.objectContaining({
+          id: 'worker',
+          data: expect.objectContaining({ name: 'Worker Container' })
+        })
+      ],
+      edges: latest.edges
+    })
   })
 
   it('ignores stale and interrupted sync agent completion states', () => {

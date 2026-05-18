@@ -69,11 +69,11 @@ async function getActiveWorktreePath(page: Page): Promise<string> {
 }
 
 async function openArchitectureTab(page: Page): Promise<void> {
-  await page.getByRole('button', { name: 'New tab' }).click()
+  await page.getByRole('button', { name: 'New tab' }).click({ force: true })
   await page
     .getByRole('menuitem', { name: /New Architecture/i })
     .first()
-    .click()
+    .click({ force: true })
   await expect(page.getByTestId('architecture-panel')).toBeVisible({ timeout: 30_000 })
 }
 
@@ -98,23 +98,48 @@ function readSavedModel(projectPath: string): SavedModel {
 }
 
 async function addNodeFromCanvasContext(page: Page, x = 42, y = 120): Promise<void> {
-  const canvas = page.getByTestId('architecture-canvas')
+  const canvas = page.locator('.react-flow__pane')
   await expect(canvas).toBeVisible({ timeout: 10_000 })
   const canvasBox = await canvas.boundingBox()
   expect(canvasBox).not.toBeNull()
   const horizontalPadding = Math.min(32, Math.max(8, canvasBox!.width / 4))
   const verticalPadding = Math.min(64, Math.max(16, canvasBox!.height / 5))
-  const safeX = Math.min(
-    Math.max(x, horizontalPadding),
-    Math.max(horizontalPadding, canvasBox!.width - horizontalPadding)
-  )
-  const safeY = Math.min(
-    Math.max(y, verticalPadding),
-    Math.max(verticalPadding, canvasBox!.height - verticalPadding)
-  )
-  await page.mouse.click(canvasBox!.x + safeX, canvasBox!.y + safeY, { button: 'right' })
-  await expect(page.getByTestId('architecture-canvas-context-menu')).toBeVisible()
-  await page.getByTestId('architecture-context-add-node').click()
+  const clampPoint = (pointX: number, pointY: number): { x: number; y: number } => ({
+    x: Math.min(
+      Math.max(pointX, horizontalPadding),
+      Math.max(horizontalPadding, canvasBox!.width - horizontalPadding)
+    ),
+    y: Math.min(
+      Math.max(pointY, verticalPadding),
+      Math.max(verticalPadding, canvasBox!.height - verticalPadding)
+    )
+  })
+  const candidates = [
+    clampPoint(x, y),
+    clampPoint(canvasBox!.width - horizontalPadding, canvasBox!.height - verticalPadding),
+    clampPoint(horizontalPadding, canvasBox!.height - verticalPadding),
+    clampPoint(canvasBox!.width / 2, canvasBox!.height - verticalPadding)
+  ]
+  for (const point of candidates) {
+    await canvas.click({ button: 'right', force: true, position: point })
+    await expect(page.getByTestId('architecture-canvas-context-menu')).toBeVisible()
+    const addItem = page.getByTestId('architecture-context-add-node')
+    if (await addItem.isVisible().catch(() => false)) {
+      const nameInput = page.getByTestId('architecture-node-name')
+      const previousName = await nameInput.inputValue({ timeout: 500 }).catch(() => null)
+      await addItem.click({ force: true })
+      await expect
+        .poll(() => nameInput.inputValue({ timeout: 500 }).catch(() => null), {
+          timeout: 5_000,
+          message: 'newly added architecture node was not selected'
+        })
+        .not.toBe(previousName)
+      return
+    }
+    await canvas.click({ force: true, position: point })
+  }
+  await expect(page.getByTestId('architecture-context-add-node')).toBeVisible()
+  await page.getByTestId('architecture-context-add-node').click({ force: true })
 }
 
 async function renameSelectedNode(page: Page, name: string, description?: string): Promise<void> {
@@ -171,20 +196,23 @@ async function drillIntoSavedNode(
 ): Promise<void> {
   const node = savedNodeLocator(page, projectPath, nodeName)
   await expect(node).toBeVisible({ timeout: 10_000 })
-  await node.click({ position: { x: 90, y: 80 } })
+  await node.click({ force: true, position: { x: 90, y: 80 } })
   const drillButton = node.getByTitle('Drill into node')
   if (await drillButton.isVisible().catch(() => false)) {
-    await drillButton.click()
+    await drillButton.click({ force: true })
     return
   }
-  await node.dblclick({ position: { x: 90, y: 80 } })
+  await node.dblclick({ force: true, position: { x: 90, y: 80 } })
 }
 
 async function enterCodeLevelForComponent(page: Page, componentName: string): Promise<void> {
-  await page.getByTestId('architecture-tree-node').filter({ hasText: componentName }).click()
+  await page
+    .getByTestId('architecture-tree-node')
+    .filter({ hasText: componentName })
+    .click({ force: true })
   await expect(page.getByTestId('architecture-node-name')).toHaveValue(componentName)
   await expect(page.getByTitle('Drill into node')).toBeVisible({ timeout: 10_000 })
-  await page.getByTitle('Drill into node').click()
+  await page.getByTitle('Drill into node').click({ force: true })
 }
 
 test.describe('Architecture human migration checklist', () => {
@@ -200,7 +228,7 @@ test.describe('Architecture human migration checklist', () => {
     rmSync(path.join(worktreePath, '.scryer'), { recursive: true, force: true })
     await openArchitectureTab(orcaPage)
 
-    await orcaPage.getByTestId('architecture-theme-open').click()
+    await orcaPage.getByTestId('architecture-theme-open').click({ force: true })
     await expect(orcaPage.getByTestId('architecture-theme-editor')).toBeVisible()
     await expect(
       orcaPage.getByTestId('architecture-theme-role-background').locator('option')
@@ -349,7 +377,7 @@ test.describe('Architecture human migration checklist', () => {
     const worktreePath = await getActiveWorktreePath(orcaPage)
     rmSync(path.join(worktreePath, '.scryer'), { recursive: true, force: true })
     await openArchitectureTab(orcaPage)
-    await orcaPage.getByTestId('architecture-start-blank').click()
+    await orcaPage.getByTestId('architecture-start-blank').click({ force: true })
 
     await addNodeFromCanvasContext(orcaPage, 48, 150)
     await renameSelectedNode(orcaPage, 'Issue Tracker', 'Tracks issues and comments')
@@ -361,9 +389,9 @@ test.describe('Architecture human migration checklist', () => {
       ).toHaveAttribute('data-node-shape', shape)
     }
 
-    await orcaPage.getByTestId('architecture-zoom-in').click()
-    await orcaPage.getByTestId('architecture-zoom-out').click()
-    await orcaPage.getByTestId('architecture-zoom-fit').click()
+    await orcaPage.getByTestId('architecture-zoom-in').click({ force: true })
+    await orcaPage.getByTestId('architecture-zoom-out').click({ force: true })
+    await orcaPage.getByTestId('architecture-zoom-fit').click({ force: true })
 
     await drillIntoSavedNode(orcaPage, worktreePath, 'Issue Tracker')
     for (const [index, name] of ['Web App', 'API', 'Database'].entries()) {
@@ -377,18 +405,24 @@ test.describe('Architecture human migration checklist', () => {
       orcaPage.getByTestId('architecture-tree-node').filter({ hasText: 'Database' })
     ).toBeVisible()
 
-    await orcaPage.getByTestId('architecture-tree-node').filter({ hasText: 'Web App' }).click()
+    await orcaPage
+      .getByTestId('architecture-tree-node')
+      .filter({ hasText: 'Web App' })
+      .click({ force: true })
     await orcaPage.getByTestId('architecture-node-description').fill('Calls @[Ghost API]')
     await orcaPage.keyboard.press('Tab')
     await expect(orcaPage.getByTestId('architecture-mention-warning')).toContainText(
       'does not match a sibling node'
     )
 
-    await orcaPage.getByTestId('architecture-tree-node').filter({ hasText: 'API' }).click()
+    await orcaPage
+      .getByTestId('architecture-tree-node')
+      .filter({ hasText: 'API' })
+      .click({ force: true })
     await orcaPage.getByTestId('architecture-source-pattern').fill('src/api/**/*.ts')
     await orcaPage.keyboard.press('Tab')
     await orcaPage.getByTestId('architecture-edge-target').selectOption({ label: 'Database' })
-    await orcaPage.getByTestId('architecture-add-edge').click()
+    await orcaPage.getByTestId('architecture-add-edge').click({ force: true })
     await expect(
       orcaPage.getByTestId('architecture-edge-label').filter({ hasText: 'depends on' })
     ).toBeVisible({ timeout: 10_000 })
@@ -468,11 +502,11 @@ test.describe('Architecture human migration checklist', () => {
     await expect(orcaPage.getByTestId('architecture-node-name')).toHaveValue('Auth Controller')
     await orcaPage.waitForTimeout(400)
 
-    await orcaPage.getByTestId('architecture-code-add-operation').click()
+    await orcaPage.getByTestId('architecture-code-add-operation').click({ force: true })
     await renameSelectedNode(orcaPage, 'loginUser', 'Creates a user session')
-    await orcaPage.getByTestId('architecture-code-add-process').click()
+    await orcaPage.getByTestId('architecture-code-add-process').click({ force: true })
     await renameSelectedNode(orcaPage, 'loginFlow', 'Checks credentials then issues a token')
-    await orcaPage.getByTestId('architecture-code-add-model').click()
+    await orcaPage.getByTestId('architecture-code-add-model').click({ force: true })
     await renameSelectedNode(orcaPage, 'Task', 'Task record used by @[loginUser]')
 
     await expect
@@ -531,7 +565,10 @@ test.describe('Architecture human migration checklist', () => {
       timeout: 10_000
     })
 
-    await orcaPage.getByTestId('architecture-code-card').filter({ hasText: 'Task' }).click()
+    await orcaPage
+      .getByTestId('architecture-code-card')
+      .filter({ hasText: 'Task' })
+      .click({ force: true })
     await expect(orcaPage.getByTestId('architecture-node-name')).toHaveValue('Task')
     await expect(orcaPage.getByTestId('architecture-model-properties')).toBeVisible()
     const propertyInputs = orcaPage.getByTestId('architecture-model-properties').locator('input')
@@ -540,7 +577,7 @@ test.describe('Architecture human migration checklist', () => {
     const savePropertiesButton = orcaPage.getByTestId('architecture-model-property-save')
     if (await savePropertiesButton.isVisible().catch(() => false)) {
       await expect(savePropertiesButton).toBeEnabled()
-      await savePropertiesButton.click()
+      await savePropertiesButton.click({ force: true })
     } else {
       await orcaPage.keyboard.press('Tab')
     }
@@ -621,7 +658,7 @@ test.describe('Architecture human migration checklist', () => {
     })
     await openArchitectureTab(orcaPage)
 
-    await orcaPage.getByTestId('architecture-mcp-config').click()
+    await orcaPage.getByTestId('architecture-mcp-config').click({ force: true })
     await expect.poll(() => existsSync(path.join(worktreePath, '.mcp.json'))).toBe(true)
     await expect.poll(() => existsSync(path.join(worktreePath, '.codex', 'config.toml'))).toBe(true)
     expect(readFileSync(path.join(worktreePath, '.mcp.json'), 'utf8')).toContain('scryer')

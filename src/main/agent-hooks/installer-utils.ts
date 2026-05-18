@@ -8,8 +8,10 @@ import {
   renameSync,
   unlinkSync
 } from 'fs'
+import { homedir } from 'os'
 import { dirname, join } from 'path'
 import { randomUUID } from 'crypto'
+import type { AgentHookSource } from '../../shared/agent-hook-relay'
 import { grantDirAcl, isPermissionError } from '../win32-utils'
 
 export type HookCommandConfig = {
@@ -65,6 +67,12 @@ export function createManagedCommandMatcher(
   }
 }
 
+// Why: prod, dev, and parallel Orca instances must write the same managed
+// settings entry instead of racing between per-userData script paths.
+export function getSharedManagedScriptPath(scriptFileName: string): string {
+  return join(homedir(), '.orca', 'agent-hooks', scriptFileName)
+}
+
 // Why: a stale managed hook entry (left over after the user wiped userData,
 // switched dev↔prod installs, or had a partial install fail) used to fire
 // `/bin/sh "<missing path>"` on every tool call, which exits 127 and surfaces
@@ -79,6 +87,13 @@ export function wrapPosixHookCommand(scriptPath: string): string {
   // arbitrary path.
   const quoted = `'${scriptPath.replaceAll("'", "'\\''")}'`
   return `if [ -x ${quoted} ]; then /bin/sh ${quoted}; fi`
+}
+
+export function buildWindowsAgentHookPostCommand(source: AgentHookSource): string {
+  // Why: Windows PowerShell 5.1 defaults redirected stdin/request bodies to the
+  // active code page. Hook payloads are UTF-8 JSON, so force UTF-8 on both read
+  // and POST or CJK prompts arrive in Orca as literal question marks.
+  return `powershell -NoProfile -ExecutionPolicy Bypass -Command "$utf8=[System.Text.UTF8Encoding]::new($false); [Console]::InputEncoding=$utf8; [Console]::OutputEncoding=$utf8; $inputData=[Console]::In.ReadToEnd(); if ([string]::IsNullOrWhiteSpace($inputData)) { exit 0 }; try { $body=@{ paneKey=$env:ORCA_PANE_KEY; tabId=$env:ORCA_TAB_ID; worktreeId=$env:ORCA_WORKTREE_ID; env=$env:ORCA_AGENT_HOOK_ENV; version=$env:ORCA_AGENT_HOOK_VERSION; payload=($inputData | ConvertFrom-Json) } | ConvertTo-Json -Depth 100 -Compress; $bodyBytes=$utf8.GetBytes($body); Invoke-WebRequest -UseBasicParsing -Method Post -Uri ('http://127.0.0.1:' + $env:ORCA_AGENT_HOOK_PORT + '/hook/${source}') -ContentType 'application/json; charset=utf-8' -Headers @{ 'X-Orca-Agent-Hook-Token'=$env:ORCA_AGENT_HOOK_TOKEN } -Body $bodyBytes | Out-Null } catch {}"`
 }
 
 export function removeManagedCommands(
@@ -99,18 +114,48 @@ export function removeManagedCommands(
   })
 }
 
+// Why: temp+rename so concurrent Orca instances writing this shared path can't
+// produce a torn script that an in-flight `/bin/sh <scriptPath>` would source.
 export function writeManagedScript(scriptPath: string, content: string): void {
-  mkdirSync(dirname(scriptPath), { recursive: true })
-  writeScriptWithAclRetry(scriptPath, content)
-  if (process.platform !== 'win32') {
-    chmodSync(scriptPath, 0o755)
+  const dir = dirname(scriptPath)
+  mkdirSync(dir, { recursive: true })
+
+  if (existsSync(scriptPath)) {
+    try {
+      if (readFileSync(scriptPath, 'utf-8') === content) {
+        if (process.platform !== 'win32') {
+          chmodSync(scriptPath, 0o755)
+        }
+        return
+      }
+    } catch {
+      // Fall through to the atomic write path.
+    }
+  }
+
+  const tmpPath = join(dir, `.${Date.now()}-${randomUUID()}.tmp`)
+  try {
+    writeScriptWithAclRetry(tmpPath, content)
+    // Why: chmod before rename so the canonical path is never visible in a
+    // non-executable state; wrapPosixHookCommand's `[ -x ]` guard would
+    // silently skip the hook in that window.
+    if (process.platform !== 'win32') {
+      chmodSync(tmpPath, 0o755)
+    }
+    renameSync(tmpPath, scriptPath)
+  } finally {
+    if (existsSync(tmpPath)) {
+      try {
+        unlinkSync(tmpPath)
+      } catch {
+        // best effort
+      }
+    }
   }
 }
 
-// Why: on Windows, Chromium's renderer initialization can reset the DACL on
-// the userData directory (Protected DACL without OI+CI propagation), leaving
-// child directories like agent-hooks with an empty DACL. Grant an explicit
-// directory ACL on EPERM and retry once.
+// Why: on Windows, write may fail with EPERM if the target directory has a
+// restrictive DACL. Grant an explicit ACL on EPERM and retry once.
 function writeScriptWithAclRetry(scriptPath: string, content: string): void {
   try {
     writeFileSync(scriptPath, content, 'utf-8')

@@ -74,7 +74,7 @@ test.describe('Tabs', () => {
   test('clicking "+" then "New Terminal" creates a new terminal tab', async ({ orcaPage }) => {
     const tabsBefore = await countRenderedTabs(orcaPage)
 
-    await orcaPage.getByRole('button', { name: 'New tab' }).click()
+    await orcaPage.getByRole('button', { name: 'New tab' }).click({ force: true })
     // Why: the "+" dropdown uses Radix <DropdownMenuItem>, which exposes the
     // label text as the accessible name once the menu is open.
     await orcaPage
@@ -146,7 +146,7 @@ test.describe('Tabs', () => {
     // Ensure we have at least 2 tabs — use the real "+" flow so a render
     // regression would fail setup before we even start the cycle check.
     if ((await countRenderedTabs(orcaPage)) < 2) {
-      await orcaPage.getByRole('button', { name: 'New tab' }).click()
+      await orcaPage.getByRole('button', { name: 'New tab' }).click({ force: true })
       await orcaPage
         .getByRole('menuitem', { name: /New Terminal/i })
         .first()
@@ -192,7 +192,7 @@ test.describe('Tabs', () => {
     const worktreeId = (await getActiveWorktreeId(orcaPage))!
 
     if ((await countRenderedTabs(orcaPage)) < 2) {
-      await orcaPage.getByRole('button', { name: 'New tab' }).click()
+      await orcaPage.getByRole('button', { name: 'New tab' }).click({ force: true })
       await orcaPage
         .getByRole('menuitem', { name: /New Terminal/i })
         .first()

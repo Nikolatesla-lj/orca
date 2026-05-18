@@ -18,8 +18,11 @@ export default defineConfig({
   globalTeardown: './e2e/global-teardown.ts',
   // Why: this suite launches a fresh Electron app and isolated userData dir per
   // test. Cold-starts late in the run can exceed 60s on CI even when the app is
-  // healthy, so the per-test budget needs to cover startup plus assertions.
-  timeout: 120_000,
+  // healthy, and Playwright applies the same budget to worker teardown. The
+  // serialized full-suite path can spend extra time closing the final Electron
+  // app and detached PTY daemons after 100+ launches, so keep enough budget for
+  // cleanup without masking individual assertion timeouts.
+  timeout: 240_000,
   expect: { timeout: 10_000 },
   // Why: the headless Electron specs launch isolated app instances and can
   // safely fan out across workers, which cuts the default E2E runtime
@@ -30,7 +33,12 @@ export default defineConfig({
   // specs on the ubuntu-latest runner (4 vCPUs) and waste headroom. Each test
   // launches an isolated Electron instance with its own userData dir, so they
   // don't share state — we can safely fan out to match the runner's vCPU count.
-  workers: process.env.CI ? 4 : undefined,
+  // Why: these Electron specs drive real windows, PTYs, persisted userData, and
+  // shared OS resources. Running multiple app instances at once makes visible
+  // controls fail Playwright's "stable" actionability check and lets terminal
+  // setup leak across specs. Keep the default full-suite path serialized; use a
+  // one-off CLI --workers override only when debugging a clearly isolated spec.
+  workers: 1,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   reporter: 'list',

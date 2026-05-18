@@ -1,16 +1,18 @@
-import fs from 'node:fs/promises'
-import path from 'node:path'
+/* eslint-disable max-lines -- Why: this file is the central main-window IPC wiring point; splitting it during the mobile release compatibility rebase would increase release risk. */
+import { randomUUID } from 'node:crypto'
 
-import { app, clipboard, ipcMain, nativeImage, session } from 'electron'
+import { app, ipcMain, session } from 'electron'
 import type { BrowserWindow } from 'electron'
 import type { Store } from '../persistence'
 import type { CreateWorktreeResult, WorktreeStartupLaunch } from '../../shared/types'
 import { ORCA_BROWSER_PARTITION } from '../../shared/constants'
 import { registerRepoHandlers } from '../ipc/repos'
 import { registerWorktreeHandlers } from '../ipc/worktrees'
-import { registerPtyHandlers } from '../ipc/pty'
+import { registerWorkspaceCleanupHandlers } from '../ipc/workspace-cleanup'
+import { getLocalPtyProvider, registerPtyHandlers } from '../ipc/pty'
 import { registerDaemonManagementHandlers } from '../ipc/pty-management'
 import { registerSshHandlers } from '../ipc/ssh'
+import { registerRemoteWorkspaceHandlers } from '../ipc/remote-workspace'
 import { browserManager } from '../browser/browser-manager'
 import { hasSystemMediaAccess, requestSystemMediaAccess } from '../browser/browser-media-access'
 import type { OrcaRuntimeService } from '../runtime/orca-runtime'
@@ -26,6 +28,11 @@ import { scheduleHistoryGc } from '../terminal-history'
 import { hydrateLocalPtyRegistryAtBoot } from '../memory/hydrate-local-pty-registry'
 import type { ClaudeRuntimeAuthPreparation } from '../claude-accounts/runtime-auth-service'
 import { getKnownWorktreeIdsForHistoryGc } from './history-gc-worktree-ids'
+import type {
+  RuntimeMarkdownReadTabResult,
+  RuntimeMarkdownSaveTabResult
+} from '../../shared/mobile-markdown-document'
+import { requestMobileMarkdownFromRenderer } from './mobile-markdown-request-relay'
 
 export function attachMainWindowServices(
   mainWindow: BrowserWindow,
@@ -36,6 +43,7 @@ export function attachMainWindowServices(
 ): void {
   registerRepoHandlers(mainWindow, store)
   registerWorktreeHandlers(mainWindow, store, runtime)
+  registerWorkspaceCleanupHandlers(store, { runtime, getLocalPtyProvider })
   registerPtyHandlers(
     mainWindow,
     runtime,
@@ -68,6 +76,7 @@ export function attachMainWindowServices(
   // git I/O or daemon RPC.
   void hydrateLocalPtyRegistryAtBoot(store)
   registerSshHandlers(store, () => mainWindow, runtime)
+  registerRemoteWorkspaceHandlers(store, () => mainWindow)
   registerFileDropRelay(mainWindow)
   setupAutoUpdater(mainWindow, {
     getLastUpdateCheckAt: () => store.getUI().lastUpdateCheckAt,
@@ -228,6 +237,42 @@ function registerRuntimeWindowLifecycle(
     },
     createTerminal: (worktreeId, opts) =>
       send('ui:createTerminal', { worktreeId, command: opts.command, title: opts.title }),
+    revealTerminalSession: (worktreeId, opts) =>
+      new Promise((resolve, reject) => {
+        const requestId = randomUUID()
+        const timer = setTimeout(() => {
+          ipcMain.removeListener('terminal:tabCreateReply', handler)
+          reject(new Error('Terminal reveal timed out'))
+        }, 10_000)
+        const handler = (
+          _event: Electron.IpcMainEvent,
+          reply: { requestId: string; tabId?: string; title?: string; error?: string }
+        ): void => {
+          if (reply.requestId !== requestId) {
+            return
+          }
+          clearTimeout(timer)
+          ipcMain.removeListener('terminal:tabCreateReply', handler)
+          if (reply.error) {
+            reject(new Error(reply.error))
+            return
+          }
+          resolve({ tabId: reply.tabId!, title: reply.title })
+        }
+        ipcMain.on('terminal:tabCreateReply', handler)
+        send('ui:createTerminal', {
+          requestId,
+          worktreeId,
+          ptyId: opts.ptyId,
+          title: opts.title ?? undefined,
+          activate: opts.activate !== false,
+          // Why: pre-minted tabId from main keeps the renderer's tab id aligned
+          // with the paneKey baked into the PTY env at spawn time, so hook
+          // events route to the right slot.
+          ...(opts.tabId !== undefined ? { tabId: opts.tabId } : {}),
+          ...(opts.leafId !== undefined ? { leafId: opts.leafId } : {})
+        })
+      }),
     splitTerminal: (tabId, paneRuntimeId, opts) => {
       send('ui:splitTerminal', {
         tabId,
@@ -237,7 +282,26 @@ function registerRuntimeWindowLifecycle(
       })
     },
     renameTerminal: (tabId, title) => send('ui:renameTerminal', { tabId, title }),
-    focusTerminal: (tabId, worktreeId) => send('ui:focusTerminal', { tabId, worktreeId }),
+    focusTerminal: (tabId, worktreeId, leafId) =>
+      send('ui:focusTerminal', { tabId, worktreeId, leafId }),
+    focusEditorTab: (tabId, worktreeId) => send('ui:focusEditorTab', { tabId, worktreeId }),
+    closeSessionTab: (tabId, worktreeId) => send('ui:closeSessionTab', { tabId, worktreeId }),
+    openFile: (worktreeId, filePath, relativePath) =>
+      send('ui:openFileFromMobile', { worktreeId, filePath, relativePath }),
+    readMobileMarkdownTab: (worktreeId, tabId) =>
+      requestMobileMarkdownFromRenderer(mainWindow, {
+        operation: 'read',
+        worktreeId,
+        tabId
+      }) as Promise<RuntimeMarkdownReadTabResult>,
+    saveMobileMarkdownTab: (worktreeId, tabId, baseVersion, content) =>
+      requestMobileMarkdownFromRenderer(mainWindow, {
+        operation: 'save',
+        worktreeId,
+        tabId,
+        baseVersion,
+        content
+      }) as Promise<RuntimeMarkdownSaveTabResult>,
     closeTerminal: (tabId, paneRuntimeId) => send('ui:closeTerminal', { tabId, paneRuntimeId }),
     sleepWorktree: (worktreeId) => send('ui:sleepWorktree', { worktreeId }),
     terminalFitOverrideChanged: (ptyId, mode, cols, rows) =>
@@ -264,7 +328,7 @@ function registerFileDropRelay(mainWindow: BrowserWindow): void {
       _event,
       args:
         | { paths: string[]; target: 'editor' }
-        | { paths: string[]; target: 'terminal' }
+        | { paths: string[]; target: 'terminal'; tabId?: string }
         | { paths: string[]; target: 'composer' }
         | { paths: string[]; target: 'file-explorer'; destinationDir: string }
     ) => {
@@ -277,47 +341,6 @@ function registerFileDropRelay(mainWindow: BrowserWindow): void {
       mainWindow.webContents.send('terminal:file-drop', args)
     }
   )
-}
-
-export function registerClipboardHandlers(): void {
-  ipcMain.removeHandler('clipboard:readText')
-  ipcMain.removeHandler('clipboard:writeText')
-  ipcMain.removeHandler('clipboard:writeImage')
-  ipcMain.removeHandler('clipboard:saveImageAsTempFile')
-
-  ipcMain.handle('clipboard:readText', () => clipboard.readText())
-  // Why: terminals need to detect clipboard images to support tools like Claude
-  // Code that accept image input via paste. Writes the clipboard image to a
-  // temp file and returns the path, or null if the clipboard has no image.
-  ipcMain.handle('clipboard:saveImageAsTempFile', async () => {
-    const image = clipboard.readImage()
-    if (image.isEmpty()) {
-      return null
-    }
-    const tempPath = path.join(app.getPath('temp'), `orca-paste-${Date.now()}.png`)
-    await fs.writeFile(tempPath, image.toPNG())
-    return tempPath
-  })
-  ipcMain.handle('clipboard:writeText', (_event, text: string) => clipboard.writeText(text))
-  ipcMain.handle('clipboard:writeImage', (_event, dataUrl: string) => {
-    // Why: only accept validated PNG data URIs to prevent writing arbitrary
-    // data to the clipboard. The renderer already validates the prefix, but
-    // defense-in-depth applies here too.
-    const prefix = 'data:image/png;base64,'
-    if (typeof dataUrl !== 'string' || !dataUrl.startsWith(prefix)) {
-      return
-    }
-    // Why: use createFromBuffer instead of createFromDataURL — the latter
-    // silently returns an empty image on some macOS + Electron combinations
-    // when the data URL is large (>500KB). Decoding the base64 manually and
-    // using createFromBuffer is more reliable.
-    const buffer = Buffer.from(dataUrl.slice(prefix.length), 'base64')
-    const image = nativeImage.createFromBuffer(buffer)
-    if (image.isEmpty()) {
-      return
-    }
-    clipboard.writeImage(image)
-  })
 }
 
 export function registerUpdaterHandlers(_store: Store): void {

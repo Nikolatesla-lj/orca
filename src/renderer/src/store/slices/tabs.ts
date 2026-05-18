@@ -27,6 +27,7 @@ import {
 } from './tab-group-state'
 import { buildHydratedTabState } from './tabs-hydration'
 import { buildOrphanTerminalCleanupPatch, getOrphanTerminalIds } from './terminal-orphan-helpers'
+import { createBrowserUuid } from '@/lib/browser-uuid'
 
 export type TabSplitDirection = 'left' | 'right' | 'up' | 'down'
 
@@ -445,7 +446,7 @@ export const createTabsSlice: StateCreator<AppState, [], [], TabsSlice> = (set, 
   layoutByWorktree: {},
 
   createUnifiedTab: (worktreeId, contentType, init) => {
-    const id = init?.id ?? globalThis.crypto.randomUUID()
+    const id = init?.id ?? createBrowserUuid()
     let created!: Tab
     set((state) => {
       const { group, groupsByWorktree, activeGroupIdByWorktree } = ensureGroup(
@@ -854,7 +855,7 @@ export const createTabsSlice: StateCreator<AppState, [], [], TabsSlice> = (set, 
       return get().activeGroupIdByWorktree[worktreeId] ?? existingGroups[0].id
     }
 
-    const groupId = globalThis.crypto.randomUUID()
+    const groupId = createBrowserUuid()
     set((state) => ({
       // Why: a freshly selected worktree can legitimately have zero tabs, but
       // split-group affordances still need a canonical root group so new tabs
@@ -985,7 +986,7 @@ export const createTabsSlice: StateCreator<AppState, [], [], TabsSlice> = (set, 
   },
 
   createEmptySplitGroup: (worktreeId, sourceGroupId, direction) => {
-    const newGroupId = globalThis.crypto.randomUUID()
+    const newGroupId = createBrowserUuid()
     const newGroup: TabGroup = {
       id: newGroupId,
       worktreeId,
@@ -1133,7 +1134,7 @@ export const createTabsSlice: StateCreator<AppState, [], [], TabsSlice> = (set, 
       let resolvedTargetGroupId = target.groupId
 
       if (target.splitDirection) {
-        const newGroupId = globalThis.crypto.randomUUID()
+        const newGroupId = createBrowserUuid()
         const newGroup: TabGroup = {
           id: newGroupId,
           worktreeId,

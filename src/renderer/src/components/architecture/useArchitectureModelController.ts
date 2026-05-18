@@ -243,6 +243,23 @@ export function fingerprintArchitectureModel(model: C4ModelData): string {
   return JSON.stringify(stableFingerprintValue(parseModelData(serializeModelData(model))))
 }
 
+export function mergePatchedNodeDocument(
+  latestModel: C4ModelData,
+  patchedDocument: C4ModelData,
+  nodeId: string
+): C4ModelData {
+  const patchedNode = patchedDocument.nodes.find((node) => node.id === nodeId)
+  if (!patchedNode) {
+    return latestModel
+  }
+  return {
+    ...latestModel,
+    nodes: latestModel.nodes.map((node) =>
+      node.id === nodeId ? { ...node, data: patchedNode.data } : node
+    )
+  }
+}
+
 function stringArraysEqual(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index])
 }
@@ -921,19 +938,27 @@ export function useArchitectureModelController({
   }, [architectureMode, model, selectedEdgeId, selectedNodeId])
 
   const addNode = useCallback(async () => {
-    if (!model || editingLocked) {
+    const current = modelRef.current ?? model
+    if (!current || editingLocked) {
       return
     }
-    const node = createNodeForParent(model, selectedNode)
-    const nextModel = { ...model, nodes: [...model.nodes, node] }
+    const currentSelectedNode = selectedNode
+      ? (current.nodes.find((node) => node.id === selectedNode.id) ?? selectedNode)
+      : null
+    const node = createNodeForParent(current, currentSelectedNode)
+    const nextModel = { ...current, nodes: [...current.nodes, node] }
     selectedNodeIdRef.current = node.id
     selectedEdgeIdRef.current = null
     await persist(nextModel, `Added ${node.data.name}`)
     setSelectedNodeId(node.id)
     setSelectedEdgeId(null)
-    if (selectedNode && !selectedNode.data.external && isExpandableKind(selectedNode.data.kind)) {
+    if (
+      currentSelectedNode &&
+      !currentSelectedNode.data.external &&
+      isExpandableKind(currentSelectedNode.data.kind)
+    ) {
       setExpandedPath((current) =>
-        current.at(-1) === selectedNode.id ? current : [...current, selectedNode.id]
+        current.at(-1) === currentSelectedNode.id ? current : [...current, currentSelectedNode.id]
       )
     }
   }, [editingLocked, model, persist, selectedNode])
@@ -948,12 +973,15 @@ export function useArchitectureModelController({
       if (!target) {
         return
       }
-      if (fingerprintArchitectureModel(current) !== fingerprintArchitectureModel({
-        ...current,
-        nodes: current.nodes.map((node) =>
-          node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node
-        )
-      })) {
+      if (
+        fingerprintArchitectureModel(current) !==
+        fingerprintArchitectureModel({
+          ...current,
+          nodes: current.nodes.map((node) =>
+            node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node
+          )
+        })
+      ) {
         const history = pushArchitectureUndoSnapshot(undoStackRef.current, current, {
           batchStartedAt: historyBatchStartedAtRef.current,
           now: Date.now()
@@ -965,10 +993,18 @@ export function useArchitectureModelController({
       }
       try {
         const result = await patchActiveNodeData(nodeId, patch, target.data)
-        const nextFingerprint = fingerprintArchitectureModel(result.model)
-        modelRef.current = result.model
-        setModel(result.model)
+        const nextModel = mergePatchedNodeDocument(
+          modelRef.current ?? result.model,
+          result.model,
+          nodeId
+        )
+        const nextFingerprint = fingerprintArchitectureModel(nextModel)
+        modelRef.current = nextModel
+        setModel(nextModel)
         lastKnownModelFingerprintRef.current = nextFingerprint
+        if (nextFingerprint !== fingerprintArchitectureModel(result.model)) {
+          scheduleModelWrite(nextModel)
+        }
         setMessage(`Saved ${target.data.name}`)
       } catch (patchError) {
         const text = patchError instanceof Error ? patchError.message : String(patchError)
@@ -976,7 +1012,7 @@ export function useArchitectureModelController({
         toast.error(text)
       }
     },
-    [editingLocked, model, patchActiveNodeData]
+    [editingLocked, model, patchActiveNodeData, scheduleModelWrite]
   )
 
   const updateSelectedNode = useCallback(
@@ -1089,40 +1125,43 @@ export function useArchitectureModelController({
     [editingLocked, model, persist]
   )
 
-  const addEdge = useCallback(async (requestedSourceNodeId?: string, requestedTargetNodeId?: string) => {
-    const current = modelRef.current ?? model
-    const sourceNodeId = requestedSourceNodeId ?? selectedNode?.id
-    const nextTargetNodeId = requestedTargetNodeId ?? targetNodeId
-    if (!current || editingLocked) {
-      return
-    }
-    if (!sourceNodeId || !nextTargetNodeId) {
-      setMessage('Select a relationship target')
-      return
-    }
-    if (sourceNodeId === nextTargetNodeId) {
-      setMessage('Choose a different relationship target')
-      return
-    }
-    const sourceNode = current.nodes.find((node) => node.id === sourceNodeId)
-    const targetNode = current.nodes.find((node) => node.id === nextTargetNodeId)
-    if (!sourceNode || !targetNode) {
-      setMessage('Relationship source or target is no longer available')
-      return
-    }
-    const id = `edge-${sourceNodeId}-${nextTargetNodeId}`
-    if (current.edges.some((edge) => edge.id === id)) {
-      setMessage('Edge already exists')
-      return
-    }
-    const edge: C4Edge = {
-      id,
-      source: sourceNodeId,
-      target: nextTargetNodeId,
-      data: { label: 'depends on' }
-    }
-    await persist({ ...current, edges: [...current.edges, edge] }, 'Saved architecture edge')
-  }, [editingLocked, model, persist, selectedNode, targetNodeId])
+  const addEdge = useCallback(
+    async (requestedSourceNodeId?: string, requestedTargetNodeId?: string) => {
+      const current = modelRef.current ?? model
+      const sourceNodeId = requestedSourceNodeId ?? selectedNode?.id
+      const nextTargetNodeId = requestedTargetNodeId ?? targetNodeId
+      if (!current || editingLocked) {
+        return
+      }
+      if (!sourceNodeId || !nextTargetNodeId) {
+        setMessage('Select a relationship target')
+        return
+      }
+      if (sourceNodeId === nextTargetNodeId) {
+        setMessage('Choose a different relationship target')
+        return
+      }
+      const sourceNode = current.nodes.find((node) => node.id === sourceNodeId)
+      const targetNode = current.nodes.find((node) => node.id === nextTargetNodeId)
+      if (!sourceNode || !targetNode) {
+        setMessage('Relationship source or target is no longer available')
+        return
+      }
+      const id = `edge-${sourceNodeId}-${nextTargetNodeId}`
+      if (current.edges.some((edge) => edge.id === id)) {
+        setMessage('Edge already exists')
+        return
+      }
+      const edge: C4Edge = {
+        id,
+        source: sourceNodeId,
+        target: nextTargetNodeId,
+        data: { label: 'depends on' }
+      }
+      await persist({ ...current, edges: [...current.edges, edge] }, 'Saved architecture edge')
+    },
+    [editingLocked, model, persist, selectedNode, targetNodeId]
+  )
 
   const deleteSelected = useCallback(async () => {
     if (!model || !selectedNode || editingLocked) {
@@ -1280,17 +1319,19 @@ export function useArchitectureModelController({
 
   const updateGroups = useCallback(
     (updater: (prev: Group[]) => Group[]) => {
-      const current = modelRef.current
-      if (!current || editingLocked) {
+      if (editingLocked) {
         return
       }
-      const nextGroups = updater(current.groups ?? [])
-      void persist({ ...current, groups: nextGroups }, 'Saved architecture groups')
+      let nextGroups: Group[] | null = null
+      void applyModelChange((current) => {
+        nextGroups = updater(current.groups ?? [])
+        return { ...current, groups: nextGroups }
+      }, 'Saved architecture groups')
       setSelectedGroupId((selected) =>
-        selected && nextGroups.some((group) => group.id === selected) ? selected : null
+        selected && nextGroups?.some((group) => group.id === selected) ? selected : null
       )
     },
-    [editingLocked, persist]
+    [applyModelChange, editingLocked]
   )
 
   const createGroupFromSelection = useCallback(

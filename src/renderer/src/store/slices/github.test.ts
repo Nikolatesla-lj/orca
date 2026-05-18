@@ -6,13 +6,25 @@ import { create } from 'zustand'
 import { createGitHubSlice } from './github'
 import type { AppState } from '../types'
 import type { PRInfo } from '../../../../shared/types'
+import {
+  createCompatibleRuntimeStatusResponseIfNeeded,
+  type RuntimeEnvironmentCallRequest
+} from '../../runtime/runtime-compatibility-test-fixture'
+import { clearRuntimeCompatibilityCacheForTests } from '../../runtime/runtime-rpc-client'
+
+const runtimeEnvironmentCall = vi.fn()
+const runtimeEnvironmentTransportCall = vi.fn()
 
 const mockApi = {
   gh: {
     prForBranch: vi.fn().mockResolvedValue(null),
     issue: vi.fn().mockResolvedValue(null),
     prChecks: vi.fn().mockResolvedValue([]),
-    listWorkItems: vi.fn()
+    listWorkItems: vi.fn(),
+    getProjectViewTable: vi.fn()
+  },
+  runtimeEnvironments: {
+    call: runtimeEnvironmentTransportCall
   },
   cache: {
     getGitHub: vi.fn().mockResolvedValue(null),
@@ -22,6 +34,15 @@ const mockApi = {
 
 // @ts-expect-error test window mock
 globalThis.window = { api: mockApi }
+
+function resetRemoteRuntimeMocks() {
+  clearRuntimeCompatibilityCacheForTests()
+  runtimeEnvironmentCall.mockReset()
+  runtimeEnvironmentTransportCall.mockReset()
+  runtimeEnvironmentTransportCall.mockImplementation((args: RuntimeEnvironmentCallRequest) => {
+    return createCompatibleRuntimeStatusResponseIfNeeded(args) ?? runtimeEnvironmentCall(args)
+  })
+}
 
 function createTestStore() {
   return create<AppState>()(
@@ -49,6 +70,7 @@ function makePR(overrides: Partial<PRInfo> = {}): PRInfo {
 describe('createGitHubSlice.fetchPRChecks', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    resetRemoteRuntimeMocks()
     mockApi.gh.prChecks.mockResolvedValue([])
   })
 
@@ -59,8 +81,9 @@ describe('createGitHubSlice.fetchPRChecks', () => {
   it('updates the matching PR cache entry with derived check status', async () => {
     const store = createTestStore()
     const repoPath = '/repo'
+    const repoId = 'repo-id'
     const branch = 'feature/test'
-    const prCacheKey = `${repoPath}::${branch}`
+    const prCacheKey = `${repoId}::${branch}`
 
     store.setState({
       prCache: {
@@ -76,7 +99,7 @@ describe('createGitHubSlice.fetchPRChecks', () => {
       { name: 'lint', status: 'completed', conclusion: 'success', url: null }
     ])
 
-    await store.getState().fetchPRChecks(repoPath, 12, branch, undefined, { force: true })
+    await store.getState().fetchPRChecks(repoPath, 12, branch, undefined, { force: true, repoId })
 
     expect(store.getState().prCache[prCacheKey]?.data?.checksStatus).toBe('success')
   })
@@ -84,8 +107,9 @@ describe('createGitHubSlice.fetchPRChecks', () => {
   it('marks the PR cache entry as failure when any check fails', async () => {
     const store = createTestStore()
     const repoPath = '/repo'
+    const repoId = 'repo-id'
     const branch = 'feature/test'
-    const prCacheKey = `${repoPath}::${branch}`
+    const prCacheKey = `${repoId}::${branch}`
 
     store.setState({
       prCache: {
@@ -101,7 +125,7 @@ describe('createGitHubSlice.fetchPRChecks', () => {
       { name: 'integration', status: 'completed', conclusion: 'failure', url: null }
     ])
 
-    await store.getState().fetchPRChecks(repoPath, 12, branch, undefined, { force: true })
+    await store.getState().fetchPRChecks(repoPath, 12, branch, undefined, { force: true, repoId })
 
     expect(store.getState().prCache[prCacheKey]?.data?.checksStatus).toBe('failure')
   })
@@ -109,8 +133,9 @@ describe('createGitHubSlice.fetchPRChecks', () => {
   it('normalizes refs/heads branch names before updating PR cache status', async () => {
     const store = createTestStore()
     const repoPath = '/repo'
+    const repoId = 'repo-id'
     const branch = 'feature/test'
-    const prCacheKey = `${repoPath}::${branch}`
+    const prCacheKey = `${repoId}::${branch}`
 
     store.setState({
       prCache: {
@@ -127,7 +152,7 @@ describe('createGitHubSlice.fetchPRChecks', () => {
 
     await store
       .getState()
-      .fetchPRChecks(repoPath, 12, `refs/heads/${branch}`, undefined, { force: true })
+      .fetchPRChecks(repoPath, 12, `refs/heads/${branch}`, undefined, { force: true, repoId })
 
     expect(store.getState().prCache[prCacheKey]?.data?.checksStatus).toBe('success')
   })
@@ -137,8 +162,9 @@ describe('createGitHubSlice.fetchPRChecks', () => {
 
     const store = createTestStore()
     const repoPath = '/repo'
+    const repoId = 'repo-id'
     const branch = 'feature/test'
-    const prCacheKey = `${repoPath}::${branch}`
+    const prCacheKey = `${repoId}::${branch}`
 
     store.setState({
       prCache: {
@@ -153,7 +179,7 @@ describe('createGitHubSlice.fetchPRChecks', () => {
       { name: 'build', status: 'completed', conclusion: 'success', url: null }
     ])
 
-    await store.getState().fetchPRChecks(repoPath, 12, branch, undefined, { force: true })
+    await store.getState().fetchPRChecks(repoPath, 12, branch, undefined, { force: true, repoId })
     await vi.advanceTimersByTimeAsync(1000)
 
     expect(mockApi.cache.setGitHub).toHaveBeenCalledWith({
@@ -169,9 +195,10 @@ describe('createGitHubSlice.fetchPRChecks', () => {
 
     const store = createTestStore()
     const repoPath = '/repo'
+    const repoId = 'repo-id'
     const branch = 'feature/test'
-    const prCacheKey = `${repoPath}::${branch}`
-    const checksCacheKey = `${repoPath}::pr-checks::12`
+    const prCacheKey = `${repoId}::${branch}`
+    const checksCacheKey = `${repoId}::pr-checks::12`
 
     store.setState({
       prCache: {
@@ -188,7 +215,7 @@ describe('createGitHubSlice.fetchPRChecks', () => {
       }
     })
 
-    await store.getState().fetchPRChecks(repoPath, 12, branch)
+    await store.getState().fetchPRChecks(repoPath, 12, branch, undefined, { repoId })
     await vi.advanceTimersByTimeAsync(1000)
 
     expect(mockApi.gh.prChecks).not.toHaveBeenCalled()
@@ -204,8 +231,9 @@ describe('createGitHubSlice.fetchPRChecks', () => {
   it('passes the cached PR head SHA to the checks IPC request', async () => {
     const store = createTestStore()
     const repoPath = '/repo'
+    const repoId = 'repo-id'
     const branch = 'feature/test'
-    const prCacheKey = `${repoPath}::${branch}`
+    const prCacheKey = `${repoId}::${branch}`
 
     store.setState({
       prCache: {
@@ -216,20 +244,49 @@ describe('createGitHubSlice.fetchPRChecks', () => {
       }
     })
 
-    await store.getState().fetchPRChecks(repoPath, 12, branch, 'abc123head', { force: true })
+    await store
+      .getState()
+      .fetchPRChecks(repoPath, 12, branch, 'abc123head', { force: true, repoId })
 
     expect(mockApi.gh.prChecks).toHaveBeenCalledWith({
       repoPath,
+      repoId,
       prNumber: 12,
       headSha: 'abc123head',
       noCache: true
     })
+  })
+
+  it('updates repo-scoped PR cache entry instead of repoPath fallback key', async () => {
+    const store = createTestStore()
+    const repoPath = '/repo'
+    const repoId = 'repo-id'
+    const branch = 'feature/test'
+    const repoScopedKey = `${repoId}::${branch}`
+    const pathScopedKey = `${repoPath}::${branch}`
+
+    store.setState({
+      prCache: {
+        [repoScopedKey]: { data: makePR({ checksStatus: 'pending' }), fetchedAt: 1 },
+        [pathScopedKey]: { data: makePR({ checksStatus: 'pending' }), fetchedAt: 1 }
+      }
+    })
+
+    mockApi.gh.prChecks.mockResolvedValue([
+      { name: 'build', status: 'completed', conclusion: 'success', url: null }
+    ])
+
+    await store.getState().fetchPRChecks(repoPath, 12, branch, undefined, { force: true, repoId })
+
+    expect(store.getState().prCache[repoScopedKey]?.data?.checksStatus).toBe('success')
+    expect(store.getState().prCache[pathScopedKey]?.data?.checksStatus).toBe('pending')
   })
 })
 
 describe('createGitHubSlice.fetchPRForBranch', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    resetRemoteRuntimeMocks()
     mockApi.gh.prForBranch.mockResolvedValue(null)
   })
 
@@ -265,6 +322,13 @@ describe('createGitHubSlice.fetchPRForBranch', () => {
 describe('createGitHubSlice.fetchWorkItems source/error envelope', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    resetRemoteRuntimeMocks()
+    runtimeEnvironmentCall.mockResolvedValue({
+      id: 'rpc-1',
+      ok: true,
+      result: { items: [], sources: { issues: null, prs: null, upstreamCandidate: null } },
+      _meta: { runtimeId: 'remote-runtime' }
+    })
   })
 
   it('stores resolved sources on the cache entry for the indicator to read', async () => {
@@ -279,7 +343,7 @@ describe('createGitHubSlice.fetchWorkItems source/error envelope', () => {
 
     await store.getState().fetchWorkItems('repo-id', '/repo', 24, '')
 
-    const result = store.getState().getWorkItemsSourcesAndError('/repo', 24, '')
+    const result = store.getState().getWorkItemsSourcesAndError('repo-id', 24, '')
     expect(result.sources).toEqual({
       issues: { owner: 'up', repo: 'r' },
       prs: { owner: 'fork', repo: 'r' }
@@ -303,7 +367,7 @@ describe('createGitHubSlice.fetchWorkItems source/error envelope', () => {
 
     await store.getState().fetchWorkItems('repo-id', '/repo', 24, '')
 
-    const result = store.getState().getWorkItemsSourcesAndError('/repo', 24, '')
+    const result = store.getState().getWorkItemsSourcesAndError('repo-id', 24, '')
     expect(result.error).toMatchObject({
       type: 'permission_denied',
       message: 'no access',
@@ -339,8 +403,101 @@ describe('createGitHubSlice.fetchWorkItems source/error envelope', () => {
     await forcedFetch
 
     expect(mockApi.gh.listWorkItems).toHaveBeenCalledTimes(2)
-    const after = store.getState().getWorkItemsSourcesAndError('/repo', 24, '')
+    const after = store.getState().getWorkItemsSourcesAndError('repo-id', 24, '')
     expect(after.error).toBeNull()
+  })
+
+  it('routes work item fetches through repo-scoped IPC even when a runtime is active', async () => {
+    const store = createTestStore()
+    store.setState({
+      settings: { activeRuntimeEnvironmentId: 'env-1' },
+      repos: [
+        {
+          id: 'repo-id',
+          path: '/server/repo',
+          displayName: 'repo',
+          badgeColor: 'blue',
+          addedAt: 1
+        }
+      ]
+    } as Partial<AppState>)
+    mockApi.gh.listWorkItems.mockResolvedValueOnce({
+      items: [{ type: 'issue', number: 7, title: 'Server issue', url: 'https://example.test/7' }],
+      sources: { issues: { owner: 'up', repo: 'r' }, prs: { owner: 'up', repo: 'r' } }
+    })
+
+    await store.getState().fetchWorkItems('repo-id', '/server/repo', 24, '')
+
+    expect(runtimeEnvironmentCall).not.toHaveBeenCalled()
+    expect(mockApi.gh.listWorkItems).toHaveBeenCalledWith({
+      repoPath: '/server/repo',
+      repoId: 'repo-id',
+      limit: 24,
+      query: undefined
+    })
+    expect(store.getState().workItemsCache['repo-id::24::'].data?.[0]).toMatchObject({
+      repoId: 'repo-id',
+      number: 7
+    })
+  })
+
+  it('routes project table fetches through the active runtime environment', async () => {
+    const store = createTestStore()
+    store.setState({
+      settings: { activeRuntimeEnvironmentId: 'env-1' }
+    } as Partial<AppState>)
+    runtimeEnvironmentCall.mockResolvedValueOnce({
+      id: 'rpc-1',
+      ok: true,
+      result: {
+        ok: true,
+        data: {
+          project: {
+            id: 'project-1',
+            owner: 'acme',
+            ownerType: 'organization',
+            number: 1,
+            title: 'Roadmap',
+            url: 'https://github.com/orgs/acme/projects/1'
+          },
+          selectedView: {
+            id: 'view-1',
+            number: 1,
+            name: 'Table',
+            layout: 'TABLE_LAYOUT',
+            filter: '',
+            fields: [],
+            groupByFields: [],
+            sortByFields: []
+          },
+          rows: [],
+          totalCount: 0,
+          parentFieldDropped: false
+        }
+      },
+      _meta: { runtimeId: 'remote-runtime' }
+    })
+
+    const result = await store.getState().fetchProjectViewTable({
+      owner: 'acme',
+      ownerType: 'organization',
+      projectNumber: 1,
+      viewId: 'view-1'
+    })
+
+    expect(result.ok).toBe(true)
+    expect(mockApi.gh.getProjectViewTable).not.toHaveBeenCalled()
+    expect(runtimeEnvironmentCall).toHaveBeenCalledWith({
+      selector: 'env-1',
+      method: 'github.project.viewTable',
+      params: {
+        owner: 'acme',
+        ownerType: 'organization',
+        projectNumber: 1,
+        viewId: 'view-1'
+      },
+      timeoutMs: 60_000
+    })
   })
 })
 
