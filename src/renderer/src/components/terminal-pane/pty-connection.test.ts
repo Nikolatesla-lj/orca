@@ -542,6 +542,38 @@ describe('connectPanePty', () => {
     )
   })
 
+  it('connects through a timeout fallback when animation frames are suspended', async () => {
+    const { connectPanePty } = await import('./pty-connection')
+    vi.useFakeTimers()
+    globalThis.requestAnimationFrame = vi.fn(() => 42) as never
+    globalThis.cancelAnimationFrame = vi.fn()
+    const transport = createMockTransport()
+    transportFactoryQueue.push(transport)
+    mockStoreState = {
+      ...mockStoreState,
+      tabsByWorktree: { 'wt-1': [{ id: 'tab-1', ptyId: null }] },
+      ptyIdsByTabId: { 'tab-1': [] }
+    }
+
+    const disposable = connectPanePty(
+      createPane(1) as never,
+      createManager(1) as never,
+      createDeps() as never
+    )
+
+    expect(transport.connect).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(99)
+    await flushAsyncTicks()
+    expect(transport.connect).not.toHaveBeenCalled()
+
+    vi.advanceTimersByTime(1)
+    await flushAsyncTicks()
+
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(42)
+    expect(transport.connect).toHaveBeenCalledTimes(1)
+    disposable.dispose()
+  })
+
   it('keeps the surviving split pane mounted when an intentional pane-close PTY exit arrives', async () => {
     const { connectPanePty } = await import('./pty-connection')
     const transport = createMockTransport('pty-pane-2')

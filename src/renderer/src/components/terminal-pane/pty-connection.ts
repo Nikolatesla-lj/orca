@@ -38,6 +38,10 @@ import {
 import { isLocalNativeWindowsPty } from '@/lib/pane-manager/windows-pty-compatibility'
 import { recordTerminalOutput, restoreScrollStateAfterLayout } from '@/lib/pane-manager/pane-scroll'
 import type { ScrollState } from '@/lib/pane-manager/pane-manager-types'
+import {
+  scheduleAfterAnimationFrameOrTimeout,
+  type ScheduledAnimationFrameFallback
+} from '@/lib/schedule-after-animation-frame-or-timeout'
 import { makePaneKey } from '../../../../shared/stable-pane-id'
 import { createTerminalCommandLifecycle } from './terminal-command-lifecycle'
 import { e2eConfig } from '@/lib/e2e-config'
@@ -235,7 +239,7 @@ export function connectPanePty(
   deps: PtyConnectionDeps
 ): IDisposable {
   let disposed = false
-  let connectFrame: number | null = null
+  let connectSchedule: ScheduledAnimationFrameFallback | null = null
   let unregisterBacklogRecovery: (() => void) | null = null
   let unregisterDocumentVisibilityRecovery: (() => void) | null = null
   let startupInjectTimer: ReturnType<typeof setTimeout> | null = null
@@ -1160,9 +1164,11 @@ export function connectPanePty(
   }
 
   // Defer PTY spawn/attach to next frame so FitAddon has time to calculate
-  // the correct terminal dimensions from the laid-out container.
-  connectFrame = requestAnimationFrame(() => {
-    connectFrame = null
+  // dimensions from the laid-out container. Hidden/headless Electron windows
+  // can pause rAF before first paint, so the timeout prevents a permanent
+  // disconnected pane.
+  connectSchedule = scheduleAfterAnimationFrameOrTimeout(() => {
+    connectSchedule = null
     if (disposed) {
       return
     }
@@ -2355,13 +2361,13 @@ export function connectPanePty(
         agentTaskCompleteSettingsUnsubscribe()
         agentTaskCompleteSettingsUnsubscribe = null
       }
-      if (connectFrame !== null) {
+      if (connectSchedule !== null) {
         // Why: StrictMode and split-group remounts can dispose a pane binding
         // before its deferred PTY attach/spawn work runs. Cancel that queued
         // frame so stale bindings cannot reattach the PTY and steal the live
         // handler wiring from the current pane.
-        cancelAnimationFrame(connectFrame)
-        connectFrame = null
+        connectSchedule.cancel()
+        connectSchedule = null
       }
       onDataDisposable.dispose()
       onResizeDisposable.dispose()
