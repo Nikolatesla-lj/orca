@@ -49,19 +49,19 @@ function readRuntimeArg() {
 }
 
 function ensureNodeRuntime() {
-  const initial = runCurrentProcessCheck()
+  const initial = runNodeCheck()
   if (initial.ok) {
     return
   }
 
-  const failedModules = initial.failures.map((failure) => failure.moduleName)
+  const failedModules = parseFailedModuleNames(initial)
   console.warn(
     `[native-runtime] ${formatRuntimeLabel('node')} cannot load native modules; rebuilding ${failedModules.join(', ')} for Node.`
   )
   printCheckError(initial)
-  runPnpm(['rebuild', ...failedModules])
+  runNodeScript(['config/scripts/rebuild-node-native-deps.mjs'])
 
-  const final = runCurrentProcessCheck()
+  const final = runNodeCheck()
   if (!final.ok) {
     console.error(
       `[native-runtime] Native modules still do not load for ${formatRuntimeLabel('node')}.`
@@ -101,6 +101,24 @@ function runCurrentProcessCheck() {
   return { ok: false, failures }
 }
 
+function runNodeCheck() {
+  const result = spawnSync(process.execPath, [scriptPath, CHILD_CHECK_FLAG], {
+    cwd: projectDir,
+    env: process.env,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+
+  return {
+    ok: result.status === 0,
+    status: result.status,
+    signal: result.signal,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    error: result.error
+  }
+}
+
 function runElectronCheck() {
   let electronExecutable
   try {
@@ -122,10 +140,23 @@ function runElectronCheck() {
   return {
     ok: result.status === 0,
     status: result.status,
+    signal: result.signal,
     stdout: result.stdout,
     stderr: result.stderr,
     error: result.error
   }
+}
+
+function parseFailedModuleNames(result) {
+  const text = [result.stderr, result.stdout].filter(Boolean).join('\n')
+  const names = []
+  for (const line of text.split('\n')) {
+    const match = /^([^:\s]+):/.exec(line.trim())
+    if (match && NATIVE_MODULES.includes(match[1])) {
+      names.push(match[1])
+    }
+  }
+  return names.length > 0 ? [...new Set(names)] : NATIVE_MODULES
 }
 
 function collectNativeModuleFailures() {
@@ -181,23 +212,6 @@ function getWindowsBuildNumber() {
   return match && match.length === 4 ? Number.parseInt(match[3], 10) : 0
 }
 
-function runPnpm(args) {
-  const command = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
-  const result = spawnSync(command, args, {
-    cwd: projectDir,
-    stdio: 'inherit',
-    shell: false
-  })
-
-  if (result.error || result.status !== 0) {
-    console.error(`[native-runtime] ${command} ${args.join(' ')} failed.`)
-    if (result.error) {
-      console.error(formatError(result.error))
-    }
-    process.exit(result.status ?? 1)
-  }
-}
-
 function runNodeScript(args) {
   const result = spawnSync(process.execPath, args, {
     cwd: projectDir,
@@ -234,6 +248,9 @@ function printCheckError(result) {
     result.status !== 0
   ) {
     console.warn(`[native-runtime] Native check exited with status ${result.status}.`)
+  }
+  if (result.signal) {
+    console.warn(`[native-runtime] Native check terminated with signal ${result.signal}.`)
   }
 }
 
