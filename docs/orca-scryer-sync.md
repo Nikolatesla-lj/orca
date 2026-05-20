@@ -122,7 +122,7 @@ corepack pnpm run build:linux
 ```text
 ~/.local/share/orca-scryer/orca-linux.AppImage
 ~/.local/bin/orca -> ~/.local/share/orca-scryer/orca-linux.AppImage
-~/.local/bin/orca-app -> ~/Applications/Orca/current.AppDir/orca
+~/.local/bin/orca-app -> ~/Applications/Orca/current.AppDir/orca-ide
 ~/.local/bin/orca-app-cli -> ~/Applications/Orca/current.AppDir/resources/bin/orca
 ~/Applications/Orca/current.AppDir -> ~/Applications/Orca/orca-scryer-<commit>.AppDir
 ```

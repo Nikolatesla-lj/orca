@@ -5,7 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 RESOURCES_DIR="$(cd "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd)"
 APP_DIR="$(cd "$RESOURCES_DIR/.." >/dev/null 2>&1 && pwd)"
 
-if [ -x "$APP_DIR/orca" ]; then
+if [ -x "$APP_DIR/orca-ide" ]; then
+	ELECTRON="$APP_DIR/orca-ide"
+elif [ -x "$APP_DIR/orca" ]; then
 	ELECTRON="$APP_DIR/orca"
 elif [ -x "$APP_DIR/Orca" ]; then
 	ELECTRON="$APP_DIR/Orca"

@@ -133,7 +133,15 @@ set -euo pipefail
 APPDIR="$current_appdir"
 unset ELECTRON_RUN_AS_NODE
 unset ORCA_TERMINAL_HANDLE ORCA_TAB_ID ORCA_PANE_KEY ORCA_WORKTREE_ID ORCA_APP_VERSION ORCA_SHELL_READY_MARKER
-exec "\$APPDIR/orca" --no-sandbox "\$@"
+if [[ -x "\$APPDIR/orca-ide" ]]; then
+  exec "\$APPDIR/orca-ide" --no-sandbox "\$@"
+elif [[ -x "\$APPDIR/orca" ]]; then
+  exec "\$APPDIR/orca" --no-sandbox "\$@"
+elif [[ -x "\$APPDIR/AppRun" ]]; then
+  exec "\$APPDIR/AppRun" --no-sandbox "\$@"
+fi
+echo "Unable to locate Orca executable in \$APPDIR" >&2
+exit 1
 LAUNCHER
   run chmod 0755 "$desktop_launcher"
 
