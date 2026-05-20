@@ -491,7 +491,8 @@ export function buildMobileSessionTabSnapshots(
     const groupProjection = buildMobileSessionGroupProjection(state, worktreeId, {
       terminalIds: publishableTerminalIds,
       editorIds,
-      browserIds: [...browserWorkspaceByIdForWorktree.keys()]
+      browserIds: [...browserWorkspaceByIdForWorktree.keys()],
+      architectureIds: []
     })
     const tabs: RuntimeMobileSessionSnapshotTab[] = []
 
@@ -666,6 +667,7 @@ function buildMobileSessionGroupProjection(
     terminalIds: string[]
     editorIds: string[]
     browserIds: string[]
+    architectureIds: string[]
   }
 ): {
   order: VisibleTabRef[]
@@ -676,7 +678,8 @@ function buildMobileSessionGroupProjection(
   if (groups.length === 0) {
     return {
       order: getActiveTabNavOrder(state, worktreeId, {
-        editorIds: ids.editorIds
+        editorIds: ids.editorIds,
+        architectureIds: ids.architectureIds
       })
     }
   }
@@ -684,6 +687,7 @@ function buildMobileSessionGroupProjection(
   const terminalIds = new Set(ids.terminalIds)
   const editorIds = new Set(ids.editorIds)
   const browserIds = new Set(ids.browserIds)
+  const architectureIds = new Set(ids.architectureIds)
   const tabs = state.unifiedTabsByWorktree[worktreeId] ?? []
   const order: VisibleTabRef[] = []
   const tabGroups: RuntimeMobileSessionTabGroup[] = []
@@ -696,7 +700,8 @@ function buildMobileSessionGroupProjection(
       groupTabs,
       terminalIds,
       editorIds,
-      browserIds
+      browserIds,
+      architectureIds
     )
     if (visibleOrder.length === 0) {
       continue

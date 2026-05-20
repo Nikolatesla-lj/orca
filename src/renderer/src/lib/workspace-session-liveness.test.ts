@@ -15,6 +15,8 @@ function createSnapshot(
     openFiles: [],
     activeFileIdByWorktree: {},
     activeTabTypeByWorktree: {},
+    architectureTabsByWorktree: {},
+    activeArchitectureTabIdByWorktree: {},
     browserTabsByWorktree: {},
     browserPagesByWorkspace: {},
     activeBrowserTabIdByWorktree: {},

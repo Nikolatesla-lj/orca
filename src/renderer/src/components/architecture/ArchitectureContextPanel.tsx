@@ -1175,7 +1175,38 @@ function ContractEditor({
   syncing: boolean
   onChange: (contract: Contract) => void
 }): React.JSX.Element {
-  const normalized = normalizeContract(contract)
+  const incoming = useMemo(() => normalizeContract(contract), [contract])
+  const [draft, setDraft] = useState<Contract>(incoming)
+  const draftRef = useRef<Contract>(incoming)
+  const pendingDraftKeyRef = useRef<string | null>(null)
+  const incomingKey = JSON.stringify(incoming)
+
+  useEffect(() => {
+    if (pendingDraftKeyRef.current && pendingDraftKeyRef.current !== incomingKey) {
+      return
+    }
+    draftRef.current = incoming
+    setDraft(incoming)
+    if (pendingDraftKeyRef.current === incomingKey) {
+      pendingDraftKeyRef.current = null
+    }
+  }, [incoming, incomingKey])
+
+  const commitDraft = (next: Contract): void => {
+    draftRef.current = next
+    setDraft(next)
+    pendingDraftKeyRef.current = JSON.stringify(next)
+    onChange(next)
+  }
+
+  const updateItems = (
+    key: keyof Contract,
+    updater: (items: ContractItem[]) => ContractItem[]
+  ): void => {
+    const current = draftRef.current
+    commitDraft({ ...current, [key]: updater(current[key]) })
+  }
+
   return (
     <section className="grid gap-3 border-t border-border pt-3">
       <PanelTitle title="Contract" />
@@ -1183,9 +1214,9 @@ function ContractEditor({
         <ContractList
           key={key}
           label={key}
-          items={normalized[key]}
+          items={draft[key]}
           syncing={syncing}
-          onChange={(items) => onChange({ ...normalized, [key]: items })}
+          onChange={(updater) => updateItems(key, updater)}
         />
       ))}
     </section>
@@ -1232,20 +1263,29 @@ function ContractList({
   label: keyof Contract
   items: ContractItem[]
   syncing: boolean
-  onChange: (items: ContractItem[]) => void
+  onChange: (updater: (items: ContractItem[]) => ContractItem[]) => void
 }): React.JSX.Element {
+  const readUrlFromRow = (element: Element): string | undefined => {
+    const row = element.closest('[data-contract-item-row]')
+    return row?.querySelector<HTMLInputElement>('[data-contract-field="url"]')?.value
+  }
+
   return (
     <div className="grid gap-2">
       <span className="text-xs text-muted-foreground">{label}</span>
       {items.map((item, index) => (
-        <div key={index} className="grid gap-2 rounded border border-border p-2">
+        <div
+          key={index}
+          className="grid gap-2 rounded border border-border p-2"
+          data-contract-item-row
+        >
           <div className="flex gap-2">
             <input
               className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1"
               value={getContractItemText(item)}
               onChange={(event) =>
-                onChange(
-                  items.map((current, itemIndex) =>
+                onChange((currentItems) =>
+                  currentItems.map((current, itemIndex) =>
                     itemIndex === index
                       ? updateContractItemText(current, event.currentTarget.value)
                       : current
@@ -1259,11 +1299,16 @@ function ContractList({
               className="w-28 rounded border border-border bg-background px-2 py-1 text-xs"
               value={String(normalizeContractItem(item).passed)}
               onChange={(event) =>
-                onChange(
-                  items.map((current, itemIndex) =>
+                onChange((currentItems) =>
+                  currentItems.map((current, itemIndex) =>
                     itemIndex === index
                       ? setContractItemPassed(
-                          current,
+                          updateContractItemUrl(
+                            current,
+                            readUrlFromRow(event.currentTarget) ??
+                              normalizeContractItem(current).url ??
+                              ''
+                          ),
                           event.currentTarget.value === 'undefined'
                             ? undefined
                             : event.currentTarget.value === 'true'
@@ -1282,7 +1327,11 @@ function ContractList({
             <Button
               variant="outline"
               size="icon-sm"
-              onClick={() => onChange(items.filter((_, itemIndex) => itemIndex !== index))}
+              onClick={() =>
+                onChange((currentItems) =>
+                  currentItems.filter((_, itemIndex) => itemIndex !== index)
+                )
+              }
               disabled={syncing}
             >
               <Trash2 className="size-3" />
@@ -1293,8 +1342,8 @@ function ContractList({
             value={normalizeContractItem(item).url ?? ''}
             placeholder="Evidence URL"
             onChange={(event) =>
-              onChange(
-                items.map((current, itemIndex) =>
+              onChange((currentItems) =>
+                currentItems.map((current, itemIndex) =>
                   itemIndex === index
                     ? updateContractItemUrl(current, event.currentTarget.value)
                     : current
@@ -1303,6 +1352,7 @@ function ContractList({
             }
             disabled={syncing}
             data-testid={`architecture-contract-${label}-url`}
+            data-contract-field="url"
           />
           <input
             className="text-xs text-muted-foreground"
@@ -1315,18 +1365,25 @@ function ContractList({
               if (!file) {
                 return
               }
+              const url = readUrlFromRow(event.currentTarget)
               const reader = new FileReader()
               reader.onload = () => {
                 const dataUrl = typeof reader.result === 'string' ? reader.result : ''
                 const base64 = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl
-                onChange(
-                  items.map((current, itemIndex) =>
+                onChange((currentItems) =>
+                  currentItems.map((current, itemIndex) =>
                     itemIndex === index
-                      ? updateContractItemImage(current, {
-                          filename: file.name,
-                          mimeType: file.type,
-                          data: base64
-                        })
+                      ? updateContractItemImage(
+                          updateContractItemUrl(
+                            current,
+                            url ?? normalizeContractItem(current).url ?? ''
+                          ),
+                          {
+                            filename: file.name,
+                            mimeType: file.type,
+                            data: base64
+                          }
+                        )
                       : current
                   )
                 )
@@ -1343,8 +1400,8 @@ function ContractList({
                 variant="outline"
                 size="icon-xs"
                 onClick={() =>
-                  onChange(
-                    items.map((current, itemIndex) =>
+                  onChange((currentItems) =>
+                    currentItems.map((current, itemIndex) =>
                       itemIndex === index ? updateContractItemImage(current, undefined) : current
                     )
                   )
@@ -1361,7 +1418,7 @@ function ContractList({
       <Button
         variant="outline"
         size="sm"
-        onClick={() => onChange([...items, ''])}
+        onClick={() => onChange((currentItems) => [...currentItems, ''])}
         disabled={syncing}
       >
         <Plus className="size-3.5" />

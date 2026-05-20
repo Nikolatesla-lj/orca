@@ -150,6 +150,7 @@ export default function ArchitecturePanel({
     runDriftCheck,
     markSynced,
     navigateToNode,
+    drillIntoNode,
     createFlow,
     updateFlow,
     deleteActiveFlow,
@@ -603,6 +604,7 @@ export default function ArchitecturePanel({
           setArchitectureMode('topology')
           navigateToNode(nodeId)
         }}
+        onDrillNode={drillIntoNode}
         onSelectFlow={(flowId) => {
           setArchitectureMode('flows')
           setActiveFlowId(flowId)

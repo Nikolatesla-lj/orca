@@ -243,6 +243,14 @@ export function fingerprintArchitectureModel(model: C4ModelData): string {
   return JSON.stringify(stableFingerprintValue(parseModelData(serializeModelData(model))))
 }
 
+function fingerprintNodeData(data: C4NodeData): string {
+  return JSON.stringify(stableFingerprintValue(data))
+}
+
+function nodeDiffDismissalKey(modelName: string, nodeId: string): string {
+  return `${sanitizeClientModelName(modelName)}:${nodeId}`
+}
+
 function stringArraysEqual(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index])
 }
@@ -303,6 +311,7 @@ export function useArchitectureModelController({
   )
   const [changedNodeIds, setChangedNodeIds] = useState<Set<string>>(new Set())
   const [nodeDiffs, setNodeDiffs] = useState<Map<string, C4NodeData>>(new Map())
+  const dismissedNodeDiffKeysRef = useRef<Map<string, string>>(new Map())
   const [targetNodeId, setTargetNodeId] = useState<string>('')
   const [sourcePattern, setSourcePattern] = useState('')
   const [drift, setDrift] = useState<DriftReport | null>(null)
@@ -534,6 +543,15 @@ export function useArchitectureModelController({
             setNodeDiffs((current) => {
               const merged = new Map(current)
               for (const [nodeId, oldData] of summary.nodeDiffs) {
+                const currentNode = nextModel.nodes.find((node) => node.id === nodeId)
+                if (
+                  currentNode &&
+                  dismissedNodeDiffKeysRef.current.get(
+                    nodeDiffDismissalKey(nextActiveModelName, nodeId)
+                  ) === fingerprintNodeData(currentNode.data)
+                ) {
+                  continue
+                }
                 if (!merged.has(nodeId)) {
                   merged.set(nodeId, oldData)
                 }
@@ -948,12 +966,15 @@ export function useArchitectureModelController({
       if (!target) {
         return
       }
-      if (fingerprintArchitectureModel(current) !== fingerprintArchitectureModel({
-        ...current,
-        nodes: current.nodes.map((node) =>
-          node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node
-        )
-      })) {
+      if (
+        fingerprintArchitectureModel(current) !==
+        fingerprintArchitectureModel({
+          ...current,
+          nodes: current.nodes.map((node) =>
+            node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node
+          )
+        })
+      ) {
         const history = pushArchitectureUndoSnapshot(undoStackRef.current, current, {
           batchStartedAt: historyBatchStartedAtRef.current,
           now: Date.now()
@@ -1089,40 +1110,43 @@ export function useArchitectureModelController({
     [editingLocked, model, persist]
   )
 
-  const addEdge = useCallback(async (requestedSourceNodeId?: string, requestedTargetNodeId?: string) => {
-    const current = modelRef.current ?? model
-    const sourceNodeId = requestedSourceNodeId ?? selectedNode?.id
-    const nextTargetNodeId = requestedTargetNodeId ?? targetNodeId
-    if (!current || editingLocked) {
-      return
-    }
-    if (!sourceNodeId || !nextTargetNodeId) {
-      setMessage('Select a relationship target')
-      return
-    }
-    if (sourceNodeId === nextTargetNodeId) {
-      setMessage('Choose a different relationship target')
-      return
-    }
-    const sourceNode = current.nodes.find((node) => node.id === sourceNodeId)
-    const targetNode = current.nodes.find((node) => node.id === nextTargetNodeId)
-    if (!sourceNode || !targetNode) {
-      setMessage('Relationship source or target is no longer available')
-      return
-    }
-    const id = `edge-${sourceNodeId}-${nextTargetNodeId}`
-    if (current.edges.some((edge) => edge.id === id)) {
-      setMessage('Edge already exists')
-      return
-    }
-    const edge: C4Edge = {
-      id,
-      source: sourceNodeId,
-      target: nextTargetNodeId,
-      data: { label: 'depends on' }
-    }
-    await persist({ ...current, edges: [...current.edges, edge] }, 'Saved architecture edge')
-  }, [editingLocked, model, persist, selectedNode, targetNodeId])
+  const addEdge = useCallback(
+    async (requestedSourceNodeId?: string, requestedTargetNodeId?: string) => {
+      const current = modelRef.current ?? model
+      const sourceNodeId = requestedSourceNodeId ?? selectedNode?.id
+      const nextTargetNodeId = requestedTargetNodeId ?? targetNodeId
+      if (!current || editingLocked) {
+        return
+      }
+      if (!sourceNodeId || !nextTargetNodeId) {
+        setMessage('Select a relationship target')
+        return
+      }
+      if (sourceNodeId === nextTargetNodeId) {
+        setMessage('Choose a different relationship target')
+        return
+      }
+      const sourceNode = current.nodes.find((node) => node.id === sourceNodeId)
+      const targetNode = current.nodes.find((node) => node.id === nextTargetNodeId)
+      if (!sourceNode || !targetNode) {
+        setMessage('Relationship source or target is no longer available')
+        return
+      }
+      const id = `edge-${sourceNodeId}-${nextTargetNodeId}`
+      if (current.edges.some((edge) => edge.id === id)) {
+        setMessage('Edge already exists')
+        return
+      }
+      const edge: C4Edge = {
+        id,
+        source: sourceNodeId,
+        target: nextTargetNodeId,
+        data: { label: 'depends on' }
+      }
+      await persist({ ...current, edges: [...current.edges, edge] }, 'Saved architecture edge')
+    },
+    [editingLocked, model, persist, selectedNode, targetNodeId]
+  )
 
   const deleteSelected = useCallback(async () => {
     if (!model || !selectedNode || editingLocked) {
@@ -1206,6 +1230,21 @@ export function useArchitectureModelController({
       setArchitectureMode('topology')
       setExpandedPath(buildAncestorPath(current, nodeId))
       setSelectedNodeId(nodeId)
+      setSelectedEdgeId(null)
+    },
+    [model]
+  )
+
+  const drillIntoNode = useCallback(
+    (nodeId: string) => {
+      const current = modelRef.current ?? model
+      const node = current?.nodes.find((entry) => entry.id === nodeId)
+      if (!current || !node || !isExpandableKind(node.data.kind)) {
+        return
+      }
+      setArchitectureMode('topology')
+      setExpandedPath([...buildAncestorPath(current, nodeId), nodeId])
+      setSelectedNodeId(null)
       setSelectedEdgeId(null)
     },
     [model]
@@ -1812,8 +1851,13 @@ export function useArchitectureModelController({
 
   const dismissNodeDiff = useCallback((nodeId: string) => {
     setNodeDiffs((current) => {
-      if (!current.has(nodeId)) {
-        return current
+      const previousData = current.get(nodeId)
+      const currentNode = modelRef.current?.nodes.find((node) => node.id === nodeId)
+      if (previousData && currentNode) {
+        dismissedNodeDiffKeysRef.current.set(
+          nodeDiffDismissalKey(activeModelNameRef.current, nodeId),
+          fingerprintNodeData(currentNode.data)
+        )
       }
       const next = new Map(current)
       next.delete(nodeId)
@@ -1909,6 +1953,7 @@ export function useArchitectureModelController({
     runDriftCheck,
     markSynced,
     navigateToNode,
+    drillIntoNode,
     createFlow,
     updateFlow,
     deleteActiveFlow,
