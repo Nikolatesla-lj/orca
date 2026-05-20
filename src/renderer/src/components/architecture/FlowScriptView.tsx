@@ -683,7 +683,7 @@ export function FlowScriptView({
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--surface)]">
       <div
-        className="flex-1 overflow-y-auto"
+        className="scrollbar-sleek flex-1 overflow-y-auto"
         data-testid="architecture-flow-editor"
         onClick={(event) => {
           if (event.target === event.currentTarget) {

@@ -93,14 +93,6 @@ function ensureElectronRuntime() {
   }
 }
 
-function runCurrentProcessCheck() {
-  const failures = collectNativeModuleFailures()
-  if (failures.length === 0) {
-    return { ok: true, failures }
-  }
-  return { ok: false, failures }
-}
-
 function runNodeCheck() {
   const result = spawnSync(process.execPath, [scriptPath, CHILD_CHECK_FLAG], {
     cwd: projectDir,

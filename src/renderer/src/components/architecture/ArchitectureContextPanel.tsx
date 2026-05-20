@@ -107,7 +107,7 @@ export function ArchitectureContextPanel({
   if (multiSelectedNodeIds.length >= 2 && model) {
     return (
       <aside className={INSPECTOR_PANEL_CLASS}>
-        <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-3">
           <MultiSelectionPanel
             selectedIds={multiSelectedNodeIds}
             totalSelected={totalSelected}
@@ -148,7 +148,7 @@ export function ArchitectureContextPanel({
         </Button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+      <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-3">
         {selectedGroup && model ? (
           <GroupEditor
             group={selectedGroup}

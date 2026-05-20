@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Why: inline tab rename E2E keeps shared rename, cancel, close, and persistence helpers together so the tab-state assertions stay in one realistic user-flow fixture. */
 /**
  * E2E tests for inline tab renaming (double-click a tab to rename).
  *
