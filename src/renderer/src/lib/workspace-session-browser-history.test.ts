@@ -15,6 +15,8 @@ function createSnapshot(browserUrlHistory: BrowserHistoryEntry[]): WorkspaceSess
     openFiles: [],
     activeFileIdByWorktree: {},
     activeTabTypeByWorktree: {},
+    architectureTabsByWorktree: {},
+    activeArchitectureTabIdByWorktree: {},
     browserTabsByWorktree: {},
     browserPagesByWorkspace: {},
     activeBrowserTabIdByWorktree: {},
