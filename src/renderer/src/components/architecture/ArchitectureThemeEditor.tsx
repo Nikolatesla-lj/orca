@@ -55,7 +55,7 @@ export function ArchitectureThemeEditor({
             </select>
           </label>
 
-          <div className="grid max-h-56 gap-2 overflow-y-auto pr-1">
+          <div className="scrollbar-sleek grid max-h-56 gap-2 overflow-y-auto pr-1">
             {SCRYER_THEME_COLOR_ROLES.map((role) => (
               <label key={role.id} className="grid grid-cols-[92px_1fr] items-center gap-2">
                 <span className="truncate text-muted-foreground">{role.label}</span>

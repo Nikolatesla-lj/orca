@@ -83,7 +83,7 @@ export function ArchitectureCommandPalette({
             />
           </div>
           <div
-            className="max-h-[min(400px,60vh)] overflow-y-auto overflow-x-hidden p-1"
+            className="scrollbar-sleek max-h-[min(400px,60vh)] overflow-y-auto overflow-x-hidden p-1"
             data-testid="architecture-command-palette"
           >
             <CommandSection heading="Model">

@@ -37,7 +37,7 @@ export function ArchitectureModelTree({
       className="flex w-64 shrink-0 flex-col border-r border-border bg-background text-xs"
       data-testid="architecture-model-tree"
     >
-      <div className="grid gap-2 overflow-y-auto p-2">
+      <div className="scrollbar-sleek grid gap-2 overflow-y-auto p-2">
         <section className="grid gap-1">
           <div className="flex items-center gap-1.5 px-1 py-1 font-medium text-muted-foreground">
             <Network className="size-3.5" />

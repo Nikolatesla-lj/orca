@@ -215,7 +215,7 @@ export function MentionTextarea({
       {triggerPos !== null && filtered.length > 0 && dropdownPos
         ? createPortal(
             <div
-              className="fixed z-[9999] max-h-32 overflow-y-auto overflow-x-hidden rounded-md border border-[var(--border)] bg-[var(--surface-raised)] shadow-lg"
+              className="scrollbar-sleek fixed z-[9999] max-h-32 overflow-y-auto overflow-x-hidden rounded-md border border-[var(--border)] bg-[var(--surface-raised)] shadow-lg"
               style={{
                 top: dropdownPos.top,
                 left: dropdownPos.left,

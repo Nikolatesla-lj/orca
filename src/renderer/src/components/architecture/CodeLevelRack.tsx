@@ -146,7 +146,7 @@ export function CodeLevelRack({
               </Button>
             </header>
 
-            <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
+            <div className="scrollbar-sleek min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
               {(nodesByKind.get(kind) ?? []).map((node) => (
                 <CodeLevelCard
                   key={node.id}

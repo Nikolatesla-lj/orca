@@ -310,7 +310,7 @@ export function SyncBar({
       </div>
 
       {syncStatus === 'running' && expanded && syncLog.length > 0 ? (
-        <div className="max-h-32 space-y-0.5 overflow-y-auto border-t border-border px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
+        <div className="scrollbar-sleek max-h-32 space-y-0.5 overflow-y-auto border-t border-border px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
           {syncLog.map((line, index) => (
             <div key={`${line}-${index}`} className="truncate">
               {line}

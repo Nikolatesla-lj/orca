@@ -387,7 +387,7 @@ export function GroupsMain(): React.JSX.Element {
       className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--surface)]"
       data-testid="architecture-groups-main"
     >
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl space-y-4 px-6 py-8">
           <header>
             <h1 className="text-lg font-semibold text-[var(--text)]">Groups</h1>
@@ -786,7 +786,7 @@ function PaletteDropArea({
   return (
     <div
       ref={setNodeRef}
-      className={`flex-1 overflow-y-auto px-3 py-3 transition-colors ${
+      className={`scrollbar-sleek flex-1 overflow-y-auto px-3 py-3 transition-colors ${
         acceptsDrop && isOver ? 'bg-[var(--surface-active)]/60' : ''
       }`}
     >

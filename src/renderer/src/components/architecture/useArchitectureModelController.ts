@@ -1849,29 +1849,32 @@ export function useArchitectureModelController({
     setSyncMessage('Agent terminal exited. Review changes, then finish or cancel sync.')
   }, [syncStatus, syncTerminalPtyCount, syncTerminalTabId])
 
-  const dismissNodeDiff = useCallback((nodeId: string) => {
-    setNodeDiffs((current) => {
-      const previousData = current.get(nodeId)
-      const currentNode = modelRef.current?.nodes.find((node) => node.id === nodeId)
-      if (previousData && currentNode) {
-        dismissedNodeDiffKeysRef.current.set(
-          nodeDiffDismissalKey(activeModelNameRef.current, nodeId),
-          fingerprintNodeData(currentNode.data)
-        )
-      }
-      const next = new Map(current)
-      next.delete(nodeId)
-      setChangedNodeIds((changed) => {
-        if (!changed.has(nodeId)) {
-          return changed
+  const dismissNodeDiff = useCallback(
+    (nodeId: string) => {
+      setNodeDiffs((current) => {
+        const previousData = current.get(nodeId)
+        const currentNode = modelRef.current?.nodes.find((node) => node.id === nodeId)
+        if (previousData && currentNode) {
+          dismissedNodeDiffKeysRef.current.set(
+            nodeDiffDismissalKey(activeModelNameRef.current, nodeId),
+            fingerprintNodeData(currentNode.data)
+          )
         }
-        const nextChanged = new Set(changed)
-        nextChanged.delete(nodeId)
-        return nextChanged
+        const next = new Map(current)
+        next.delete(nodeId)
+        setChangedNodeIds((changed) => {
+          if (!changed.has(nodeId)) {
+            return changed
+          }
+          const nextChanged = new Set(changed)
+          nextChanged.delete(nodeId)
+          return nextChanged
+        })
+        return next
       })
-      return next
-    })
-  }, [])
+    },
+    [activeModelNameRef]
+  )
 
   const flows = model?.flows ?? []
 
