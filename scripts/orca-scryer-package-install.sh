@@ -13,6 +13,24 @@ run() {
   "$@"
 }
 
+escape_sed_replacement() {
+  printf '%s' "$1" | sed -e 's/[&|\\]/\\&/g'
+}
+
+upsert_desktop_key() {
+  local file="$1"
+  local key="$2"
+  local value="$3"
+  local escaped_value
+
+  escaped_value="$(escape_sed_replacement "$value")"
+  if grep -q "^$key=" "$file"; then
+    sed -i "s|^$key=.*|$key=$escaped_value|" "$file"
+  else
+    printf '%s=%s\n' "$key" "$value" >> "$file"
+  fi
+}
+
 ensure_pnpm_shim() {
   if command -v pnpm >/dev/null 2>&1; then
     return 0
@@ -104,7 +122,7 @@ install_appimage() {
   local appdir_path="$appdir_root/$appdir_name"
   local desktop_file="${ORCA_SCRYER_APPIMAGE_DESKTOP_FILE:-$HOME/.local/share/applications/orca-appimage.desktop}"
 
-  run mkdir -p "$(dirname "$install_path")" "$(dirname "$symlink_path")" "$(dirname "$desktop_launcher")" "$(dirname "$cli_launcher")" "$appdir_root"
+  run mkdir -p "$(dirname "$install_path")" "$(dirname "$symlink_path")" "$(dirname "$desktop_launcher")" "$(dirname "$cli_launcher")" "$(dirname "$desktop_file")" "$appdir_root"
   run cp -f "$artifact" "$install_path"
   run chmod 0755 "$install_path"
   run ln -sfn "$install_path" "$symlink_path"
@@ -159,11 +177,51 @@ LAUNCHER
   echo "Updated launcher symlink at $symlink_path"
   echo "Updated CLI launcher at $cli_launcher"
 
-  if [[ -f "$desktop_file" ]]; then
-    sed -i "s|^Exec=.*|Exec=$desktop_launcher %U|" "$desktop_file"
-    echo "Updated desktop launcher at $desktop_launcher"
-    echo "Updated desktop file at $desktop_file"
+  local app_desktop
+  app_desktop="$(find "$appdir_path" -maxdepth 1 -type f -name '*.desktop' | sort | head -n 1 || true)"
+  if [[ -n "$app_desktop" ]]; then
+    run cp -f "$app_desktop" "$desktop_file"
+  else
+    cat > "$desktop_file" <<DESKTOP
+[Desktop Entry]
+Name=Orca
+Terminal=false
+Type=Application
+StartupWMClass=Orca
+Comment=Next-gen IDE for parallel agentic development
+Categories=Utility;Development;
+DESKTOP
   fi
+
+  local icon_name=""
+  local icon_path=""
+  if [[ -n "$app_desktop" ]]; then
+    icon_name="$(sed -n 's/^Icon=//p' "$app_desktop" | head -n 1)"
+  fi
+  if [[ -n "$icon_name" && "$icon_name" == /* && -f "$icon_name" ]]; then
+    icon_path="$icon_name"
+  elif [[ -n "$icon_name" ]]; then
+    for ext in png svg xpm; do
+      if [[ -f "$appdir_path/$icon_name.$ext" ]]; then
+        icon_path="$current_appdir/$icon_name.$ext"
+        break
+      fi
+    done
+  fi
+  if [[ -z "$icon_path" ]]; then
+    local fallback_icon
+    fallback_icon="$(find "$appdir_path" -maxdepth 1 -type f \( -name '*.png' -o -name '*.svg' -o -name '*.xpm' \) | sort | head -n 1 || true)"
+    if [[ -n "$fallback_icon" ]]; then
+      icon_path="$current_appdir/$(basename "$fallback_icon")"
+    fi
+  fi
+
+  upsert_desktop_key "$desktop_file" Exec "$desktop_launcher %U"
+  if [[ -n "$icon_path" ]]; then
+    upsert_desktop_key "$desktop_file" Icon "$icon_path"
+  fi
+  echo "Updated desktop launcher at $desktop_launcher"
+  echo "Updated desktop file at $desktop_file"
 }
 
 install_deb() {

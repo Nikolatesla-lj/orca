@@ -42,7 +42,21 @@ if [[ "${1:-}" == "--appimage-extract" ]]; then
   mkdir -p squashfs-root/resources/bin
   printf '#!/usr/bin/env bash\nprintf app-cli\n' > squashfs-root/resources/bin/orca
   printf '#!/usr/bin/env bash\nprintf app-gui\n' > squashfs-root/orca
-  chmod +x squashfs-root/orca
+  printf '#!/usr/bin/env bash\nprintf app-gui-ide\n' > squashfs-root/orca-ide
+  printf 'fake-icon\n' > squashfs-root/orca-ide.png
+  cat > squashfs-root/orca-ide.desktop <<'DESKTOP'
+[Desktop Entry]
+Name=Orca
+Exec=AppRun --no-sandbox %U
+Terminal=false
+Type=Application
+Icon=orca-ide
+StartupWMClass=Orca
+X-AppImage-Version=9.9.9-test
+Comment=Next-gen IDE for parallel agentic development
+Categories=Utility;
+DESKTOP
+  chmod +x squashfs-root/orca squashfs-root/orca-ide
   exit 0
 fi
 printf 'appimage\n'
@@ -52,7 +66,7 @@ printf 'deb:%s\n' "$ORCA_SCRYER_RELEASE_COMMIT" > "$ORCA_SCRYER_ARTIFACT_DIR/orc
 BUILD
 chmod +x "$fake_build"
 mkdir -p "$(dirname "$desktop_file")"
-printf '[Desktop Entry]\nName=Orca AppImage\nExec=/old/orca-app %%U\nType=Application\n' > "$desktop_file"
+printf '[Desktop Entry]\nName=Orca AppImage\nExec=/old/orca-app %%U\nType=Application\nIcon=/old/orca.png\nX-AppImage-Version=old-build\n' > "$desktop_file"
 
 ORCA_SCRYER_REPO_DIR="$repo_dir" \
   ORCA_SCRYER_PACKAGE_COMMAND="$fake_build" \
@@ -94,11 +108,14 @@ test -x "$cli_launcher"
 grep -Fqx "APPDIR=\"$current_appdir\"" "$desktop_launcher"
 grep -Fqx 'unset ELECTRON_RUN_AS_NODE' "$desktop_launcher"
 grep -Fqx 'unset ORCA_TERMINAL_HANDLE ORCA_TAB_ID ORCA_PANE_KEY ORCA_WORKTREE_ID ORCA_APP_VERSION ORCA_SHELL_READY_MARKER' "$desktop_launcher"
-grep -Fqx 'exec "$APPDIR/orca" --no-sandbox "$@"' "$desktop_launcher"
+grep -Fq 'exec "$APPDIR/orca-ide" --no-sandbox "$@"' "$desktop_launcher"
+grep -Fq 'exec "$APPDIR/orca" --no-sandbox "$@"' "$desktop_launcher"
 grep -Fqx "APPDIR=\"$current_appdir\"" "$cli_launcher"
 grep -Fqx 'exec bash "$APPDIR/resources/bin/orca" "$@"' "$cli_launcher"
 test "$("$cli_launcher")" = "app-cli"
 grep -Fqx "Exec=$desktop_launcher %U" "$desktop_file"
+grep -Fqx "Icon=$current_appdir/orca-ide.png" "$desktop_file"
+grep -Fqx "X-AppImage-Version=9.9.9-test" "$desktop_file"
 
 shim_repo="$tmp_dir/shim-repo"
 shim_release_dir="$tmp_dir/shim-releases"
