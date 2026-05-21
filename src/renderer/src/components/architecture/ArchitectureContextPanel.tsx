@@ -66,6 +66,7 @@ type ArchitectureContextPanelProps = {
   onUpdateGroup: (patch: Partial<Group>) => void | Promise<void>
   onDeleteGroup: () => void | Promise<void>
   onRemoveGroupMember: (nodeId: string) => void | Promise<void>
+  docked?: boolean
   groupsPaletteMode?: boolean
   nodeDiff?: C4Node['data']
   onDismissNodeDiff?: (nodeId: string) => void
@@ -100,13 +101,18 @@ export function ArchitectureContextPanel({
   onUpdateGroup,
   onDeleteGroup,
   onRemoveGroupMember,
+  docked = false,
   groupsPaletteMode = false,
   nodeDiff,
   onDismissNodeDiff
 }: ArchitectureContextPanelProps): React.JSX.Element {
+  const inspectorPanelClass = docked
+    ? 'flex w-80 shrink-0 flex-col bg-background text-sm xl:w-96'
+    : INSPECTOR_PANEL_CLASS
+
   if (multiSelectedNodeIds.length >= 2 && model) {
     return (
-      <aside className={INSPECTOR_PANEL_CLASS}>
+      <aside className={inspectorPanelClass} data-testid="architecture-inspector-panel">
         <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-3">
           <MultiSelectionPanel
             selectedIds={multiSelectedNodeIds}
@@ -124,14 +130,14 @@ export function ArchitectureContextPanel({
 
   if (groupsPaletteMode && !selectedGroup) {
     return (
-      <aside className={INSPECTOR_PANEL_CLASS}>
+      <aside className={inspectorPanelClass} data-testid="architecture-inspector-panel">
         <GroupsPalette />
       </aside>
     )
   }
 
   return (
-    <aside className={INSPECTOR_PANEL_CLASS}>
+    <aside className={inspectorPanelClass} data-testid="architecture-inspector-panel">
       <div className="flex gap-2 border-b border-border p-3">
         <Button
           className="flex-1 bg-emerald-600 text-white hover:bg-emerald-700"

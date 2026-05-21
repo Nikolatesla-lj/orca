@@ -71,9 +71,9 @@ export function ArchitectureCommandPalette({
       return
     }
     runningRef.current = true
+    onOpenChange(false)
     try {
       await action()
-      onOpenChange(false)
     } finally {
       runningRef.current = false
     }

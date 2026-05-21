@@ -9,6 +9,7 @@ import {
   FolderOpen,
   GitBranch,
   Network,
+  Pencil,
   Plug,
   Plus,
   Redo2,
@@ -42,6 +43,7 @@ import {
 import { recordArchitecturePerformanceMetric } from './architecture-performance'
 
 const ARCHITECTURE_THEME_STORAGE_KEY = 'orca-scryer:architecture-theme'
+type ArchitectureSidePanel = 'tree' | 'inspector'
 
 function newProjectPromptDismissalKey(projectPath: string, modelName: string): string {
   return `orca-scryer:new-project-dismissed:${projectPath}:${modelName}`
@@ -189,6 +191,13 @@ export default function ArchitecturePanel({
   const [blankWorkspacePath, setBlankWorkspacePath] = useState(workspace.projectPath ?? '')
   const [blankWorkspaceBusy, setBlankWorkspaceBusy] = useState(false)
   const [blankWorkspaceError, setBlankWorkspaceError] = useState<string | null>(null)
+  const [architectureSidePanel, setArchitectureSidePanel] = useState<ArchitectureSidePanel>('tree')
+  const ignoredInspectorSelectionRef = useRef<{
+    nodeId: string | null
+    edgeId: string | null
+    multiKey: string
+  }>({ nodeId: null, edgeId: null, multiKey: '' })
+  const treePanelPinnedRef = useRef(false)
   const [dismissedNewProjectKeys, setDismissedNewProjectKeys] = useState<Set<string>>(
     () => new Set()
   )
@@ -293,6 +302,46 @@ export default function ArchitecturePanel({
     setBlankWorkspaceError(null)
     setPendingBlankModelName(null)
   }, [activeModelName, projectPath])
+
+  useEffect(() => {
+    ignoredInspectorSelectionRef.current = { nodeId: null, edgeId: null, multiKey: '' }
+    treePanelPinnedRef.current = false
+    setArchitectureSidePanel('tree')
+  }, [activeModelName])
+
+  useEffect(() => {
+    if (architectureMode === 'groups' && model) {
+      setArchitectureSidePanel('inspector')
+    }
+  }, [architectureMode, model])
+
+  const multiSelectionKey = (nodeIds: string[]): string => [...nodeIds].sort().join('\0')
+
+  const openTreeSidePanel = (): void => {
+    treePanelPinnedRef.current = true
+    ignoredInspectorSelectionRef.current = {
+      nodeId: selectedNodeId,
+      edgeId: selectedEdgeId,
+      multiKey: multiSelectionKey(multiSelectedNodeIds)
+    }
+    setArchitectureSidePanel('tree')
+  }
+
+  const openInspectorSidePanel = (): void => {
+    treePanelPinnedRef.current = false
+    ignoredInspectorSelectionRef.current = { nodeId: null, edgeId: null, multiKey: '' }
+    setArchitectureSidePanel('inspector')
+  }
+
+  const canAutoOpenNodeInspector = (nodeId: string): boolean =>
+    !treePanelPinnedRef.current && ignoredInspectorSelectionRef.current.nodeId !== nodeId
+
+  const canAutoOpenEdgeInspector = (edgeId: string): boolean =>
+    !treePanelPinnedRef.current && ignoredInspectorSelectionRef.current.edgeId !== edgeId
+
+  const canAutoOpenMultiInspector = (nodeIds: string[]): boolean =>
+    !treePanelPinnedRef.current &&
+    ignoredInspectorSelectionRef.current.multiKey !== multiSelectionKey(nodeIds)
 
   useEffect(() => {
     if (!promptDismissalKey) {
@@ -452,9 +501,24 @@ export default function ArchitecturePanel({
         changedNodeIds={changedNodeIds}
         driftedNodeIds={driftedNodeIds}
         onExpandedPathChange={setExpandedPath}
-        onSelectedNodeChange={selectNode}
-        onSelectedEdgeChange={selectEdge}
-        onMultiSelectionChange={selectManyNodes}
+        onSelectedNodeChange={(nodeId) => {
+          if (nodeId && canAutoOpenNodeInspector(nodeId)) {
+            openInspectorSidePanel()
+          }
+          selectNode(nodeId)
+        }}
+        onSelectedEdgeChange={(edgeId) => {
+          if (edgeId && canAutoOpenEdgeInspector(edgeId)) {
+            openInspectorSidePanel()
+          }
+          selectEdge(edgeId)
+        }}
+        onMultiSelectionChange={(nodeIds, selectedCount) => {
+          if (nodeIds.length >= 2 && canAutoOpenMultiInspector(nodeIds)) {
+            openInspectorSidePanel()
+          }
+          selectManyNodes(nodeIds, selectedCount)
+        }}
         onModelChange={applyModelChange}
         onOpenSourceLocation={openSourceLocation}
         onFillNodeWithAi={fillNodeWithAi}
@@ -856,6 +920,7 @@ export default function ArchitecturePanel({
         onUpdateGroup={patchSelectedGroup}
         onDeleteGroup={deleteSelectedGroup}
         onRemoveGroupMember={removeSelectedGroupMember}
+        docked
         groupsPaletteMode={architectureMode === 'groups' && !!model}
         nodeDiff={selectedNode ? nodeDiffs.get(selectedNode.id) : undefined}
         onDismissNodeDiff={dismissNodeDiff}
@@ -870,6 +935,7 @@ export default function ArchitecturePanel({
         selectedNodeId={selectedNodeId}
         activeFlowId={activeFlowId}
         onSelectNode={(nodeId) => {
+          openInspectorSidePanel()
           setArchitectureMode('topology')
           navigateToNode(nodeId)
         }}
@@ -878,9 +944,58 @@ export default function ArchitecturePanel({
           setArchitectureMode('flows')
           setActiveFlowId(flowId)
         }}
+        docked
       />
     </ArchitectureSectionBoundary>
   ) : null
+
+  const sideTabClass = (tab: ArchitectureSidePanel): string =>
+    `flex h-16 w-11 flex-col items-center justify-center gap-1 border-l text-[10px] font-medium transition-colors ${
+      architectureSidePanel === tab
+        ? 'border-primary bg-accent text-foreground'
+        : 'border-transparent text-muted-foreground hover:bg-accent/60 hover:text-foreground'
+    }`
+
+  const sideDock = (
+    <aside
+      className="flex min-h-0 shrink-0 border-l border-border bg-background"
+      data-testid="architecture-side-dock"
+    >
+      {architectureSidePanel === 'tree' ? modelTree : contextPanel}
+      <div
+        className="flex w-11 shrink-0 flex-col items-stretch border-l border-border bg-muted/30"
+        role="tablist"
+        aria-label="Architecture side panels"
+      >
+        <button
+          type="button"
+          role="tab"
+          className={sideTabClass('tree')}
+          aria-selected={architectureSidePanel === 'tree'}
+          onMouseDown={openTreeSidePanel}
+          onClick={openTreeSidePanel}
+          data-testid="architecture-side-tab-tree"
+          title="Model and flow tree"
+        >
+          <Network className="size-3.5" />
+          <span>Tree</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          className={sideTabClass('inspector')}
+          aria-selected={architectureSidePanel === 'inspector'}
+          onMouseDown={openInspectorSidePanel}
+          onClick={openInspectorSidePanel}
+          data-testid="architecture-side-tab-inspector"
+          title="Edit selected model item"
+        >
+          <Pencil className="size-3.5" />
+          <span>Edit</span>
+        </button>
+      </div>
+    </aside>
+  )
 
   const panelContent =
     architectureMode === 'groups' && model ? (
@@ -891,17 +1006,20 @@ export default function ArchitecturePanel({
         currentParentId={currentParentId}
         onNavigateToNode={navigateToNode}
         selectedGroupId={selectedGroupId}
-        onSelectedGroupChange={setSelectedGroupId}
+        onSelectedGroupChange={(groupId) => {
+          if (groupId) {
+            openInspectorSidePanel()
+          }
+          setSelectedGroupId(groupId)
+        }}
       >
-        {modelTree}
         {mainSection}
-        {contextPanel}
+        {sideDock}
       </GroupsDndProvider>
     ) : (
       <>
-        {modelTree}
         {mainSection}
-        {contextPanel}
+        {sideDock}
       </>
     )
 

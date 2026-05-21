@@ -7,6 +7,7 @@ type ArchitectureModelTreeProps = {
   model: C4ModelData
   selectedNodeId: string | null
   activeFlowId: string | null
+  docked?: boolean
   onSelectNode: (nodeId: string) => void
   onDrillNode: (nodeId: string) => void
   onSelectFlow: (flowId: string) => void
@@ -16,6 +17,7 @@ export function ArchitectureModelTree({
   model,
   selectedNodeId,
   activeFlowId,
+  docked = false,
   onSelectNode,
   onDrillNode,
   onSelectFlow
@@ -34,7 +36,11 @@ export function ArchitectureModelTree({
 
   return (
     <aside
-      className="flex w-64 shrink-0 flex-col border-r border-border bg-background text-xs"
+      className={
+        docked
+          ? 'flex w-72 shrink-0 flex-col bg-background text-xs'
+          : 'flex w-64 shrink-0 flex-col border-r border-border bg-background text-xs'
+      }
       data-testid="architecture-model-tree"
     >
       <div className="scrollbar-sleek grid gap-2 overflow-y-auto p-2">
