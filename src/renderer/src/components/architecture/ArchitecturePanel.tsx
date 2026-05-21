@@ -5,6 +5,7 @@ import {
   Bot,
   Boxes,
   Command,
+  FileText,
   FolderOpen,
   GitBranch,
   Network,
@@ -469,7 +470,55 @@ export default function ArchitecturePanel({
 
   const mainSection = (
     <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
-      <div className="scrollbar-sleek flex h-10 min-w-0 shrink-0 items-center gap-2 overflow-x-auto overflow-y-hidden border-b border-border px-3">
+      <div
+        className="scrollbar-sleek flex h-9 min-w-0 shrink-0 items-end gap-1 overflow-x-auto overflow-y-hidden border-b border-border bg-muted/30 px-2 pt-1"
+        role="tablist"
+        aria-label="Architecture models"
+        data-testid="architecture-model-tab-strip"
+      >
+        {modelTabs.map((entry) => {
+          const isActive = entry.name === activeModelName
+          return (
+            <button
+              key={entry.name}
+              type="button"
+              role="tab"
+              aria-selected={isActive}
+              className={`inline-flex h-8 max-w-44 min-w-24 shrink-0 items-center gap-1.5 rounded-t-md border px-3 font-mono text-[11px] transition-colors ${
+                isActive
+                  ? '-mb-px border-border border-b-background bg-background text-foreground shadow-sm'
+                  : 'border-transparent text-muted-foreground hover:bg-background/70 hover:text-foreground'
+              }`}
+              disabled={editingLocked}
+              onClick={() => {
+                if (!isActive) {
+                  void openProjectModel(entry.name, entry.scope)
+                }
+              }}
+              data-testid="architecture-model-tab"
+              title={entry.fileName}
+            >
+              <FileText className="size-3.5 shrink-0" />
+              <span className="truncate">{entry.fileName}</span>
+            </button>
+          )
+        })}
+        <button
+          type="button"
+          className="mb-1 inline-flex size-6 shrink-0 items-center justify-center rounded border border-border bg-background text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+          onClick={() => beginBlankWorkspaceSelection('model')}
+          disabled={editingLocked}
+          data-testid="architecture-model-tab-new"
+          title="New blank model"
+          aria-label="New blank model"
+        >
+          <Plus className="size-3.5" />
+        </button>
+      </div>
+      <div
+        className="scrollbar-sleek flex h-10 min-w-0 shrink-0 items-center gap-2 overflow-x-auto overflow-y-hidden border-b border-border px-3"
+        data-testid="architecture-toolbar"
+      >
         <Network className="size-4 text-emerald-500" />
         <span className="truncate text-sm font-medium">{workspace.title}</span>
         <span
@@ -478,28 +527,6 @@ export default function ArchitecturePanel({
         >
           {activeModelName}.scry
         </span>
-        <div
-          className="scrollbar-sleek flex max-w-[32rem] shrink overflow-x-auto rounded-md border border-border bg-background p-0.5"
-          data-testid="architecture-model-tabs"
-        >
-          {modelTabs.map((entry) => (
-            <button
-              key={entry.name}
-              type="button"
-              className={`max-w-36 shrink-0 truncate rounded px-2 py-1 font-mono text-[10px] transition-colors ${
-                entry.name === activeModelName
-                  ? 'bg-accent text-foreground'
-                  : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
-              }`}
-              disabled={editingLocked || entry.name === activeModelName}
-              onClick={() => void openProjectModel(entry.name, entry.scope)}
-              data-testid="architecture-model-tab"
-              title={entry.fileName}
-            >
-              {entry.fileName}
-            </button>
-          ))}
-        </div>
         {model?.validationWarnings?.length ? (
           <span
             className="min-w-0 flex-1 truncate text-xs text-amber-600 dark:text-amber-300"

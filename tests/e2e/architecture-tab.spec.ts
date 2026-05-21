@@ -176,6 +176,36 @@ test.describe('Architecture tab live Scryer sync', () => {
     await orcaPage.getByTestId('architecture-workspace-confirm').click({ force: true })
     await expect(orcaPage.getByTestId('architecture-active-model')).toHaveText('blank-two.scry')
 
+    const modelTabStrip = orcaPage.getByTestId('architecture-model-tab-strip')
+    const architectureToolbar = orcaPage.getByTestId('architecture-toolbar')
+    await expect(modelTabStrip).toBeVisible()
+    await expect(architectureToolbar).toBeVisible()
+    await expect(
+      modelTabStrip.getByTestId('architecture-model-tab').filter({ hasText: 'arcade.scry' })
+    ).toBeVisible()
+    await expect(
+      modelTabStrip.getByTestId('architecture-model-tab').filter({ hasText: 'blank-one.scry' })
+    ).toBeVisible()
+    await expect(
+      modelTabStrip.getByTestId('architecture-model-tab').filter({ hasText: 'blank-two.scry' })
+    ).toHaveAttribute('aria-selected', 'true')
+    await expect(modelTabStrip.getByTestId('architecture-model-tab-new')).toBeVisible()
+
+    const tabStripBox = await modelTabStrip.boundingBox()
+    const toolbarBox = await architectureToolbar.boundingBox()
+    expect(tabStripBox).not.toBeNull()
+    expect(toolbarBox).not.toBeNull()
+    expect(tabStripBox!.y + tabStripBox!.height).toBeLessThanOrEqual(toolbarBox!.y + 1)
+
+    await modelTabStrip
+      .getByTestId('architecture-model-tab')
+      .filter({ hasText: 'blank-one.scry' })
+      .click({ force: true })
+    await expect(orcaPage.getByTestId('architecture-active-model')).toHaveText('blank-one.scry')
+    await expect(
+      modelTabStrip.getByTestId('architecture-model-tab').filter({ hasText: 'blank-one.scry' })
+    ).toHaveAttribute('aria-selected', 'true')
+
     await orcaPage.getByTestId('architecture-command-open').click({ force: true })
     await orcaPage
       .getByTestId('architecture-command-open-model')
