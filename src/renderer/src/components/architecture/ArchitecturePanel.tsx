@@ -1024,7 +1024,6 @@ export default function ArchitecturePanel({
           templates={templates}
           disabled={editingLocked}
           onOpenChange={setCommandOpen}
-          onCreateBlank={(modelName) => beginBlankWorkspaceSelection(modelName)}
           onOpenModel={openProjectModel}
           onDeleteModel={deleteProjectModelByName}
           onLoadTemplate={createModelFromTemplate}

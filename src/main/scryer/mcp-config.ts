@@ -20,6 +20,22 @@ async function readJson(path: string): Promise<JsonRecord> {
   }
 }
 
+function getScryerMcpCommand(): string {
+  const devRepoRoot = process.env.ORCA_DEV_REPO_ROOT
+  if (devRepoRoot) {
+    const devCommand = join(
+      devRepoRoot,
+      'out',
+      'bin',
+      process.platform === 'win32' ? 'orca-dev.cmd' : 'orca-dev'
+    )
+    if (existsSync(devCommand)) {
+      return devCommand
+    }
+  }
+  return 'orca'
+}
+
 export async function writeArchitectureMcpConfig(projectPath: string): Promise<{
   claudePath: string
   codexPath: string
@@ -27,11 +43,12 @@ export async function writeArchitectureMcpConfig(projectPath: string): Promise<{
   const resolvedProjectPath = resolve(projectPath)
   const claudePath = join(resolvedProjectPath, '.mcp.json')
   const codexPath = join(resolvedProjectPath, '.codex', 'config.toml')
+  const command = getScryerMcpCommand()
 
   const claudeConfig = await readJson(claudePath)
   const mcpServers = isRecord(claudeConfig.mcpServers) ? claudeConfig.mcpServers : {}
   mcpServers.scryer = {
-    command: 'orca',
+    command,
     args: ['scryer-mcp', '--project', resolvedProjectPath],
     env: { SCRYER_PROJECT_PATH: resolvedProjectPath }
   }
@@ -43,7 +60,7 @@ export async function writeArchitectureMcpConfig(projectPath: string): Promise<{
     codexPath,
     [
       '[mcp_servers.scryer]',
-      'command = "orca"',
+      `command = ${JSON.stringify(command)}`,
       `args = ["scryer-mcp", "--project", ${JSON.stringify(resolvedProjectPath)}]`,
       '',
       '[mcp_servers.scryer.env]',

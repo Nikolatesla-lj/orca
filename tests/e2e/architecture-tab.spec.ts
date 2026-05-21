@@ -181,29 +181,26 @@ test.describe('Architecture tab live Scryer sync', () => {
 
     await orcaPage.getByTestId('architecture-command-open').click({ force: true })
     await expect(orcaPage.getByTestId('architecture-command-save-as')).toHaveCount(0)
-    await orcaPage.getByTestId('architecture-command-input').fill('blank-one')
-    await orcaPage.getByTestId('architecture-command-new').evaluate((button) => {
+    await expect(orcaPage.getByTestId('architecture-command-new')).toHaveCount(0)
+    await orcaPage.keyboard.press('Escape')
+    await orcaPage.getByTestId('architecture-model-tab-new').evaluate((button) => {
       ;(button as HTMLButtonElement).click()
     })
     await expect(orcaPage.getByTestId('architecture-workspace-picker')).toBeVisible()
-    expect(existsSync(path.join(worktreePath, '.scryer', 'blank-one.scry'))).toBe(false)
+    expect(existsSync(path.join(worktreePath, '.scryer', 'model.scry'))).toBe(false)
     await orcaPage.getByTestId('architecture-workspace-confirm').click({ force: true })
     await expect(orcaPage.getByTestId('architecture-workspace-picker')).toHaveCount(0)
-    await expectActiveArchitectureModel(orcaPage, 'blank-one.scry')
+    await expectActiveArchitectureModel(orcaPage, 'model.scry')
     await expect(orcaPage.getByTestId('architecture-canvas')).toBeVisible({ timeout: 10_000 })
-    await expect
-      .poll(() => existsSync(path.join(worktreePath, '.scryer', 'blank-one.scry')))
-      .toBe(true)
+    await expect.poll(() => existsSync(path.join(worktreePath, '.scryer', 'model.scry'))).toBe(true)
 
-    await orcaPage.getByTestId('architecture-command-open').click({ force: true })
-    await orcaPage.getByTestId('architecture-command-input').fill('blank-two')
-    await orcaPage.getByTestId('architecture-command-new').evaluate((button) => {
+    await orcaPage.getByTestId('architecture-model-tab-new').evaluate((button) => {
       ;(button as HTMLButtonElement).click()
     })
     await expect(orcaPage.getByTestId('architecture-workspace-picker')).toBeVisible()
-    expect(existsSync(path.join(worktreePath, '.scryer', 'blank-two.scry'))).toBe(false)
+    expect(existsSync(path.join(worktreePath, '.scryer', 'model-2.scry'))).toBe(false)
     await orcaPage.getByTestId('architecture-workspace-confirm').click({ force: true })
-    await expectActiveArchitectureModel(orcaPage, 'blank-two.scry')
+    await expectActiveArchitectureModel(orcaPage, 'model-2.scry')
 
     const modelTabStrip = orcaPage.getByTestId('architecture-model-tab-strip')
     const architectureToolbar = orcaPage.getByTestId('architecture-toolbar')
@@ -213,10 +210,10 @@ test.describe('Architecture tab live Scryer sync', () => {
       modelTabStrip.getByTestId('architecture-model-tab').filter({ hasText: 'arcade.scry' })
     ).toBeVisible()
     await expect(
-      modelTabStrip.getByTestId('architecture-model-tab').filter({ hasText: 'blank-one.scry' })
+      modelTabStrip.getByTestId('architecture-model-tab').filter({ hasText: 'model.scry' })
     ).toBeVisible()
     await expect(
-      modelTabStrip.getByTestId('architecture-model-tab').filter({ hasText: 'blank-two.scry' })
+      modelTabStrip.getByTestId('architecture-model-tab').filter({ hasText: 'model-2.scry' })
     ).toHaveAttribute('aria-selected', 'true')
     await expect(modelTabStrip.getByTestId('architecture-model-tab-new')).toBeVisible()
 
@@ -228,11 +225,11 @@ test.describe('Architecture tab live Scryer sync', () => {
 
     await modelTabStrip
       .getByTestId('architecture-model-tab')
-      .filter({ hasText: 'blank-one.scry' })
+      .filter({ hasText: 'model.scry' })
       .click({ force: true })
-    await expectActiveArchitectureModel(orcaPage, 'blank-one.scry')
+    await expectActiveArchitectureModel(orcaPage, 'model.scry')
     await expect(
-      modelTabStrip.getByTestId('architecture-model-tab').filter({ hasText: 'blank-one.scry' })
+      modelTabStrip.getByTestId('architecture-model-tab').filter({ hasText: 'model.scry' })
     ).toHaveAttribute('aria-selected', 'true')
 
     await orcaPage.getByTestId('architecture-command-open').click({ force: true })
@@ -247,13 +244,13 @@ test.describe('Architecture tab live Scryer sync', () => {
     await orcaPage.getByTestId('architecture-command-open').click({ force: true })
     await orcaPage
       .getByTestId('architecture-command-model-row')
-      .filter({ hasText: 'blank-one' })
+      .filter({ has: orcaPage.getByText('model', { exact: true }) })
       .getByTestId('architecture-command-delete-model')
       .evaluate((button) => {
         ;(button as HTMLButtonElement).click()
       })
     await expect
-      .poll(() => existsSync(path.join(worktreePath, '.scryer', 'blank-one.scry')))
+      .poll(() => existsSync(path.join(worktreePath, '.scryer', 'model.scry')))
       .toBe(false)
   })
 
@@ -309,6 +306,23 @@ test.describe('Architecture tab live Scryer sync', () => {
 
     await openArchitectureInspector(orcaPage)
     await expect(orcaPage.getByTestId('architecture-add-node')).toBeVisible()
+  })
+
+  test('writes MCP config with visible feedback from the toolbar', async ({ orcaPage }) => {
+    const worktreePath = await getActiveWorktreePath(orcaPage)
+    rmSync(path.join(worktreePath, '.mcp.json'), { force: true })
+    rmSync(path.join(worktreePath, '.codex'), { recursive: true, force: true })
+
+    await openArchitectureTab(orcaPage)
+    await orcaPage.getByTestId('architecture-mcp-config').click({ force: true })
+
+    await expect
+      .poll(() => ({
+        claude: existsSync(path.join(worktreePath, '.mcp.json')),
+        codex: existsSync(path.join(worktreePath, '.codex', 'config.toml'))
+      }))
+      .toEqual({ claude: true, codex: true })
+    await expect(orcaPage.getByText('MCP config written')).toBeVisible({ timeout: 10_000 })
   })
 
   test('launches agent terminals from Build with AI and Fill with AI', async ({ orcaPage }) => {

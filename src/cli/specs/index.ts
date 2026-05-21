@@ -6,9 +6,11 @@ import { CORE_COMMAND_SPECS } from './core'
 import { ORCHESTRATION_COMMAND_SPECS } from './orchestration'
 import { COMPUTER_COMMAND_SPECS } from './computer'
 import { ENVIRONMENT_COMMAND_SPECS } from './environment'
+import { SCRYER_MCP_COMMAND_SPECS } from './scryer-mcp'
 
 export const COMMAND_SPECS: CommandSpec[] = [
   ...CORE_COMMAND_SPECS,
+  ...SCRYER_MCP_COMMAND_SPECS,
   ...AUTOMATION_COMMAND_SPECS,
   ...BROWSER_BASIC_COMMAND_SPECS,
   ...BROWSER_ADVANCED_COMMAND_SPECS,

@@ -1680,7 +1680,10 @@ export function useArchitectureModelController({
     }
     try {
       const result = await window.api.architecture.writeMcpConfig({ projectPath })
-      setMessage(`Wrote MCP config: ${result.claudePath} and ${result.codexPath}`)
+      setMessage('MCP config written')
+      toast.success('MCP config written', {
+        description: `${result.claudePath}\n${result.codexPath}`
+      })
     } catch (configError) {
       const text = configError instanceof Error ? configError.message : String(configError)
       setError(text)

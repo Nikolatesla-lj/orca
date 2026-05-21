@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from 'fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
@@ -236,6 +236,34 @@ describe('registerArchitectureHandlers', () => {
     expect(await readFile(join(projectPath, '.codex', 'config.toml'), 'utf8')).toContain(
       'mcp_servers.scryer'
     )
+  })
+
+  it('uses the dev CLI wrapper in generated MCP config during development', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-mcp-config-dev-'))
+    const repoRoot = await mkdtemp(join(tmpdir(), 'orca-scryer-dev-repo-'))
+    const wrapperPath = join(
+      repoRoot,
+      'out',
+      'bin',
+      process.platform === 'win32' ? 'orca-dev.cmd' : 'orca-dev'
+    )
+    await mkdir(join(repoRoot, 'out', 'bin'), { recursive: true })
+    await writeFile(wrapperPath, '', 'utf8')
+    const previousRepoRoot = process.env.ORCA_DEV_REPO_ROOT
+    process.env.ORCA_DEV_REPO_ROOT = repoRoot
+    try {
+      await handlers.get('architecture:writeMcpConfig')!(null, { projectPath })
+      expect(await readFile(join(projectPath, '.mcp.json'), 'utf8')).toContain(wrapperPath)
+      expect(await readFile(join(projectPath, '.codex', 'config.toml'), 'utf8')).toContain(
+        wrapperPath
+      )
+    } finally {
+      if (previousRepoRoot === undefined) {
+        delete process.env.ORCA_DEV_REPO_ROOT
+      } else {
+        process.env.ORCA_DEV_REPO_ROOT = previousRepoRoot
+      }
+    }
   })
 
   it('can register against an injected IPC registrar for isolated tests', async () => {

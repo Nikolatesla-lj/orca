@@ -1,6 +1,12 @@
 {
   "extends": "@electron-toolkit/tsconfig/tsconfig.node.json",
-  "include": ["../src/cli/**/*", "../src/shared/**/*", "../src/main/runtime/runtime-metadata.ts"],
+  "include": [
+    "../src/cli/**/*",
+    "../src/shared/**/*",
+    "../src/main/runtime/runtime-metadata.ts",
+    "../src/main/scryer/**/*"
+  ],
+  "exclude": ["../src/main/scryer/**/*.test.ts"],
   "compilerOptions": {
     "composite": true,
     "module": "CommonJS",

@@ -1,13 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import type React from 'react'
-import { Bot, Copy, FilePlus, FolderOpen, Search, Trash2 } from 'lucide-react'
+import { Bot, Copy, FolderOpen, Search, Trash2 } from 'lucide-react'
 import { Dialog as DialogPrimitive } from 'radix-ui'
 import { Button } from '../ui/button'
 import type {
   ArchitectureProjectModelEntry,
   ArchitectureTemplateEntry
 } from './useArchitectureModelController'
-import { sanitizeClientModelName } from './useArchitectureModelSession'
 
 type ArchitectureCommandPaletteProps = {
   open: boolean
@@ -16,30 +15,12 @@ type ArchitectureCommandPaletteProps = {
   templates: ArchitectureTemplateEntry[]
   disabled: boolean
   onOpenChange: (open: boolean) => void
-  onCreateBlank: (modelName: string) => void | Promise<void>
   onOpenModel: (
     modelName: string,
     scope: ArchitectureProjectModelEntry['scope']
   ) => void | Promise<void>
   onDeleteModel: (modelName: string) => void | Promise<void>
   onLoadTemplate: (templateId: string, modelName: string) => void | Promise<void>
-}
-
-function resolveAvailableModelName(
-  requestedName: string,
-  models: ArchitectureProjectModelEntry[]
-): string {
-  const existingNames = new Set(models.map((model) => model.name))
-  const baseName = sanitizeClientModelName(requestedName)
-  if (!existingNames.has(baseName)) {
-    return baseName
-  }
-  for (let index = 2; ; index += 1) {
-    const candidate = `${baseName}-${index}`
-    if (!existingNames.has(candidate)) {
-      return candidate
-    }
-  }
 }
 
 export function ArchitectureCommandPalette({
@@ -49,7 +30,6 @@ export function ArchitectureCommandPalette({
   templates,
   disabled,
   onOpenChange,
-  onCreateBlank,
   onOpenModel,
   onDeleteModel,
   onLoadTemplate
@@ -64,7 +44,6 @@ export function ArchitectureCommandPalette({
   }, [open])
 
   const name = modelName.trim()
-  const blankModelName = resolveAvailableModelName(name || 'model', models)
 
   const run = async (action: () => void | Promise<void>): Promise<void> => {
     if (disabled || runningRef.current) {
@@ -102,18 +81,6 @@ export function ArchitectureCommandPalette({
             className="scrollbar-sleek max-h-[min(400px,60vh)] overflow-y-auto overflow-x-hidden p-1"
             data-testid="architecture-command-palette"
           >
-            <CommandSection heading="Model">
-              <PaletteActionButton
-                onClick={() => void run(() => onCreateBlank(blankModelName))}
-                disabled={disabled}
-                data-testid="architecture-command-new"
-              >
-                <FilePlus className="size-4" />
-                <span className="min-w-0 flex-1">New blank model</span>
-                <span className="font-mono text-xs text-muted-foreground">{blankModelName}</span>
-              </PaletteActionButton>
-            </CommandSection>
-
             <CommandSection heading="Open Existing">
               {models.length === 0 ? (
                 <div className="px-3 py-2 text-xs text-muted-foreground">No saved models yet</div>
