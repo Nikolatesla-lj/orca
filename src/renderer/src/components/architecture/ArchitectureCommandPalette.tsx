@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import type React from 'react'
-import { Bot, Copy, FilePlus, FolderOpen, Save, Search, Trash2 } from 'lucide-react'
+import { Bot, Copy, FilePlus, FolderOpen, Search, Trash2 } from 'lucide-react'
 import { Dialog as DialogPrimitive } from 'radix-ui'
 import { Button } from '../ui/button'
 import type {
   ArchitectureProjectModelEntry,
   ArchitectureTemplateEntry
 } from './useArchitectureModelController'
+import { sanitizeClientModelName } from './useArchitectureModelSession'
 
 type ArchitectureCommandPaletteProps = {
   open: boolean
@@ -20,9 +21,25 @@ type ArchitectureCommandPaletteProps = {
     modelName: string,
     scope: ArchitectureProjectModelEntry['scope']
   ) => void | Promise<void>
-  onSaveAs: (modelName: string) => void | Promise<void>
   onDeleteModel: (modelName: string) => void | Promise<void>
   onLoadTemplate: (templateId: string, modelName: string) => void | Promise<void>
+}
+
+function resolveAvailableModelName(
+  requestedName: string,
+  models: ArchitectureProjectModelEntry[]
+): string {
+  const existingNames = new Set(models.map((model) => model.name))
+  const baseName = sanitizeClientModelName(requestedName)
+  if (!existingNames.has(baseName)) {
+    return baseName
+  }
+  for (let index = 2; ; index += 1) {
+    const candidate = `${baseName}-${index}`
+    if (!existingNames.has(candidate)) {
+      return candidate
+    }
+  }
 }
 
 export function ArchitectureCommandPalette({
@@ -34,7 +51,6 @@ export function ArchitectureCommandPalette({
   onOpenChange,
   onCreateBlank,
   onOpenModel,
-  onSaveAs,
   onDeleteModel,
   onLoadTemplate
 }: ArchitectureCommandPaletteProps): React.JSX.Element {
@@ -48,7 +64,7 @@ export function ArchitectureCommandPalette({
   }, [open])
 
   const name = modelName.trim()
-  const fallbackSaveName = name || `${activeModelName}-copy`
+  const blankModelName = resolveAvailableModelName(name || 'model', models)
 
   const run = async (action: () => void | Promise<void>): Promise<void> => {
     if (disabled || runningRef.current) {
@@ -88,22 +104,13 @@ export function ArchitectureCommandPalette({
           >
             <CommandSection heading="Model">
               <PaletteActionButton
-                onClick={() => void run(() => onCreateBlank(name || 'model'))}
+                onClick={() => void run(() => onCreateBlank(blankModelName))}
                 disabled={disabled}
                 data-testid="architecture-command-new"
               >
                 <FilePlus className="size-4" />
                 <span className="min-w-0 flex-1">New blank model</span>
-                <span className="font-mono text-xs text-muted-foreground">{name || 'model'}</span>
-              </PaletteActionButton>
-              <PaletteActionButton
-                onClick={() => void run(() => onSaveAs(fallbackSaveName))}
-                disabled={disabled}
-                data-testid="architecture-command-save-as"
-              >
-                <Save className="size-4" />
-                <span className="min-w-0 flex-1">Save current model as</span>
-                <span className="font-mono text-xs text-muted-foreground">{fallbackSaveName}</span>
+                <span className="font-mono text-xs text-muted-foreground">{blankModelName}</span>
               </PaletteActionButton>
             </CommandSection>
 

@@ -143,7 +143,14 @@ export function ArchitectureContextPanel({
           <Plus className="size-3.5" />
           Add Node
         </Button>
-        <Button variant="outline" size="icon-sm" onClick={() => void onSave()} disabled={syncing}>
+        <Button
+          variant="outline"
+          size="icon-sm"
+          onClick={() => void onSave()}
+          disabled={syncing}
+          data-testid="architecture-save-current-model"
+          title="Save current model"
+        >
           <Save className="size-3.5" />
         </Button>
       </div>

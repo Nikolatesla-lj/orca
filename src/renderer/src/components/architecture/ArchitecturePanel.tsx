@@ -32,6 +32,7 @@ import {
   type ArchitectureMode,
   useArchitectureModelController
 } from './useArchitectureModelController'
+import { sanitizeClientModelName } from './useArchitectureModelSession'
 import {
   createScryerThemeStyle,
   normalizeScryerTheme,
@@ -131,10 +132,10 @@ export default function ArchitecturePanel({
     setFollowExternalChanges,
     loadModel,
     refreshProjectModels,
+    writePendingModelNow,
     createBlankProjectModel,
     createModelFromTemplate,
     openProjectModel,
-    saveCurrentModelAs,
     deleteProjectModelByName,
     persist,
     applyModelChange,
@@ -183,6 +184,7 @@ export default function ArchitecturePanel({
   const [commandOpen, setCommandOpen] = useState(false)
   const [themeOpen, setThemeOpen] = useState(false)
   const [newProjectStep, setNewProjectStep] = useState<'choices' | 'workspace'>('choices')
+  const [pendingBlankModelName, setPendingBlankModelName] = useState<string | null>(null)
   const [blankWorkspacePath, setBlankWorkspacePath] = useState(workspace.projectPath ?? '')
   const [blankWorkspaceBusy, setBlankWorkspaceBusy] = useState(false)
   const [blankWorkspaceError, setBlankWorkspaceError] = useState<string | null>(null)
@@ -241,11 +243,54 @@ export default function ArchitecturePanel({
     model.nodes.length === 0 &&
     !!projectPath &&
     !newProjectPromptDismissed
+  const showBlankWorkspacePicker = pendingBlankModelName !== null
+  const modelTabs = useMemo(() => {
+    const tabs = projectModels.filter((entry) => entry.scope === 'project')
+    if (!tabs.some((entry) => entry.name === activeModelName)) {
+      tabs.unshift({
+        name: activeModelName,
+        fileName: `${activeModelName}.scry`,
+        path: '',
+        isDefault: activeModelName === 'model',
+        scope: 'project'
+      })
+    }
+    return tabs
+  }, [activeModelName, projectModels])
+
+  const resolveAvailableBlankModelName = (requestedName: string): string => {
+    const existingNames = new Set([...projectModels.map((entry) => entry.name), activeModelName])
+    const baseName = sanitizeClientModelName(requestedName)
+    if (!existingNames.has(baseName)) {
+      return baseName
+    }
+    for (let index = 2; ; index += 1) {
+      const candidate = `${baseName}-${index}`
+      if (!existingNames.has(candidate)) {
+        return candidate
+      }
+    }
+  }
+
+  const beginBlankWorkspaceSelection = (
+    modelName: string,
+    options: { keepRequestedName?: boolean } = {}
+  ): void => {
+    const nextModelName = options.keepRequestedName
+      ? sanitizeClientModelName(modelName)
+      : resolveAvailableBlankModelName(modelName)
+    setCommandOpen(false)
+    setPendingBlankModelName(nextModelName)
+    setBlankWorkspacePath(projectPath ?? '')
+    setBlankWorkspaceError(null)
+    setNewProjectStep('workspace')
+  }
 
   useEffect(() => {
     setNewProjectStep('choices')
     setBlankWorkspacePath(projectPath ?? '')
     setBlankWorkspaceError(null)
+    setPendingBlankModelName(null)
   }, [activeModelName, projectPath])
 
   useEffect(() => {
@@ -283,11 +328,14 @@ export default function ArchitecturePanel({
     if (!targetPath || blankWorkspaceBusy) {
       return
     }
+    const targetModelName = pendingBlankModelName ?? activeModelName
+    setCommandOpen(false)
     setBlankWorkspaceBusy(true)
     setBlankWorkspaceError(null)
     try {
-      await createBlankProjectModel(activeModelName, targetPath)
-      const targetDismissalKey = newProjectPromptDismissalKey(targetPath, activeModelName)
+      const createdModelName =
+        (await createBlankProjectModel(targetModelName, targetPath)) ?? targetModelName
+      const targetDismissalKey = newProjectPromptDismissalKey(targetPath, createdModelName)
       try {
         window.localStorage.setItem(targetDismissalKey, 'true')
       } catch {
@@ -297,6 +345,7 @@ export default function ArchitecturePanel({
       if (targetPath !== projectPath) {
         setArchitectureProjectPath(workspace.id, targetPath)
       }
+      setPendingBlankModelName(null)
       setNewProjectStep('choices')
     } catch (blankError) {
       setBlankWorkspaceError(blankError instanceof Error ? blankError.message : String(blankError))
@@ -429,6 +478,28 @@ export default function ArchitecturePanel({
         >
           {activeModelName}.scry
         </span>
+        <div
+          className="scrollbar-sleek flex max-w-[32rem] shrink overflow-x-auto rounded-md border border-border bg-background p-0.5"
+          data-testid="architecture-model-tabs"
+        >
+          {modelTabs.map((entry) => (
+            <button
+              key={entry.name}
+              type="button"
+              className={`max-w-36 shrink-0 truncate rounded px-2 py-1 font-mono text-[10px] transition-colors ${
+                entry.name === activeModelName
+                  ? 'bg-accent text-foreground'
+                  : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
+              }`}
+              disabled={editingLocked || entry.name === activeModelName}
+              onClick={() => void openProjectModel(entry.name, entry.scope)}
+              data-testid="architecture-model-tab"
+              title={entry.fileName}
+            >
+              {entry.fileName}
+            </button>
+          ))}
+        </div>
         {model?.validationWarnings?.length ? (
           <span
             className="min-w-0 flex-1 truncate text-xs text-amber-600 dark:text-amber-300"
@@ -567,19 +638,19 @@ export default function ArchitecturePanel({
         >
           {mainContent}
         </ArchitectureSectionBoundary>
-        {showNewProjectPrompt ? (
+        {showNewProjectPrompt || showBlankWorkspacePicker ? (
           <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-background/40">
             <div className="pointer-events-auto grid w-[380px] gap-2 rounded border border-border bg-background p-4 shadow-lg">
               <div className="grid gap-1 border-b border-border pb-3">
                 <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  New project
+                  {showBlankWorkspacePicker ? 'New model' : 'New project'}
                 </div>
                 <div className="truncate text-sm font-semibold text-foreground">
-                  {activeModelName}
+                  {pendingBlankModelName ?? activeModelName}
                 </div>
                 <div className="truncate text-[11px] text-muted-foreground">{projectPath}</div>
               </div>
-              {newProjectStep === 'choices' ? (
+              {!showBlankWorkspacePicker && newProjectStep === 'choices' ? (
                 <>
                   <button
                     type="button"
@@ -600,9 +671,7 @@ export default function ArchitecturePanel({
                     type="button"
                     className="flex items-center gap-3 rounded border border-border px-3 py-2 text-left hover:bg-accent"
                     onClick={() => {
-                      setBlankWorkspacePath(projectPath ?? '')
-                      setBlankWorkspaceError(null)
-                      setNewProjectStep('workspace')
+                      beginBlankWorkspaceSelection(activeModelName, { keepRequestedName: true })
                     }}
                     disabled={editingLocked}
                     data-testid="architecture-start-blank"
@@ -673,10 +742,14 @@ export default function ArchitecturePanel({
                     <Button
                       variant="ghost"
                       size="xs"
-                      onClick={() => setNewProjectStep('choices')}
+                      onClick={() => {
+                        setCommandOpen(false)
+                        setPendingBlankModelName(null)
+                        setNewProjectStep('choices')
+                      }}
                       disabled={blankWorkspaceBusy}
                     >
-                      Back
+                      {showNewProjectPrompt ? 'Back' : 'Cancel'}
                     </Button>
                     <Button
                       variant="default"
@@ -733,9 +806,10 @@ export default function ArchitecturePanel({
         sourcePattern={sourcePattern}
         syncing={editingLocked}
         onAddNode={addNode}
-        onSave={() => {
+        onSave={async () => {
           if (model) {
-            return persist(model, 'Saved architecture model')
+            await persist(model, 'Saved architecture model')
+            await writePendingModelNow()
           }
           return undefined
         }}
@@ -806,19 +880,20 @@ export default function ArchitecturePanel({
 
   return (
     <>
-      <ArchitectureCommandPalette
-        open={commandOpen}
-        activeModelName={activeModelName}
-        models={projectModels}
-        templates={templates}
-        disabled={editingLocked}
-        onOpenChange={setCommandOpen}
-        onCreateBlank={createBlankProjectModel}
-        onOpenModel={openProjectModel}
-        onSaveAs={saveCurrentModelAs}
-        onDeleteModel={deleteProjectModelByName}
-        onLoadTemplate={createModelFromTemplate}
-      />
+      {!showBlankWorkspacePicker ? (
+        <ArchitectureCommandPalette
+          open={commandOpen}
+          activeModelName={activeModelName}
+          models={projectModels}
+          templates={templates}
+          disabled={editingLocked}
+          onOpenChange={setCommandOpen}
+          onCreateBlank={(modelName) => beginBlankWorkspaceSelection(modelName)}
+          onOpenModel={openProjectModel}
+          onDeleteModel={deleteProjectModelByName}
+          onLoadTemplate={createModelFromTemplate}
+        />
+      ) : null}
       <div
         className="absolute inset-0 flex min-h-0 min-w-0 bg-background text-foreground"
         data-testid="architecture-panel"

@@ -95,8 +95,8 @@ export function useArchitectureModelSession({
     [projectPath]
   )
 
-  const acceptLoadedModelDocument = useCallback(
-    (modelName: string, revision: string) => {
+  const setActiveModelSession = useCallback(
+    (modelName: string, revision: string | null) => {
       const sanitized = sanitizeClientModelName(modelName)
       activeModelNameRef.current = sanitized
       revisionRef.current = revision
@@ -104,6 +104,20 @@ export function useArchitectureModelSession({
       setArchitectureModelRef(workspace.id, sanitized)
     },
     [setArchitectureModelRef, workspace.id]
+  )
+
+  const acceptLoadedModelDocument = useCallback(
+    (modelName: string, revision: string) => {
+      setActiveModelSession(modelName, revision)
+    },
+    [setActiveModelSession]
+  )
+
+  const prepareActiveModelName = useCallback(
+    (modelName: string) => {
+      setActiveModelSession(modelName, null)
+    },
+    [setActiveModelSession]
   )
 
   const writePendingModelNow = useCallback(async () => {
@@ -241,6 +255,7 @@ export function useArchitectureModelSession({
     templates,
     readModelDocument,
     acceptLoadedModelDocument,
+    prepareActiveModelName,
     refreshProjectModels,
     scheduleModelWrite,
     writePendingModelNow,

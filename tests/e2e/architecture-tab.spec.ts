@@ -155,36 +155,43 @@ test.describe('Architecture tab live Scryer sync', () => {
       .toBe(true)
 
     await orcaPage.getByTestId('architecture-command-open').click({ force: true })
-    await orcaPage.getByTestId('architecture-command-input').fill('arcade-copy')
-    await orcaPage.getByTestId('architecture-command-save-as').click({ force: true })
-    await expect(orcaPage.getByTestId('architecture-active-model')).toHaveText('arcade-copy.scry')
+    await expect(orcaPage.getByTestId('architecture-command-save-as')).toHaveCount(0)
+    await orcaPage.getByTestId('architecture-command-input').fill('blank-one')
+    await orcaPage.getByTestId('architecture-command-new').click({ force: true })
+    await expect(orcaPage.getByTestId('architecture-workspace-picker')).toBeVisible()
+    expect(existsSync(path.join(worktreePath, '.scryer', 'blank-one.scry'))).toBe(false)
+    await orcaPage.getByTestId('architecture-workspace-confirm').click({ force: true })
+    await expect(orcaPage.getByTestId('architecture-workspace-picker')).toHaveCount(0)
+    await expect(orcaPage.getByTestId('architecture-active-model')).toHaveText('blank-one.scry')
+    await expect(orcaPage.getByTestId('architecture-canvas')).toBeVisible({ timeout: 10_000 })
     await expect
-      .poll(() => existsSync(path.join(worktreePath, '.scryer', 'arcade-copy.scry')))
+      .poll(() => existsSync(path.join(worktreePath, '.scryer', 'blank-one.scry')))
       .toBe(true)
 
     await orcaPage.getByTestId('architecture-command-open').click({ force: true })
-    await orcaPage.getByTestId('architecture-command-input').fill('blank-one')
+    await orcaPage.getByTestId('architecture-command-input').fill('blank-two')
     await orcaPage.getByTestId('architecture-command-new').click({ force: true })
-    await expect(orcaPage.getByTestId('architecture-active-model')).toHaveText('blank-one.scry')
-    await expect(orcaPage.getByTestId('architecture-build-ai')).toBeVisible({ timeout: 10_000 })
+    await expect(orcaPage.getByTestId('architecture-workspace-picker')).toBeVisible()
+    expect(existsSync(path.join(worktreePath, '.scryer', 'blank-two.scry'))).toBe(false)
+    await orcaPage.getByTestId('architecture-workspace-confirm').click({ force: true })
+    await expect(orcaPage.getByTestId('architecture-active-model')).toHaveText('blank-two.scry')
 
     await orcaPage.getByTestId('architecture-command-open').click({ force: true })
     await orcaPage
       .getByTestId('architecture-command-open-model')
-      .filter({ hasText: 'arcade-copy' })
+      .filter({ hasText: 'arcade' })
       .click({ force: true })
-    await expect(orcaPage.getByTestId('architecture-active-model')).toHaveText('arcade-copy.scry')
+    await expect(orcaPage.getByTestId('architecture-active-model')).toHaveText('arcade.scry')
 
     await orcaPage.getByTestId('architecture-command-open').click({ force: true })
     await orcaPage
       .getByTestId('architecture-command-model-row')
-      .filter({ hasText: 'arcade-copy' })
+      .filter({ hasText: 'blank-one' })
       .getByTestId('architecture-command-delete-model')
       .click({ force: true })
     await expect
-      .poll(() => existsSync(path.join(worktreePath, '.scryer', 'arcade-copy.scry')))
+      .poll(() => existsSync(path.join(worktreePath, '.scryer', 'blank-one.scry')))
       .toBe(false)
-    await expect(orcaPage.getByTestId('architecture-active-model')).toHaveText('model.scry')
   })
 
   test('launches agent terminals from Build with AI and Fill with AI', async ({ orcaPage }) => {
@@ -560,6 +567,34 @@ test.describe('Architecture tab live Scryer sync', () => {
         return saved.nodes.find((node: { id: string }) => node.id === 'api')?.data?.shape
       })
       .toBe('person')
+  })
+
+  test('saves the current architecture model from the inspector save button', async ({
+    orcaPage
+  }) => {
+    const worktreePath = await getActiveWorktreePath(orcaPage)
+    rmSync(path.join(worktreePath, '.scryer'), { recursive: true, force: true })
+
+    await openArchitectureTab(orcaPage)
+    await orcaPage.getByTestId('architecture-start-blank').click({ force: true })
+    await orcaPage.getByTestId('architecture-workspace-confirm').click({ force: true })
+    await expect(orcaPage.getByTestId('architecture-canvas')).toBeVisible({ timeout: 10_000 })
+
+    await orcaPage.getByTestId('architecture-add-node').click({ force: true })
+    await expect(orcaPage.getByTestId('architecture-node-name')).toHaveValue('System 1')
+    await orcaPage.getByTestId('architecture-save-current-model').click({ force: true })
+
+    await expect
+      .poll(
+        () => {
+          const saved = JSON.parse(
+            readFileSync(path.join(worktreePath, '.scryer', 'model.scry'), 'utf8')
+          )
+          return saved.nodes.map((node: { data?: { name?: string } }) => node.data?.name)
+        },
+        { timeout: 300 }
+      )
+      .toContain('System 1')
   })
 
   test('batches rapid model edits into one undo and redo step', async ({ orcaPage }) => {

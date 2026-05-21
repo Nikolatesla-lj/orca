@@ -346,6 +346,7 @@ export function useArchitectureModelController({
     templates,
     readModelDocument,
     acceptLoadedModelDocument,
+    prepareActiveModelName,
     refreshProjectModels,
     scheduleModelWrite,
     writePendingModelNow,
@@ -499,11 +500,11 @@ export function useArchitectureModelController({
       try {
         setError('')
         const knownModels = await window.api.architecture.listModels({ projectPath })
+        const projectModelNames = new Set(
+          knownModels.filter((entry) => entry.scope === 'project').map((entry) => entry.name)
+        )
         if (
-          !workspace.modelRef &&
-          !knownModels.some(
-            (entry) => entry.scope === 'project' && entry.name === nextActiveModelName
-          ) &&
+          !projectModelNames.has(nextActiveModelName) &&
           !knownModels.some((entry) => entry.scope === 'project')
         ) {
           const emptyModel = createEmptyArchitectureModel(projectPath)
@@ -535,7 +536,10 @@ export function useArchitectureModelController({
           setMessage(`Model ready: ${nextActiveModelName}`)
           return
         }
-        const loadedDocument = await readModelDocument(nextActiveModelName)
+        const modelNameToLoad = projectModelNames.has(nextActiveModelName)
+          ? nextActiveModelName
+          : (knownModels.find((entry) => entry.scope === 'project')?.name ?? nextActiveModelName)
+        const loadedDocument = await readModelDocument(modelNameToLoad)
         if (requestId !== loadRequestIdRef.current) {
           return
         }
@@ -584,7 +588,7 @@ export function useArchitectureModelController({
                 if (
                   currentNode &&
                   dismissedNodeDiffKeysRef.current.get(
-                    nodeDiffDismissalKey(nextActiveModelName, nodeId)
+                    nodeDiffDismissalKey(modelNameToLoad, nodeId)
                   ) === fingerprintNodeData(currentNode.data)
                 ) {
                   continue
@@ -607,7 +611,7 @@ export function useArchitectureModelController({
         }
 
         lastKnownModelFingerprintRef.current = loadedFingerprint
-        acceptLoadedModelDocument(nextActiveModelName, loadedDocument.revision)
+        acceptLoadedModelDocument(modelNameToLoad, loadedDocument.revision)
         modelRef.current = nextModel
         setModel(nextModel)
         setExpandedPath((current) => nextExpandedPath ?? reconcileExpandedPath(nextModel, current))
@@ -648,7 +652,7 @@ export function useArchitectureModelController({
           )
         }
         void refreshProjectModels()
-        setMessage(`Model loaded: ${nextActiveModelName}`)
+        setMessage(`Model loaded: ${modelNameToLoad}`)
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : String(loadError))
       }
@@ -658,8 +662,7 @@ export function useArchitectureModelController({
       activeModelNameRef,
       projectPath,
       readModelDocument,
-      refreshProjectModels,
-      workspace.modelRef
+      refreshProjectModels
     ]
   )
 
@@ -796,7 +799,7 @@ export function useArchitectureModelController({
     async (modelName: string, targetProjectPath?: string) => {
       const nextProjectPath = targetProjectPath ?? projectPath
       if (!nextProjectPath || editingLocked) {
-        return
+        return sanitizeClientModelName(modelName)
       }
       const result = await window.api.architecture.createModel({
         projectPath: nextProjectPath,
@@ -808,9 +811,13 @@ export function useArchitectureModelController({
       setHistoryRevision((revision) => revision + 1)
       if (nextProjectPath === projectPath) {
         await loadModel(result.modelName)
+      } else {
+        prepareActiveModelName(result.modelName)
       }
+      void refreshProjectModels()
+      return result.modelName
     },
-    [editingLocked, loadModel, projectPath]
+    [editingLocked, loadModel, prepareActiveModelName, projectPath, refreshProjectModels]
   )
 
   const createModelFromTemplate = useCallback(
@@ -1970,6 +1977,7 @@ export function useArchitectureModelController({
     setFollowExternalChanges,
     loadModel,
     refreshProjectModels,
+    writePendingModelNow,
     createBlankProjectModel,
     createModelFromTemplate,
     openProjectModel,
