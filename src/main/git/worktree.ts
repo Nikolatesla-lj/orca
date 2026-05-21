@@ -1,8 +1,10 @@
 import { stat } from 'fs/promises'
 import { join, posix, win32 } from 'path'
+import { resolveWorktreeAddBaseRef } from '../../shared/worktree-base-ref'
 import type { GitWorktreeInfo } from '../../shared/types'
 import { gitExecFileAsync, translateWslOutputPaths } from './runner'
 import { resolveGitDir } from './status'
+import { hasWorktreeBaseCommitRef } from './worktree-base-ref-probe'
 
 type SparseWorktreeCreateError = Error & {
   cleanupFailed?: boolean
@@ -234,7 +236,10 @@ export async function addWorktree(
   // below for the terminal ergonomics.
   args.push('--no-track', '-b', branch, worktreePath)
   if (baseBranch) {
-    args.push(baseBranch)
+    const effectiveBase = await resolveWorktreeAddBaseRef(baseBranch, (qualifiedRef) =>
+      hasWorktreeBaseCommitRef(repoPath, qualifiedRef)
+    )
+    args.push(effectiveBase)
   }
   await gitExecFileAsync(args, { cwd: repoPath })
 

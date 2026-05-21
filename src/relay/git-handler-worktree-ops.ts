@@ -5,6 +5,7 @@
  * the oxlint max-lines (300) limit.
  */
 import * as path from 'path'
+import { resolveWorktreeAddBaseRef } from '../shared/worktree-base-ref'
 import type { GitExec } from './git-handler-ops'
 import { parseWorktreeList } from './git-handler-utils'
 
@@ -30,9 +31,20 @@ export async function addWorktreeOp(git: GitExec, params: Record<string, unknown
   // (state machine, common-dir scope, old-git fallback) in the comments
   // around src/main/git/worktree.ts addWorktree — those invariants apply
   // identically here.
+  const effectiveBase = base
+    ? await resolveWorktreeAddBaseRef(base, async (qualifiedRef) => {
+        try {
+          await git(['rev-parse', '--verify', '--quiet', `${qualifiedRef}^{commit}`], repoPath)
+          return true
+        } catch {
+          return false
+        }
+      })
+    : undefined
+
   const args = ['worktree', 'add', '--no-track', '-b', branchName, targetDir]
-  if (base) {
-    args.push(base)
+  if (effectiveBase) {
+    args.push(effectiveBase)
   }
 
   await git(args, repoPath)

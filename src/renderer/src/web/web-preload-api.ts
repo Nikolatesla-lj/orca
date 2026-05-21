@@ -86,6 +86,7 @@ function createWebPreloadApi(): Partial<PreloadApi> {
       getKeyboardInputSourceId: () => Promise.resolve(null),
       setUnreadDockBadgeCount: () => Promise.resolve(),
       getFloatingTerminalCwd: () => Promise.resolve(''),
+      getFloatingMarkdownDirectory: () => Promise.resolve(''),
       pickFloatingMarkdownDocument: () => Promise.resolve(null),
       pickFloatingWorkspaceDirectory: () => Promise.resolve(null)
     },
@@ -349,11 +350,14 @@ function createWorktreesApi(): NonNullable<Partial<PreloadApi>['worktrees']> {
         branchNameOverride: args.branchNameOverride,
         linkedIssue: args.linkedIssue,
         linkedPR: args.linkedPR,
+        linkedLinearIssue: args.linkedLinearIssue,
         displayName: args.displayName,
         sparseCheckout: args.sparseCheckout,
         pushTarget: args.pushTarget,
         setupDecision: args.setupDecision,
-        createdWithAgent: args.createdWithAgent
+        createdWithAgent: args.createdWithAgent,
+        workspaceStatus: args.workspaceStatus,
+        manualOrder: args.manualOrder
       })
     },
     resolvePrBase: async ({ repoId, prNumber, headRefName, isCrossRepository }) =>

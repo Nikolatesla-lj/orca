@@ -921,6 +921,8 @@ describe('OrcaRuntimeService', () => {
     const result = await runtime.createManagedWorktree({
       repoSelector: TEST_REPO_ID,
       name: 'mobile-feature',
+      linkedGitLabIssue: 321,
+      linkedGitLabMR: 654,
       startup: { command: 'claude' }
     })
 
@@ -932,7 +934,13 @@ describe('OrcaRuntimeService', () => {
     )
     expect(result.worktree).toMatchObject({
       id: `${TEST_REPO_ID}::${created.path}`,
-      path: created.path
+      path: created.path,
+      linkedGitLabIssue: 321,
+      linkedGitLabMR: 654
+    })
+    expect(metaById[result.worktree.id]).toMatchObject({
+      linkedGitLabIssue: 321,
+      linkedGitLabMR: 654
     })
     expect(addWorktree).not.toHaveBeenCalled()
     expect(listWorktrees).not.toHaveBeenCalled()

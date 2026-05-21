@@ -5873,9 +5873,12 @@ export class OrcaRuntimeService {
     linkedIssue?: number | null
     linkedPR?: number | null
     linkedLinearIssue?: string
+    linkedGitLabMR?: number | null
+    linkedGitLabIssue?: number | null
     comment?: string
     displayName?: string
     workspaceStatus?: string
+    manualOrder?: number
     sparseCheckout?: { directories: string[]; presetId?: string }
     pushTarget?: GitPushTarget
     runHooks?: boolean
@@ -6064,8 +6067,13 @@ export class OrcaRuntimeService {
       ...(args.linkedLinearIssue !== undefined
         ? { linkedLinearIssue: args.linkedLinearIssue }
         : {}),
+      ...(args.linkedGitLabMR !== undefined ? { linkedGitLabMR: args.linkedGitLabMR } : {}),
+      ...(args.linkedGitLabIssue !== undefined
+        ? { linkedGitLabIssue: args.linkedGitLabIssue }
+        : {}),
       ...(args.createdWithAgent ? { createdWithAgent: args.createdWithAgent } : {}),
       ...(args.comment !== undefined ? { comment: args.comment } : {}),
+      ...(args.manualOrder !== undefined ? { manualOrder: args.manualOrder } : {}),
       ...(args.workspaceStatus !== undefined ? { workspaceStatus: args.workspaceStatus } : {})
     })
     const worktree = mergeWorktree(repo.id, created, meta)
@@ -6263,9 +6271,12 @@ export class OrcaRuntimeService {
       linkedIssue?: number | null
       linkedPR?: number | null
       linkedLinearIssue?: string
+      linkedGitLabMR?: number | null
+      linkedGitLabIssue?: number | null
       comment?: string
       displayName?: string
       workspaceStatus?: string
+      manualOrder?: number
       sparseCheckout?: { directories: string[]; presetId?: string }
       pushTarget?: GitPushTarget
       runHooks?: boolean
@@ -6299,8 +6310,11 @@ export class OrcaRuntimeService {
         ...(args.linkedIssue != null ? { linkedIssue: args.linkedIssue } : {}),
         ...(args.linkedPR != null ? { linkedPR: args.linkedPR } : {}),
         ...(args.linkedLinearIssue ? { linkedLinearIssue: args.linkedLinearIssue } : {}),
+        ...(args.linkedGitLabMR != null ? { linkedGitLabMR: args.linkedGitLabMR } : {}),
+        ...(args.linkedGitLabIssue != null ? { linkedGitLabIssue: args.linkedGitLabIssue } : {}),
         ...(args.pushTarget ? { pushTarget: args.pushTarget } : {}),
         ...(args.workspaceStatus ? { workspaceStatus: args.workspaceStatus as never } : {}),
+        ...(args.manualOrder !== undefined ? { manualOrder: args.manualOrder } : {}),
         ...(args.createdWithAgent ? { createdWithAgent: args.createdWithAgent } : {})
       },
       repo,

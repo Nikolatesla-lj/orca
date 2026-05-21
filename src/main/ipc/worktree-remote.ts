@@ -450,13 +450,11 @@ async function prepareWorktreePushTargetSsh(
       remoteCreated = true
     }
   }
-  await provider.exec(
-    [
-      'fetch',
-      remoteName,
-      `+refs/heads/${target.branchName}:refs/remotes/${remoteName}/${target.branchName}`
-    ],
-    repoPath
+  await provider.fetchRemoteTrackingRef(
+    repoPath,
+    remoteName,
+    target.branchName,
+    `refs/remotes/${remoteName}/${target.branchName}`
   )
   return { ...sanitizedTarget, remoteName, ...(remoteCreated ? { remoteCreated: true } : {}) }
 }
@@ -671,14 +669,11 @@ export async function createRemoteWorktree(
   const remoteTrackingBase = await resolveRemoteTrackingBaseSsh(provider, repo.path, baseBranch)
   if (remoteTrackingBase) {
     try {
-      await provider.exec(
-        [
-          'fetch',
-          '--no-tags',
-          remoteTrackingBase.remote,
-          `+refs/heads/${remoteTrackingBase.branch}:${remoteTrackingBase.ref}`
-        ],
-        repo.path
+      await provider.fetchRemoteTrackingRef(
+        repo.path,
+        remoteTrackingBase.remote,
+        remoteTrackingBase.branch,
+        remoteTrackingBase.ref
       )
     } catch {
       throw new Error(
@@ -811,6 +806,9 @@ export async function createRemoteWorktree(
     ...(args.linkedIssue !== undefined ? { linkedIssue: args.linkedIssue } : {}),
     ...(args.linkedPR !== undefined ? { linkedPR: args.linkedPR } : {}),
     ...(args.linkedLinearIssue !== undefined ? { linkedLinearIssue: args.linkedLinearIssue } : {}),
+    ...(args.manualOrder !== undefined ? { manualOrder: args.manualOrder } : {}),
+    ...(args.linkedGitLabMR !== undefined ? { linkedGitLabMR: args.linkedGitLabMR } : {}),
+    ...(args.linkedGitLabIssue !== undefined ? { linkedGitLabIssue: args.linkedGitLabIssue } : {}),
     ...(args.workspaceStatus !== undefined ? { workspaceStatus: args.workspaceStatus } : {})
   }
   const meta = store.setWorktreeMeta(worktreeId, metaUpdates)
@@ -1155,6 +1153,9 @@ export async function createLocalWorktree(
     ...(args.linkedIssue !== undefined ? { linkedIssue: args.linkedIssue } : {}),
     ...(args.linkedPR !== undefined ? { linkedPR: args.linkedPR } : {}),
     ...(args.linkedLinearIssue !== undefined ? { linkedLinearIssue: args.linkedLinearIssue } : {}),
+    ...(args.manualOrder !== undefined ? { manualOrder: args.manualOrder } : {}),
+    ...(args.linkedGitLabMR !== undefined ? { linkedGitLabMR: args.linkedGitLabMR } : {}),
+    ...(args.linkedGitLabIssue !== undefined ? { linkedGitLabIssue: args.linkedGitLabIssue } : {}),
     ...(args.workspaceStatus !== undefined ? { workspaceStatus: args.workspaceStatus } : {})
   }
   const meta = store.setWorktreeMeta(worktreeId, metaUpdates)

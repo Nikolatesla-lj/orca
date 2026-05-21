@@ -415,6 +415,27 @@ describe('fetchWorktrees', () => {
     expect(store.getState().sortEpoch).toBe(8)
   })
 
+  it('updates worktree records when only GitLab link metadata changes', async () => {
+    const store = createTestStore()
+    const initial = makeWorktree({
+      id: 'repo1::/path/wt1',
+      repoId: 'repo1',
+      path: '/path/wt1',
+      branch: 'refs/heads/feature'
+    })
+    const refreshed = { ...initial, linkedGitLabIssue: 321 }
+    mockApi.worktrees.list.mockResolvedValue([refreshed])
+    store.setState({
+      worktreesByRepo: { repo1: [initial] },
+      sortEpoch: 7
+    } as Partial<AppState>)
+
+    await store.getState().fetchWorktrees('repo1')
+
+    expect(store.getState().worktreesByRepo.repo1).toEqual([refreshed])
+    expect(store.getState().sortEpoch).toBe(8)
+  })
+
   it('refreshes remote lineage when the worktree payload is otherwise unchanged', async () => {
     const store = createTestStore()
     const worktree = makeWorktree({
@@ -752,6 +773,34 @@ describe('createWorktree base status merge', () => {
       createdWithAgent: 'codex',
       linkedLinearIssue: 'ENG-123',
       workspaceStatus: 'in-review'
+    })
+  })
+
+  it('stamps manualOrder on create while Manual sort is active', async () => {
+    const store = createTestStore()
+    store.setState({ sortBy: 'manual' } as Partial<AppState>)
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(123_456)
+    const wt = makeWorktree({
+      id: 'repo1::/path/wt1',
+      repoId: 'repo1',
+      path: '/path/wt1',
+      manualOrder: 123_456
+    })
+    mockApi.worktrees.create.mockResolvedValue({ worktree: wt })
+
+    try {
+      await store.getState().createWorktree('repo1', 'feature')
+    } finally {
+      nowSpy.mockRestore()
+    }
+
+    expect(mockApi.worktrees.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        manualOrder: 123_456
+      })
+    )
+    expect(store.getState().worktreesByRepo.repo1[0]).toMatchObject({
+      manualOrder: 123_456
     })
   })
 
