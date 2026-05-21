@@ -5,6 +5,7 @@ import {
   Bot,
   Boxes,
   Command,
+  FolderOpen,
   GitBranch,
   Network,
   Plug,
@@ -14,6 +15,8 @@ import {
   Undo2
 } from 'lucide-react'
 import type { ArchitectureWorkspace } from '../../../../shared/types'
+import { e2eConfig } from '../../lib/e2e-config'
+import { useAppStore } from '../../store'
 import { Button } from '../ui/button'
 import { ArchitectureCanvas } from './ArchitectureCanvas'
 import { ArchitectureCommandPalette } from './ArchitectureCommandPalette'
@@ -37,6 +40,10 @@ import {
 import { recordArchitecturePerformanceMetric } from './architecture-performance'
 
 const ARCHITECTURE_THEME_STORAGE_KEY = 'orca-scryer:architecture-theme'
+
+function newProjectPromptDismissalKey(projectPath: string, modelName: string): string {
+  return `orca-scryer:new-project-dismissed:${projectPath}:${modelName}`
+}
 
 function readArchitectureTheme(): ScryerThemeSettings {
   try {
@@ -72,6 +79,7 @@ export default function ArchitecturePanel({
 }): React.JSX.Element {
   const renderStartedAtRef = useRef(performance.now())
   renderStartedAtRef.current = performance.now()
+  const setArchitectureProjectPath = useAppStore((state) => state.setArchitectureProjectPath)
   const {
     projectPath,
     model,
@@ -174,6 +182,13 @@ export default function ArchitecturePanel({
   } = useArchitectureModelController({ workspace })
   const [commandOpen, setCommandOpen] = useState(false)
   const [themeOpen, setThemeOpen] = useState(false)
+  const [newProjectStep, setNewProjectStep] = useState<'choices' | 'workspace'>('choices')
+  const [blankWorkspacePath, setBlankWorkspacePath] = useState(workspace.projectPath ?? '')
+  const [blankWorkspaceBusy, setBlankWorkspaceBusy] = useState(false)
+  const [blankWorkspaceError, setBlankWorkspaceError] = useState<string | null>(null)
+  const [dismissedNewProjectKeys, setDismissedNewProjectKeys] = useState<Set<string>>(
+    () => new Set()
+  )
   const [architectureTheme, setArchitectureTheme] = useState(readArchitectureTheme)
   const architectureThemeStyle = useMemo(() => {
     const style = createScryerThemeStyle(
@@ -215,8 +230,80 @@ export default function ArchitecturePanel({
     return () => window.removeEventListener('keydown', handler)
   }, [refreshProjectModels])
 
-  const showBuildWithAi =
-    architectureMode === 'topology' && !!model && model.nodes.length === 0 && !!projectPath
+  const promptDismissalKey = projectPath
+    ? newProjectPromptDismissalKey(projectPath, activeModelName)
+    : null
+  const newProjectPromptDismissed =
+    !!promptDismissalKey && dismissedNewProjectKeys.has(promptDismissalKey)
+  const showNewProjectPrompt =
+    architectureMode === 'topology' &&
+    !!model &&
+    model.nodes.length === 0 &&
+    !!projectPath &&
+    !newProjectPromptDismissed
+
+  useEffect(() => {
+    setNewProjectStep('choices')
+    setBlankWorkspacePath(projectPath ?? '')
+    setBlankWorkspaceError(null)
+  }, [activeModelName, projectPath])
+
+  useEffect(() => {
+    if (!promptDismissalKey) {
+      return
+    }
+    try {
+      if (window.localStorage.getItem(promptDismissalKey) !== 'true') {
+        return
+      }
+      setDismissedNewProjectKeys((current) => new Set(current).add(promptDismissalKey))
+    } catch {
+      // Local storage can be unavailable; the in-memory dismissed state still works.
+    }
+  }, [promptDismissalKey])
+
+  const handlePickBlankWorkspace = async (): Promise<void> => {
+    const pickDirectory =
+      e2eConfig.enabled && window.__architecturePickDirectoryForE2E
+        ? window.__architecturePickDirectoryForE2E
+        : window.api.shell.pickDirectory
+    // Why: native Electron directory dialogs cannot be driven from headless Playwright.
+    const selected = await pickDirectory({
+      defaultPath: blankWorkspacePath || projectPath || undefined
+    })
+    if (!selected) {
+      return
+    }
+    setBlankWorkspacePath(selected)
+    setBlankWorkspaceError(null)
+  }
+
+  const handleConfirmBlankWorkspace = async (): Promise<void> => {
+    const targetPath = blankWorkspacePath.trim()
+    if (!targetPath || blankWorkspaceBusy) {
+      return
+    }
+    setBlankWorkspaceBusy(true)
+    setBlankWorkspaceError(null)
+    try {
+      await createBlankProjectModel(activeModelName, targetPath)
+      const targetDismissalKey = newProjectPromptDismissalKey(targetPath, activeModelName)
+      try {
+        window.localStorage.setItem(targetDismissalKey, 'true')
+      } catch {
+        // Local storage can fail in constrained windows; keep the session state below.
+      }
+      setDismissedNewProjectKeys((current) => new Set(current).add(targetDismissalKey))
+      if (targetPath !== projectPath) {
+        setArchitectureProjectPath(workspace.id, targetPath)
+      }
+      setNewProjectStep('choices')
+    } catch (blankError) {
+      setBlankWorkspaceError(blankError instanceof Error ? blankError.message : String(blankError))
+    } finally {
+      setBlankWorkspaceBusy(false)
+    }
+  }
 
   const mainContent = error ? (
     <div className="flex-1 p-4 text-sm text-destructive">{error}</div>
@@ -480,7 +567,7 @@ export default function ArchitecturePanel({
         >
           {mainContent}
         </ArchitectureSectionBoundary>
-        {showBuildWithAi ? (
+        {showNewProjectPrompt ? (
           <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-background/40">
             <div className="pointer-events-auto grid w-[380px] gap-2 rounded border border-border bg-background p-4 shadow-lg">
               <div className="grid gap-1 border-b border-border pb-3">
@@ -492,36 +579,117 @@ export default function ArchitecturePanel({
                 </div>
                 <div className="truncate text-[11px] text-muted-foreground">{projectPath}</div>
               </div>
-              <button
-                type="button"
-                className="flex items-center gap-3 rounded border border-border px-3 py-2 text-left hover:bg-accent"
-                onClick={() => void startInitialModel()}
-                disabled={editingLocked}
-                data-testid="architecture-build-ai"
-              >
-                <Bot className="size-4 text-violet-500" />
-                <span className="grid gap-0.5">
-                  <span className="text-sm font-medium">Build with AI</span>
-                  <span className="text-[11px] text-muted-foreground">
-                    Scan the codebase and generate an architecture model
-                  </span>
-                </span>
-              </button>
-              <button
-                type="button"
-                className="flex items-center gap-3 rounded border border-border px-3 py-2 text-left hover:bg-accent"
-                onClick={() => void createBlankProjectModel(activeModelName)}
-                disabled={editingLocked}
-                data-testid="architecture-start-blank"
-              >
-                <Plus className="size-4 text-muted-foreground" />
-                <span className="grid gap-0.5">
-                  <span className="text-sm font-medium">Start blank</span>
-                  <span className="text-[11px] text-muted-foreground">
-                    Add systems, containers, and components manually
-                  </span>
-                </span>
-              </button>
+              {newProjectStep === 'choices' ? (
+                <>
+                  <button
+                    type="button"
+                    className="flex items-center gap-3 rounded border border-border px-3 py-2 text-left hover:bg-accent"
+                    onClick={() => void startInitialModel()}
+                    disabled={editingLocked}
+                    data-testid="architecture-build-ai"
+                  >
+                    <Bot className="size-4 text-violet-500" />
+                    <span className="grid gap-0.5">
+                      <span className="text-sm font-medium">Build with AI</span>
+                      <span className="text-[11px] text-muted-foreground">
+                        Scan the codebase and generate an architecture model
+                      </span>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="flex items-center gap-3 rounded border border-border px-3 py-2 text-left hover:bg-accent"
+                    onClick={() => {
+                      setBlankWorkspacePath(projectPath ?? '')
+                      setBlankWorkspaceError(null)
+                      setNewProjectStep('workspace')
+                    }}
+                    disabled={editingLocked}
+                    data-testid="architecture-start-blank"
+                  >
+                    <Plus className="size-4 text-muted-foreground" />
+                    <span className="grid gap-0.5">
+                      <span className="text-sm font-medium">Start blank</span>
+                      <span className="text-[11px] text-muted-foreground">
+                        Add systems, containers, and components manually
+                      </span>
+                    </span>
+                  </button>
+                </>
+              ) : (
+                <div className="grid gap-3" data-testid="architecture-workspace-picker">
+                  <div className="grid gap-2">
+                    <button
+                      type="button"
+                      className={`flex items-center gap-3 rounded border px-3 py-2 text-left hover:bg-accent ${
+                        blankWorkspacePath === projectPath
+                          ? 'border-primary bg-accent/60'
+                          : 'border-border'
+                      }`}
+                      onClick={() => {
+                        setBlankWorkspacePath(projectPath ?? '')
+                        setBlankWorkspaceError(null)
+                      }}
+                      data-testid="architecture-workspace-current"
+                    >
+                      <Network className="size-4 text-muted-foreground" />
+                      <span className="grid gap-0.5">
+                        <span className="text-sm font-medium">Current workspace</span>
+                        <span className="truncate text-[11px] text-muted-foreground">
+                          {projectPath}
+                        </span>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`flex items-center gap-3 rounded border px-3 py-2 text-left hover:bg-accent ${
+                        blankWorkspacePath !== projectPath
+                          ? 'border-primary bg-accent/60'
+                          : 'border-border'
+                      }`}
+                      onClick={() => void handlePickBlankWorkspace()}
+                      data-testid="architecture-workspace-other"
+                    >
+                      <FolderOpen className="size-4 text-muted-foreground" />
+                      <span className="grid gap-0.5">
+                        <span className="text-sm font-medium">Other workspace</span>
+                        <span className="text-[11px] text-muted-foreground">
+                          Choose a folder for this model
+                        </span>
+                      </span>
+                    </button>
+                  </div>
+                  <div
+                    className="truncate rounded border border-border bg-muted/40 px-2 py-1 font-mono text-[11px] text-muted-foreground"
+                    title={blankWorkspacePath}
+                    data-testid="architecture-workspace-path"
+                  >
+                    {blankWorkspacePath || 'No workspace selected'}
+                  </div>
+                  {blankWorkspaceError ? (
+                    <div className="text-xs text-destructive">{blankWorkspaceError}</div>
+                  ) : null}
+                  <div className="flex justify-end gap-2">
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      onClick={() => setNewProjectStep('choices')}
+                      disabled={blankWorkspaceBusy}
+                    >
+                      Back
+                    </Button>
+                    <Button
+                      variant="default"
+                      size="xs"
+                      onClick={() => void handleConfirmBlankWorkspace()}
+                      disabled={!blankWorkspacePath.trim() || blankWorkspaceBusy || editingLocked}
+                      data-testid="architecture-workspace-confirm"
+                    >
+                      {blankWorkspaceBusy ? 'Creating...' : 'Confirm'}
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         ) : null}

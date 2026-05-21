@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- Why: this IPC registrar remains a compatibility facade for Scryer model, drift, sync, MCP, and prompt handlers while the backing services are split behind injectable deps. */
-import { watch, type FSWatcher } from 'fs'
+import { existsSync, watch, type FSWatcher } from 'fs'
 import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import {
   createProjectModel,
@@ -332,7 +332,9 @@ export function registerArchitectureHandlers(
     if (watchers.has(key)) {
       return
     }
-    await deps.readModel(args.projectPath)
+    if (!existsSync(key)) {
+      return
+    }
     const watcher = watch(key, { persistent: false }, (_eventType, filename) => {
       if (!filename || !shouldNotifyModelFile(filename)) {
         return

@@ -21,6 +21,7 @@ export type ArchitectureSlice = {
   closeArchitectureTab: (tabId: string) => void
   setActiveArchitectureTab: (tabId: string) => void
   setArchitectureModelRef: (tabId: string, modelRef: string | null) => void
+  setArchitectureProjectPath: (tabId: string, projectPath: string | null) => void
   hydrateArchitectureSession: (session: WorkspaceSessionState) => void
 }
 
@@ -173,6 +174,25 @@ export const createArchitectureSlice: StateCreator<AppState, [], [], Architectur
             }
             changed = true
             return { ...tab, modelRef }
+          })
+        ])
+      )
+      return changed ? { architectureTabsByWorktree } : {}
+    })
+  },
+
+  setArchitectureProjectPath: (tabId, projectPath) => {
+    set((current) => {
+      let changed = false
+      const architectureTabsByWorktree = Object.fromEntries(
+        Object.entries(current.architectureTabsByWorktree).map(([worktreeId, tabs]) => [
+          worktreeId,
+          tabs.map((tab) => {
+            if (tab.id !== tabId) {
+              return tab
+            }
+            changed = true
+            return { ...tab, projectPath }
           })
         ])
       )

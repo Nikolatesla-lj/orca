@@ -19,6 +19,9 @@ declare global {
   interface Window {
     __paneManagers?: Map<string, PaneManager>
     __onboardingFeatureSetupDeps?: OnboardingFeatureSetupDeps
+    __architecturePickDirectoryForE2E?: (args: {
+      defaultPath?: string
+    }) => Promise<string | null> | string | null
   }
 }
 

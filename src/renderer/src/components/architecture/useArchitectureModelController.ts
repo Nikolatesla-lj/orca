@@ -498,6 +498,43 @@ export function useArchitectureModelController({
       )
       try {
         setError('')
+        const knownModels = await window.api.architecture.listModels({ projectPath })
+        if (
+          !workspace.modelRef &&
+          !knownModels.some(
+            (entry) => entry.scope === 'project' && entry.name === nextActiveModelName
+          ) &&
+          !knownModels.some((entry) => entry.scope === 'project')
+        ) {
+          const emptyModel = createEmptyArchitectureModel(projectPath)
+          const emptyFingerprint = fingerprintArchitectureModel(emptyModel)
+          if (requestId !== loadRequestIdRef.current) {
+            return
+          }
+          modelRef.current = emptyModel
+          lastKnownModelFingerprintRef.current = emptyFingerprint
+          selectedNodeIdRef.current = null
+          selectedEdgeIdRef.current = null
+          undoStackRef.current = []
+          redoStackRef.current = []
+          historyBatchStartedAtRef.current = null
+          setHistoryRevision((revision) => revision + 1)
+          setModel(emptyModel)
+          setExpandedPath([])
+          setActiveFlowId(null)
+          setSelectedNodeId(null)
+          setSelectedEdgeId(null)
+          setSelectedGroupId(null)
+          setMultiSelectedNodeIds([])
+          setTotalSelected(0)
+          setChangedNodeIds(new Set())
+          setNodeDiffs(new Map())
+          setImplementing(false)
+          setSyncStatus((current) => (current === 'running' ? 'idle' : current))
+          void refreshProjectModels()
+          setMessage(`Model ready: ${nextActiveModelName}`)
+          return
+        }
         const loadedDocument = await readModelDocument(nextActiveModelName)
         if (requestId !== loadRequestIdRef.current) {
           return
@@ -621,7 +658,8 @@ export function useArchitectureModelController({
       activeModelNameRef,
       projectPath,
       readModelDocument,
-      refreshProjectModels
+      refreshProjectModels,
+      workspace.modelRef
     ]
   )
 
@@ -755,19 +793,22 @@ export function useArchitectureModelController({
   }, [loadFallbackModelAfterRemoval, loadModel])
 
   const createBlankProjectModel = useCallback(
-    async (modelName: string) => {
-      if (!projectPath || editingLocked) {
+    async (modelName: string, targetProjectPath?: string) => {
+      const nextProjectPath = targetProjectPath ?? projectPath
+      if (!nextProjectPath || editingLocked) {
         return
       }
       const result = await window.api.architecture.createModel({
-        projectPath,
+        projectPath: nextProjectPath,
         modelName
       })
       undoStackRef.current = []
       redoStackRef.current = []
       historyBatchStartedAtRef.current = null
       setHistoryRevision((revision) => revision + 1)
-      await loadModel(result.modelName)
+      if (nextProjectPath === projectPath) {
+        await loadModel(result.modelName)
+      }
     },
     [editingLocked, loadModel, projectPath]
   )

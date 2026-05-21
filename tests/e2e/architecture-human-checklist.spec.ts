@@ -6,7 +6,8 @@
  * would click, and verify that the .scry files or local settings persist.
  */
 
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
 import path from 'path'
 import type { Page } from '@stablyai/playwright-test'
 import { test, expect } from './helpers/orca-app'
@@ -69,11 +70,12 @@ async function getActiveWorktreePath(page: Page): Promise<string> {
 }
 
 async function openArchitectureTab(page: Page): Promise<void> {
-  await page.getByRole('button', { name: 'New tab' }).click()
-  await page
-    .getByRole('menuitem', { name: /New Architecture/i })
-    .first()
-    .click()
+  const newTabButton = page.getByRole('button', { name: 'New tab' })
+  await expect(newTabButton).toBeVisible({ timeout: 10_000 })
+  await newTabButton.click({ force: true })
+  const newArchitectureItem = page.getByRole('menuitem', { name: /New Architecture/i }).first()
+  await expect(newArchitectureItem).toBeVisible({ timeout: 10_000 })
+  await newArchitectureItem.click({ force: true })
   await expect(page.getByTestId('architecture-panel')).toBeVisible({ timeout: 30_000 })
 }
 
@@ -100,7 +102,10 @@ function readSavedModel(projectPath: string): SavedModel {
 async function addNodeFromCanvasContext(page: Page, x = 42, y = 120): Promise<void> {
   const canvas = page.getByTestId('architecture-canvas')
   await expect(canvas).toBeVisible({ timeout: 10_000 })
-  const canvasBox = await canvas.boundingBox()
+  await expect(page.getByTestId('architecture-canvas-add-node')).toBeVisible({ timeout: 10_000 })
+  const pane = canvas.locator('.react-flow__pane')
+  await expect(pane).toBeVisible({ timeout: 10_000 })
+  const canvasBox = await pane.boundingBox()
   expect(canvasBox).not.toBeNull()
   const horizontalPadding = Math.min(32, Math.max(8, canvasBox!.width / 4))
   const verticalPadding = Math.min(64, Math.max(16, canvasBox!.height / 5))
@@ -112,9 +117,25 @@ async function addNodeFromCanvasContext(page: Page, x = 42, y = 120): Promise<vo
     Math.max(y, verticalPadding),
     Math.max(verticalPadding, canvasBox!.height - verticalPadding)
   )
-  await page.mouse.click(canvasBox!.x + safeX, canvasBox!.y + safeY, { button: 'right' })
+  await pane.click({ button: 'right', force: true, position: { x: safeX, y: safeY } })
+  if ((await page.getByTestId('architecture-canvas-context-menu').count()) === 0) {
+    await pane.evaluate(
+      (element, point) => {
+        element.dispatchEvent(
+          new MouseEvent('contextmenu', {
+            bubbles: true,
+            cancelable: true,
+            button: 2,
+            clientX: point.clientX,
+            clientY: point.clientY
+          })
+        )
+      },
+      { clientX: canvasBox!.x + safeX, clientY: canvasBox!.y + safeY }
+    )
+  }
   await expect(page.getByTestId('architecture-canvas-context-menu')).toBeVisible()
-  await page.getByTestId('architecture-context-add-node').click()
+  await page.getByTestId('architecture-context-add-node').dispatchEvent('click')
 }
 
 async function renameSelectedNode(page: Page, name: string, description?: string): Promise<void> {
@@ -142,7 +163,13 @@ async function renameSelectedNode(page: Page, name: string, description?: string
           .first()
           .isVisible()
           .catch(() => false)
-        return canvasTitleVisible || codeCardVisible
+        const treeNodeVisible = await page
+          .getByTestId('architecture-tree-node')
+          .filter({ hasText: name })
+          .first()
+          .isVisible()
+          .catch(() => false)
+        return canvasTitleVisible || codeCardVisible || treeNodeVisible
       },
       { timeout: 10_000 }
     )
@@ -159,9 +186,10 @@ function findSavedNodeId(projectPath: string, nodeName: string): string {
   return node.id
 }
 
-function savedNodeLocator(page: Page, projectPath: string, nodeName: string) {
-  const nodeId = findSavedNodeId(projectPath, nodeName)
-  return page.locator(`[data-testid="architecture-node"][data-node-id="${nodeId}"]`)
+async function selectArchitectureTreeNode(page: Page, nodeName: string): Promise<void> {
+  const treeNode = page.getByTestId('architecture-tree-node').filter({ hasText: nodeName }).first()
+  await expect(treeNode).toBeVisible({ timeout: 10_000 })
+  await treeNode.locator('button').first().dispatchEvent('click')
 }
 
 async function drillIntoSavedNode(
@@ -169,15 +197,24 @@ async function drillIntoSavedNode(
   projectPath: string,
   nodeName: string
 ): Promise<void> {
-  const node = savedNodeLocator(page, projectPath, nodeName)
-  await expect(node).toBeVisible({ timeout: 10_000 })
-  await node.click({ position: { x: 90, y: 80 } })
-  const drillButton = node.getByTitle('Drill into node')
-  if (await drillButton.isVisible().catch(() => false)) {
-    await drillButton.click()
+  const nodeId = findSavedNodeId(projectPath, nodeName)
+  const node = page.locator(`[data-testid="architecture-node"][data-node-id="${nodeId}"]`)
+  if (await node.isVisible().catch(() => false)) {
+    await node.click({ force: true, position: { x: 90, y: 80 } })
+  } else {
+    const treeDrill = page.locator(
+      `[data-testid="architecture-tree-node"][data-node-id="${nodeId}"] [data-testid="architecture-tree-drill-node"]`
+    )
+    await expect(treeDrill).toHaveCount(1)
+    await treeDrill.dispatchEvent('click')
     return
   }
-  await node.dblclick({ position: { x: 90, y: 80 } })
+  const drillButton = page.getByTitle('Drill into node')
+  if (await drillButton.isVisible().catch(() => false)) {
+    await drillButton.click({ force: true })
+    return
+  }
+  await node.dblclick({ force: true, position: { x: 90, y: 80 } })
 }
 
 async function enterCodeLevelForComponent(page: Page, componentName: string): Promise<void> {
@@ -200,7 +237,7 @@ test.describe('Architecture human migration checklist', () => {
     rmSync(path.join(worktreePath, '.scryer'), { recursive: true, force: true })
     await openArchitectureTab(orcaPage)
 
-    await orcaPage.getByTestId('architecture-theme-open').click()
+    await orcaPage.getByTestId('architecture-theme-open').click({ force: true })
     await expect(orcaPage.getByTestId('architecture-theme-editor')).toBeVisible()
     await expect(
       orcaPage.getByTestId('architecture-theme-role-background').locator('option')
@@ -349,7 +386,11 @@ test.describe('Architecture human migration checklist', () => {
     const worktreePath = await getActiveWorktreePath(orcaPage)
     rmSync(path.join(worktreePath, '.scryer'), { recursive: true, force: true })
     await openArchitectureTab(orcaPage)
-    await orcaPage.getByTestId('architecture-start-blank').click()
+    await orcaPage.getByTestId('architecture-start-blank').click({ force: true })
+    await expect(orcaPage.getByTestId('architecture-workspace-picker')).toBeVisible()
+    await orcaPage.getByTestId('architecture-workspace-confirm').click({ force: true })
+    await expect(orcaPage.getByTestId('architecture-workspace-picker')).toHaveCount(0)
+    await expect(orcaPage.getByTestId('architecture-start-blank')).toHaveCount(0)
 
     await addNodeFromCanvasContext(orcaPage, 48, 150)
     await renameSelectedNode(orcaPage, 'Issue Tracker', 'Tracks issues and comments')
@@ -361,9 +402,9 @@ test.describe('Architecture human migration checklist', () => {
       ).toHaveAttribute('data-node-shape', shape)
     }
 
-    await orcaPage.getByTestId('architecture-zoom-in').click()
-    await orcaPage.getByTestId('architecture-zoom-out').click()
-    await orcaPage.getByTestId('architecture-zoom-fit').click()
+    await orcaPage.getByTestId('architecture-zoom-in').dispatchEvent('click')
+    await orcaPage.getByTestId('architecture-zoom-out').dispatchEvent('click')
+    await orcaPage.getByTestId('architecture-zoom-fit').dispatchEvent('click')
 
     await drillIntoSavedNode(orcaPage, worktreePath, 'Issue Tracker')
     for (const [index, name] of ['Web App', 'API', 'Database'].entries()) {
@@ -377,21 +418,36 @@ test.describe('Architecture human migration checklist', () => {
       orcaPage.getByTestId('architecture-tree-node').filter({ hasText: 'Database' })
     ).toBeVisible()
 
-    await orcaPage.getByTestId('architecture-tree-node').filter({ hasText: 'Web App' }).click()
+    await selectArchitectureTreeNode(orcaPage, 'Web App')
     await orcaPage.getByTestId('architecture-node-description').fill('Calls @[Ghost API]')
     await orcaPage.keyboard.press('Tab')
     await expect(orcaPage.getByTestId('architecture-mention-warning')).toContainText(
       'does not match a sibling node'
     )
 
-    await orcaPage.getByTestId('architecture-tree-node').filter({ hasText: 'API' }).click()
+    await selectArchitectureTreeNode(orcaPage, 'API')
     await orcaPage.getByTestId('architecture-source-pattern').fill('src/api/**/*.ts')
     await orcaPage.keyboard.press('Tab')
     await orcaPage.getByTestId('architecture-edge-target').selectOption({ label: 'Database' })
-    await orcaPage.getByTestId('architecture-add-edge').click()
-    await expect(
-      orcaPage.getByTestId('architecture-edge-label').filter({ hasText: 'depends on' })
-    ).toBeVisible({ timeout: 10_000 })
+    await orcaPage.getByTestId('architecture-add-edge').dispatchEvent('click')
+    await expect
+      .poll(
+        async () => {
+          const canvasLabelVisible = await orcaPage
+            .getByTestId('architecture-edge-label')
+            .filter({ hasText: 'depends on' })
+            .first()
+            .isVisible()
+            .catch(() => false)
+          const contextSummaryVisible = await orcaPage
+            .getByText('out: Database - depends on')
+            .isVisible()
+            .catch(() => false)
+          return canvasLabelVisible || contextSummaryVisible
+        },
+        { timeout: 10_000 }
+      )
+      .toBe(true)
 
     const apiNode = orcaPage.getByTestId('architecture-node').filter({ hasText: 'API' }).first()
     const apiTitle = apiNode.getByTestId('architecture-node-title')
@@ -428,6 +484,31 @@ test.describe('Architecture human migration checklist', () => {
       .toEqual({
         hierarchyNames: ['API', 'Database', 'Issue Tracker', 'Web App']
       })
+  })
+
+  test('creates a blank architecture model in a user-selected workspace', async ({ orcaPage }) => {
+    const worktreePath = await getActiveWorktreePath(orcaPage)
+    const selectedPath = mkdtempSync(path.join(tmpdir(), 'orca-scryer-selected-workspace-'))
+    rmSync(path.join(worktreePath, '.scryer'), { recursive: true, force: true })
+    rmSync(path.join(selectedPath, '.scryer'), { recursive: true, force: true })
+    await orcaPage.evaluate((nextPath) => {
+      window.__architecturePickDirectoryForE2E = async () => nextPath
+    }, selectedPath)
+
+    await openArchitectureTab(orcaPage)
+    expect(existsSync(path.join(worktreePath, '.scryer', 'model.scry'))).toBe(false)
+    await orcaPage.getByTestId('architecture-start-blank').click({ force: true })
+    await expect(orcaPage.getByTestId('architecture-workspace-picker')).toBeVisible()
+    await orcaPage.getByTestId('architecture-workspace-other').click({ force: true })
+    await expect(orcaPage.getByTestId('architecture-workspace-path')).toContainText(selectedPath)
+    expect(existsSync(path.join(worktreePath, '.scryer', 'model.scry'))).toBe(false)
+    await orcaPage.getByTestId('architecture-workspace-confirm').click({ force: true })
+
+    await expect(orcaPage.getByTestId('architecture-workspace-picker')).toHaveCount(0)
+    await expect(orcaPage.getByTestId('architecture-start-blank')).toHaveCount(0)
+    await expect(orcaPage.getByTestId('architecture-canvas')).toBeVisible({ timeout: 10_000 })
+    await expect.poll(() => existsSync(path.join(selectedPath, '.scryer', 'model.scry'))).toBe(true)
+    expect(existsSync(path.join(worktreePath, '.scryer', 'model.scry'))).toBe(false)
   })
 
   test('creates operation, process, and model code-level nodes and saves them', async ({

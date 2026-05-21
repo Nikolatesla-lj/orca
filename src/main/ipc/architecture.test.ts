@@ -1,7 +1,8 @@
 import { mkdtemp, readFile } from 'fs/promises'
+import { existsSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const handlers = new Map<string, (_event: unknown, args: unknown) => Promise<unknown>>()
 const { handleMock } = vi.hoisted(() => ({ handleMock: vi.fn() }))
@@ -11,6 +12,7 @@ vi.mock('electron', () => ({
 }))
 
 import {
+  closeArchitectureWatchers,
   registerArchitectureHandlers,
   shouldNotifyModelFile,
   type ArchitectureIpcRegistrar
@@ -24,6 +26,10 @@ describe('registerArchitectureHandlers', () => {
       handlers.set(channel, handler)
     })
     registerArchitectureHandlers()
+  })
+
+  afterEach(() => {
+    closeArchitectureWatchers()
   })
 
   it('bridges model read/write, drift, sync, and MCP-style tool calls through IPC', async () => {
@@ -83,6 +89,14 @@ describe('registerArchitectureHandlers', () => {
       projectPath,
       fileName: 'model.scry'
     })
+  })
+
+  it('does not create a default model just to watch a project', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-watch-'))
+
+    await handlers.get('architecture:watchModel')!({ sender: { send: vi.fn() } }, { projectPath })
+
+    expect(existsSync(join(projectPath, '.scryer', 'model.scry'))).toBe(false)
   })
 
   it('bridges revisioned document reads and node patches through IPC', async () => {
