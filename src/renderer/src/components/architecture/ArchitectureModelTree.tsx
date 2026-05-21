@@ -38,7 +38,7 @@ export function ArchitectureModelTree({
     <aside
       className={
         docked
-          ? 'flex w-72 shrink-0 flex-col bg-background text-xs'
+          ? 'flex w-80 shrink-0 flex-col bg-background text-xs xl:w-96'
           : 'flex w-64 shrink-0 flex-col border-r border-border bg-background text-xs'
       }
       data-testid="architecture-model-tree"

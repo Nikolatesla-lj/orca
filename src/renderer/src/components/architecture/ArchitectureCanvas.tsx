@@ -116,6 +116,7 @@ function ArchitectureCanvasInner({
   const selectedVisibleNode = selectedNodeId
     ? (view.visibleNodes.find((node) => node.id === selectedNodeId) ?? null)
     : null
+  const showBreadcrumbs = expandedPath.length > 1
 
   const visibleNodes = useMemo<ArchitectureFlowNode[]>(
     () =>
@@ -544,24 +545,26 @@ function ArchitectureCanvasInner({
             </div>
           ))}
         </ViewportPortal>
-        <Panel position="top-left" className="!m-3">
-          <div className="flex items-center gap-1 rounded-md border border-border bg-background/95 px-1 py-1 shadow-sm">
-            <Button variant="ghost" size="xs" onClick={navigateToRoot}>
-              Root
-            </Button>
-            {expandedPath.map((nodeId, index) => {
-              const node = model.nodes.find((candidate) => candidate.id === nodeId)
-              return (
-                <div key={nodeId} className="flex items-center gap-1">
-                  <ChevronRight className="size-3 text-muted-foreground" />
-                  <Button variant="ghost" size="xs" onClick={() => navigateToBreadcrumb(index)}>
-                    {node?.data.name ?? nodeId}
-                  </Button>
-                </div>
-              )
-            })}
-          </div>
-        </Panel>
+        {showBreadcrumbs ? (
+          <Panel position="top-left" className="!m-3">
+            <div className="flex items-center gap-1 rounded-md border border-border bg-background/95 px-1 py-1 shadow-sm">
+              <Button variant="ghost" size="xs" onClick={navigateToRoot}>
+                Root
+              </Button>
+              {expandedPath.map((nodeId, index) => {
+                const node = model.nodes.find((candidate) => candidate.id === nodeId)
+                return (
+                  <div key={nodeId} className="flex items-center gap-1">
+                    <ChevronRight className="size-3 text-muted-foreground" />
+                    <Button variant="ghost" size="xs" onClick={() => navigateToBreadcrumb(index)}>
+                      {node?.data.name ?? nodeId}
+                    </Button>
+                  </div>
+                )
+              })}
+            </div>
+          </Panel>
+        ) : null}
         <Panel position="top-center" className="!m-3">
           <div className="flex items-center gap-1 rounded-md border border-border bg-background/95 px-1 py-1 shadow-sm">
             <Button

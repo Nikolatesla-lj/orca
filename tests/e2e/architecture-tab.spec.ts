@@ -135,6 +135,15 @@ async function openArchitectureInspector(
   await expect(page.getByTestId('architecture-inspector-panel')).toBeVisible({ timeout: 10_000 })
 }
 
+async function expectActiveArchitectureModel(
+  page: Parameters<typeof waitForSessionReady>[0],
+  fileName: string
+): Promise<void> {
+  await expect(
+    page.getByTestId('architecture-model-tab').filter({ hasText: fileName })
+  ).toHaveAttribute('aria-selected', 'true')
+}
+
 test.describe('Architecture tab live Scryer sync', () => {
   test.describe.configure({ mode: 'serial' })
 
@@ -162,7 +171,7 @@ test.describe('Architecture tab live Scryer sync', () => {
       .evaluate((button) => {
         ;(button as HTMLButtonElement).click()
       })
-    await expect(orcaPage.getByTestId('architecture-active-model')).toHaveText('arcade.scry')
+    await expectActiveArchitectureModel(orcaPage, 'arcade.scry')
     await expect(
       orcaPage.getByTestId('architecture-tree-node').filter({ hasText: /^Game Client/ })
     ).toBeVisible({ timeout: 10_000 })
@@ -180,7 +189,7 @@ test.describe('Architecture tab live Scryer sync', () => {
     expect(existsSync(path.join(worktreePath, '.scryer', 'blank-one.scry'))).toBe(false)
     await orcaPage.getByTestId('architecture-workspace-confirm').click({ force: true })
     await expect(orcaPage.getByTestId('architecture-workspace-picker')).toHaveCount(0)
-    await expect(orcaPage.getByTestId('architecture-active-model')).toHaveText('blank-one.scry')
+    await expectActiveArchitectureModel(orcaPage, 'blank-one.scry')
     await expect(orcaPage.getByTestId('architecture-canvas')).toBeVisible({ timeout: 10_000 })
     await expect
       .poll(() => existsSync(path.join(worktreePath, '.scryer', 'blank-one.scry')))
@@ -194,7 +203,7 @@ test.describe('Architecture tab live Scryer sync', () => {
     await expect(orcaPage.getByTestId('architecture-workspace-picker')).toBeVisible()
     expect(existsSync(path.join(worktreePath, '.scryer', 'blank-two.scry'))).toBe(false)
     await orcaPage.getByTestId('architecture-workspace-confirm').click({ force: true })
-    await expect(orcaPage.getByTestId('architecture-active-model')).toHaveText('blank-two.scry')
+    await expectActiveArchitectureModel(orcaPage, 'blank-two.scry')
 
     const modelTabStrip = orcaPage.getByTestId('architecture-model-tab-strip')
     const architectureToolbar = orcaPage.getByTestId('architecture-toolbar')
@@ -221,7 +230,7 @@ test.describe('Architecture tab live Scryer sync', () => {
       .getByTestId('architecture-model-tab')
       .filter({ hasText: 'blank-one.scry' })
       .click({ force: true })
-    await expect(orcaPage.getByTestId('architecture-active-model')).toHaveText('blank-one.scry')
+    await expectActiveArchitectureModel(orcaPage, 'blank-one.scry')
     await expect(
       modelTabStrip.getByTestId('architecture-model-tab').filter({ hasText: 'blank-one.scry' })
     ).toHaveAttribute('aria-selected', 'true')
@@ -233,7 +242,7 @@ test.describe('Architecture tab live Scryer sync', () => {
       .evaluate((button) => {
         ;(button as HTMLButtonElement).click()
       })
-    await expect(orcaPage.getByTestId('architecture-active-model')).toHaveText('arcade.scry')
+    await expectActiveArchitectureModel(orcaPage, 'arcade.scry')
 
     await orcaPage.getByTestId('architecture-command-open').click({ force: true })
     await orcaPage
@@ -261,8 +270,13 @@ test.describe('Architecture tab live Scryer sync', () => {
       .evaluate((button) => {
         ;(button as HTMLButtonElement).click()
       })
-    await expect(orcaPage.getByTestId('architecture-active-model')).toHaveText('arcade.scry')
+    await expectActiveArchitectureModel(orcaPage, 'arcade.scry')
     await expect(orcaPage.getByTestId('architecture-side-dock')).toBeVisible()
+    await expect(orcaPage.getByTestId('architecture-toolbar')).not.toContainText('arcade.scry')
+    await expect(orcaPage.getByTestId('architecture-toolbar')).not.toContainText('Model loaded')
+    await expect(
+      orcaPage.getByTestId('architecture-canvas').getByRole('button', { name: 'Root' })
+    ).toHaveCount(0)
     await expect(orcaPage.getByTestId('architecture-side-tab-tree')).toHaveAttribute(
       'aria-selected',
       'true'
@@ -283,6 +297,9 @@ test.describe('Architecture tab live Scryer sync', () => {
     )
     await expect(orcaPage.getByTestId('architecture-add-node')).toBeVisible()
     await expect(orcaPage.getByTestId('architecture-node-name')).toHaveValue('Game Client')
+    const inspectorBox = await orcaPage.getByTestId('architecture-inspector-panel').boundingBox()
+    expect(inspectorBox).not.toBeNull()
+    expect(Math.round(inspectorBox!.width)).toBe(Math.round(treeBox!.width))
 
     await orcaPage.getByTestId('architecture-side-tab-tree').evaluate((button) => {
       ;(button as HTMLButtonElement).click()

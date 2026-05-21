@@ -127,7 +127,6 @@ export default function ArchitecturePanel({
     driftedNodeIds,
     flows,
     codeLevelNodes,
-    message,
     error,
     changedNodeIds,
     nodeDiffs,
@@ -585,12 +584,6 @@ export default function ArchitecturePanel({
       >
         <Network className="size-4 text-emerald-500" />
         <span className="truncate text-sm font-medium">{workspace.title}</span>
-        <span
-          className="rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
-          data-testid="architecture-active-model"
-        >
-          {activeModelName}.scry
-        </span>
         {model?.validationWarnings?.length ? (
           <span
             className="min-w-0 flex-1 truncate text-xs text-amber-600 dark:text-amber-300"
@@ -601,8 +594,6 @@ export default function ArchitecturePanel({
             {model.validationWarnings.length === 1 ? '' : 's'}:{' '}
             {model.validationWarnings[0].message}
           </span>
-        ) : message ? (
-          <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{message}</span>
         ) : (
           <span className="flex-1" />
         )}
