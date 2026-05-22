@@ -31,7 +31,9 @@ describe('normalizeGitErrorMessage', () => {
     ).toBe('Not a git repository.')
     expect(
       normalizeGitErrorMessage(
-        new Error('fatal: Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).'),
+        new Error(
+          'fatal: Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).'
+        ),
         'upstream'
       )
     ).toBe('Not a git repository.')

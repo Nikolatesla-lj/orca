@@ -112,10 +112,7 @@ export async function writeModelDocument(
     }
   }
   const content = serializeModelData(normalizeModelForProject(projectPath, model))
-  await atomicWrite(
-    getProjectModelPath(projectPath, modelName),
-    content
-  )
+  await atomicWrite(getProjectModelPath(projectPath, modelName), content)
   return {
     model: normalizeModelForProject(projectPath, model),
     revision: revisionForContent(content)
