@@ -11,6 +11,7 @@ consistent across every repo-scoped subprocess call. */
  */
 import { execFile, execFileSync, spawn, type ChildProcess, type SpawnOptions } from 'child_process'
 import { promisify } from 'util'
+import { withGitSpan } from '../observability/instrumentation'
 import { getDefaultWslDistro, parseWslPath, toWindowsWslPath, type WslPathInfo } from '../wsl'
 import { getSpawnArgsForWindows, isWindowsBatchScript, resolveWindowsCommand } from '../win32-utils'
 
@@ -363,15 +364,24 @@ export async function gitExecFileAsync(
   args: string[],
   options: GitExecOptions
 ): Promise<{ stdout: string; stderr: string }> {
-  const resolved = resolveCommand('git', args, options.cwd)
-  const { stdout, stderr } = await execFileAsync(resolved.binary, resolved.args, {
-    cwd: resolved.cwd,
-    encoding: (options.encoding ?? 'utf-8') as BufferEncoding,
-    maxBuffer: options.maxBuffer,
-    timeout: options.timeout,
-    env: options.env
-  })
-  return { stdout: stdout as string, stderr: stderr as string }
+  // Why wrap here: the resolved binary path / WSL detection is internal
+  // detail; the span attributes track the user-visible `git <subcommand>
+  // <args…>` form so dashboards group cleanly by intent rather than by
+  // platform-conditional binary path.
+  return withGitSpan(
+    { args, ...(options.cwd !== undefined ? { cwd: options.cwd } : {}) },
+    async () => {
+      const resolved = resolveCommand('git', args, options.cwd)
+      const { stdout, stderr } = await execFileAsync(resolved.binary, resolved.args, {
+        cwd: resolved.cwd,
+        encoding: (options.encoding ?? 'utf-8') as BufferEncoding,
+        maxBuffer: options.maxBuffer,
+        timeout: options.timeout,
+        env: options.env
+      })
+      return { stdout: stdout as string, stderr: stderr as string }
+    }
+  )
 }
 
 /**

@@ -25,7 +25,10 @@ import {
   normalizeHostedReviewHeadRef
 } from '../../shared/hosted-review-refs'
 import { parseTaskQuery, type ParsedTaskQuery } from '../../shared/task-query'
-import { sortWorkItemsByUpdatedAt } from '../../shared/work-items'
+import {
+  GITHUB_WORK_ITEMS_SSH_REMOTE_REQUIRED_MESSAGE,
+  sortWorkItemsByUpdatedAt
+} from '../../shared/work-items'
 import { mkdtemp, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
@@ -331,6 +334,8 @@ export async function getAuthenticatedViewer(): Promise<GitHubViewer | null> {
 // single-repo and cross-repo items are uniform downstream.
 type MainWorkItem = Omit<GitHubWorkItem, 'repoId'>
 
+const WORK_ITEM_ISSUE_LIST_JSON_FIELDS = 'number,title,state,url,labels,updatedAt,author,assignees'
+
 const WORK_ITEM_PR_LIST_JSON_FIELDS =
   'number,title,state,url,labels,updatedAt,author,isDraft,headRefName,baseRefName,headRefOid,headRepositoryOwner,reviewRequests'
 
@@ -364,7 +369,8 @@ function mapIssueWorkItem(item: Record<string, unknown>): MainWorkItem {
         ? String((item.user as { login?: unknown }).login ?? '')
         : typeof item.author === 'object' && item.author !== null && 'login' in item.author
           ? String((item.author as { login?: unknown }).login ?? '')
-          : null
+          : null,
+    ...(item.assignees !== undefined ? { assignees: usersFromUnknown(item.assignees) } : {})
   }
 }
 
@@ -423,6 +429,7 @@ function userFromUnknown(
   if (!login) {
     return null
   }
+  const databaseId = numberFromUnknown(raw.databaseId)
   return {
     login,
     name: typeof raw.name === 'string' ? raw.name : null,
@@ -431,7 +438,9 @@ function userFromUnknown(
         ? raw.avatarUrl
         : typeof raw.avatar_url === 'string'
           ? raw.avatar_url
-          : ''
+          : databaseId !== undefined
+            ? `https://avatars.githubusercontent.com/u/${databaseId}?v=4`
+            : ''
   }
 }
 
@@ -707,10 +716,7 @@ function buildWorkItemListArgs(args: {
   before?: string
 }): string[] {
   const { kind, ownerRepo, limit, query, before } = args
-  const fields =
-    kind === 'issue'
-      ? 'number,title,state,url,labels,updatedAt,author'
-      : WORK_ITEM_PR_LIST_JSON_FIELDS
+  const fields = kind === 'issue' ? WORK_ITEM_ISSUE_LIST_JSON_FIELDS : WORK_ITEM_PR_LIST_JSON_FIELDS
   const command = kind === 'issue' ? ['issue', 'list'] : ['pr', 'list']
   const out = [...command, '--limit', String(limit), '--json', fields]
 
@@ -789,7 +795,7 @@ function assertSshRepoHasResolvedGitHubSource(args: {
   }
   // Why: SSH repo paths are remote-only, so gh cannot use cwd to infer repo
   // context. Without a resolved owner/repo, running gh would query local state.
-  throw new Error('GitHub work items require a GitHub remote for SSH repositories')
+  throw new Error(GITHUB_WORK_ITEMS_SSH_REMOTE_REQUIRED_MESSAGE)
 }
 
 async function listRecentWorkItems(
@@ -828,7 +834,7 @@ async function listRecentWorkItems(
                 '--state',
                 'open',
                 '--json',
-                'number,title,state,url,labels,updatedAt,author'
+                WORK_ITEM_ISSUE_LIST_JSON_FIELDS
               ],
               ghOptions
             ),
@@ -924,7 +930,7 @@ async function listRecentWorkItems(
         '--state',
         'open',
         '--json',
-        'number,title,state,url,labels,updatedAt,author'
+        WORK_ITEM_ISSUE_LIST_JSON_FIELDS
       ],
       ghOptions
     ),
@@ -1356,7 +1362,9 @@ async function findOpenPRByHeadBase(args: {
   ownerRepo: OwnerRepo
   head: string
   base: string
+  connectionId?: string | null
 }): Promise<{ number: number; url: string } | null> {
+  const context = githubRepoContext(args.repoPath, args.connectionId)
   const { stdout } = await ghExecFileAsync(
     [
       'pr',
@@ -1374,7 +1382,7 @@ async function findOpenPRByHeadBase(args: {
       '--json',
       'number,url'
     ],
-    { cwd: args.repoPath }
+    ghRepoExecOptions(context)
   )
   const list = JSON.parse(stdout) as { number?: number; url?: string }[]
   if (list.length !== 1 || !list[0]?.number || !list[0]?.url) {
@@ -1385,7 +1393,8 @@ async function findOpenPRByHeadBase(args: {
 
 export async function createGitHubPullRequest(
   repoPath: string,
-  input: CreateHostedReviewInput
+  input: CreateHostedReviewInput,
+  connectionId?: string | null
 ): Promise<CreateHostedReviewResult> {
   if (input.provider !== 'github') {
     return {
@@ -1395,7 +1404,7 @@ export async function createGitHubPullRequest(
     }
   }
 
-  const ownerRepo = await getOwnerRepo(repoPath)
+  const ownerRepo = await getOwnerRepo(repoPath, connectionId)
   if (!ownerRepo) {
     return {
       ok: false,
@@ -1446,8 +1455,9 @@ export async function createGitHubPullRequest(
       createArgs.push('--draft')
     }
     try {
+      const context = githubRepoContext(repoPath, connectionId)
       const { stdout } = await ghExecFileAsync(createArgs, {
-        cwd: repoPath,
+        ...ghRepoExecOptions(context),
         timeout: 60_000,
         idempotent: false
       })
@@ -1456,7 +1466,9 @@ export async function createGitHubPullRequest(
         return { ok: true, ...created }
       }
       const found = head
-        ? await findOpenPRByHeadBase({ repoPath, ownerRepo, head, base }).catch(() => null)
+        ? await findOpenPRByHeadBase({ repoPath, ownerRepo, head, base, connectionId }).catch(
+            () => null
+          )
         : null
       if (found) {
         return { ok: true, ...found }
@@ -1473,9 +1485,13 @@ export async function createGitHubPullRequest(
         (classified.code === 'already_exists' || classified.code === 'unknown_completion') &&
         head
       ) {
-        const existing = await findOpenPRByHeadBase({ repoPath, ownerRepo, head, base }).catch(
-          () => null
-        )
+        const existing = await findOpenPRByHeadBase({
+          repoPath,
+          ownerRepo,
+          head,
+          base,
+          connectionId
+        }).catch(() => null)
         if (existing) {
           return {
             ok: false,
@@ -1727,6 +1743,46 @@ async function getPRByNumber(
   }
 }
 
+async function lookupPRByNumber(args: {
+  candidates: OwnerRepo[]
+  number: number
+  ghOptions: ReturnType<typeof ghRepoExecOptions>
+}): Promise<{ data: PullRequestLookupData | null; dataRepo: OwnerRepo | null }> {
+  for (const candidate of args.candidates) {
+    try {
+      const linkedData = await getPRByNumber(candidate, args.number, args.ghOptions)
+      if (!linkedData) {
+        continue
+      }
+      return { data: linkedData, dataRepo: candidate }
+    } catch (err) {
+      if (shouldStopAfterExactLookupError(err)) {
+        throw err
+      }
+      // Candidate probing is best-effort; another repo may own the PR.
+    }
+  }
+
+  if (args.candidates.length > 0) {
+    return { data: null, dataRepo: null }
+  }
+
+  try {
+    const { stdout } = await ghExecFileAsync(
+      ['pr', 'view', String(args.number), '--json', PR_LOOKUP_JSON_FIELDS],
+      args.ghOptions
+    )
+    return { data: JSON.parse(stdout), dataRepo: null }
+  } catch (err) {
+    if (isNoPullRequestError(err)) {
+      // Why: stale cached fallback numbers should not turn every poll into an
+      // error when the PR was deleted or belonged to a different repo.
+      return { data: null, dataRepo: null }
+    }
+    throw err
+  }
+}
+
 function isNotFoundGhError(err: unknown): boolean {
   const stderr = err instanceof Error ? err.message : String(err)
   return classifyGhError(stderr).type === 'not_found'
@@ -1746,14 +1802,23 @@ function shouldStopAfterExactLookupError(err: unknown): boolean {
  * "create from PR" worktrees whose local branch differs from the PR head ref,
  * and prevents a coalesced linked-PR refresh from fanning out an unrelated
  * branch lookup result to sibling aliases.
+ * `fallbackPRNumber` is weaker: branch lookup still wins, and exact lookup is
+ * used only after branch lookup misses.
  */
 export async function getPRForBranch(
   repoPath: string,
   branch: string,
   linkedPRNumber?: number | null,
-  connectionId?: string | null
+  connectionId?: string | null,
+  fallbackPRNumber?: number | null
 ): Promise<PRInfo | null> {
-  const outcome = await getPRForBranchOutcome(repoPath, branch, linkedPRNumber, connectionId)
+  const outcome = await getPRForBranchOutcome(
+    repoPath,
+    branch,
+    linkedPRNumber,
+    connectionId,
+    fallbackPRNumber
+  )
   return outcome.kind === 'found' ? outcome.pr : null
 }
 
@@ -1761,11 +1826,14 @@ export async function getPRForBranchOutcome(
   repoPath: string,
   branch: string,
   linkedPRNumber?: number | null,
-  connectionId?: string | null
+  connectionId?: string | null,
+  fallbackPRNumber?: number | null
 ): Promise<PRRefreshOutcome> {
   // Strip refs/heads/ prefix if present
   const branchName = branch.replace(/^refs\/heads\//, '')
-  if (!branchName && typeof linkedPRNumber !== 'number') {
+  // Why: detached HEAD cannot use branch lookup, but an exact linked/fallback
+  // PR number remains safe to query and keeps review state visible.
+  if (!branchName && typeof linkedPRNumber !== 'number' && typeof fallbackPRNumber !== 'number') {
     return { kind: 'no-pr', fetchedAt: Date.now() }
   }
   const context = githubRepoContext(repoPath, connectionId)
@@ -1778,39 +1846,13 @@ export async function getPRForBranchOutcome(
     let dataRepo: OwnerRepo | null = null
 
     if (typeof linkedPRNumber === 'number') {
-      for (const candidate of candidates) {
-        try {
-          const linkedData = await getPRByNumber(candidate, linkedPRNumber, ghOptions)
-          if (!linkedData) {
-            continue
-          }
-          data = linkedData
-          dataRepo = candidate
-          break
-        } catch (err) {
-          if (shouldStopAfterExactLookupError(err)) {
-            throw err
-          }
-          // Candidate probing is best-effort; another repo may own the PR.
-        }
-      }
-
-      if (!data && candidates.length === 0) {
-        const args = ['pr', 'view', String(linkedPRNumber), '--json', PR_LOOKUP_JSON_FIELDS]
-        try {
-          const { stdout } = await ghExecFileAsync(args, ghOptions)
-          data = JSON.parse(stdout)
-        } catch (err) {
-          if (!isNoPullRequestError(err)) {
-            return prRefreshUpstreamError(err)
-          }
-          // Why: a stale linkedPRNumber (PR deleted, wrong repo, ...) makes
-          // `gh pr view <number>` reject. Treat that as the no-PR case so
-          // callers see the historical `null` semantics instead of a thrown
-          // error every poll cycle.
-          data = null
-        }
-      }
+      const exactLookup = await lookupPRByNumber({
+        candidates,
+        number: linkedPRNumber,
+        ghOptions
+      })
+      data = exactLookup.data
+      dataRepo = exactLookup.dataRepo
     } else if (branchName) {
       // During a rebase the worktree is in detached HEAD and branch is empty.
       // An empty --head filter causes gh to return an arbitrary PR.
@@ -1851,6 +1893,15 @@ export async function getPRForBranchOutcome(
           }
         }
       }
+    }
+    if (!data && typeof linkedPRNumber !== 'number' && typeof fallbackPRNumber === 'number') {
+      const fallbackLookup = await lookupPRByNumber({
+        candidates,
+        number: fallbackPRNumber,
+        ghOptions
+      })
+      data = fallbackLookup.data
+      dataRepo = fallbackLookup.dataRepo
     }
     if (!data) {
       return { kind: 'no-pr', fetchedAt: Date.now() }
@@ -2961,6 +3012,56 @@ export async function updatePRTitle(
   } catch (err) {
     console.warn('updatePRTitle failed:', err)
     return false
+  } finally {
+    release()
+  }
+}
+
+export async function updatePRDetails(
+  repoPath: string,
+  prNumber: number,
+  updates: { title?: string; body?: string },
+  connectionId?: string | null,
+  prRepo?: OwnerRepo | null
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const ghOptions = ghRepoExecOptions(githubRepoContext(repoPath, connectionId))
+  const ownerRepo = prRepo ?? (await getOwnerRepo(repoPath, connectionId))
+  if (!ownerRepo) {
+    return { ok: false, error: 'Could not resolve GitHub owner/repo for this repository' }
+  }
+
+  const fields: string[] = []
+  if (updates.title !== undefined) {
+    const title = updates.title.trim()
+    if (!title) {
+      return { ok: false, error: 'Title is required' }
+    }
+    fields.push(`title=${title}`)
+  }
+  if (updates.body !== undefined) {
+    fields.push(`body=${updates.body}`)
+  }
+  if (fields.length === 0) {
+    return { ok: true }
+  }
+
+  await acquire()
+  try {
+    await ghExecFileAsync(
+      [
+        'api',
+        '-X',
+        'PATCH',
+        `repos/${ownerRepo.owner}/${ownerRepo.repo}/pulls/${prNumber}`,
+        ...fields.flatMap((field) => ['--raw-field', field])
+      ],
+      ghOptions
+    )
+    return { ok: true }
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : typeof err === 'string' ? err : 'Unknown error'
+    return { ok: false, error: classifyGhError(message).message }
   } finally {
     release()
   }

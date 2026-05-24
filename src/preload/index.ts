@@ -22,6 +22,7 @@ import type {
   GitHubAssignableUser,
   GitHubCommentResult,
   GitHubWorkItem,
+  GitPushTarget,
   GitUpstreamStatus,
   GhosttyImportPreview,
   ListWorkItemsResult,
@@ -56,12 +57,11 @@ import type {
 } from '../shared/mobile-markdown-document'
 import type { RateLimitState } from '../shared/rate-limit-types'
 import type {
-  WorkspacePackageManagerCacheCleanupRequest,
-  WorkspacePackageManagerCacheCleanupResult,
   WorkspaceSpaceAnalyzeResult,
   WorkspaceSpaceScanProgress
 } from '../shared/workspace-space-types'
 import type {
+  WorkspacePortAdvertisedUrlChangedEvent,
   WorkspacePortKillRequest,
   WorkspacePortKillResult,
   WorkspacePortScanRequest,
@@ -103,7 +103,7 @@ import type {
   SshConnectionState,
   SshTarget,
   PortForwardEntry,
-  DetectedPort
+  EnrichedDetectedPort
 } from '../shared/ssh-types'
 import type {
   AgentStatusIpcPayload,
@@ -134,6 +134,7 @@ import type {
   AutomationRun,
   AutomationUpdateInput
 } from '../shared/automations-types'
+import type { KeybindingActionId, KeybindingFileSnapshot } from '../shared/keybindings'
 import {
   ORCA_EDITOR_SAVE_DIRTY_FILES_EVENT,
   type EditorSaveDirtyFilesDetail
@@ -145,6 +146,7 @@ import {
 import { subscribeRuntimeEnvironmentFromPreload } from './runtime-environment-subscriptions'
 import type { RuntimeEnvironmentSubscriptionHandle } from './runtime-environment-subscriptions'
 import type { HostedReviewForBranchArgs } from '../shared/hosted-review'
+import type { CrashReportSubmitArgs, CrashReportSubmitResult } from '../shared/crash-reporting'
 
 type NativeDropResolution =
   | { target: 'editor' }
@@ -479,6 +481,9 @@ const api = {
     list: (args: { repoId: string }): Promise<unknown[]> =>
       ipcRenderer.invoke('worktrees:list', args),
 
+    listDetected: (args: { repoId: string }): Promise<unknown> =>
+      ipcRenderer.invoke('worktrees:listDetected', args),
+
     listAll: (): Promise<unknown[]> => ipcRenderer.invoke('worktrees:listAll'),
 
     create: (args: CreateWorktreeArgs): Promise<unknown> =>
@@ -497,7 +502,7 @@ const api = {
       mrIid: number
       sourceBranch?: string
       isCrossRepository?: boolean
-    }): Promise<{ baseBranch: string } | { error: string }> =>
+    }): Promise<{ baseBranch: string; pushTarget?: unknown } | { error: string }> =>
       ipcRenderer.invoke('worktrees:resolveMrBase', args),
 
     remove: (args: { worktreeId: string; force?: boolean; skipArchive?: boolean }): Promise<void> =>
@@ -563,10 +568,6 @@ const api = {
     analyze: (): Promise<WorkspaceSpaceAnalyzeResult> =>
       ipcRenderer.invoke('workspaceSpace:analyze'),
     cancel: (): Promise<boolean> => ipcRenderer.invoke('workspaceSpace:cancel'),
-    cleanupPackageManagerCache: (
-      request: WorkspacePackageManagerCacheCleanupRequest
-    ): Promise<WorkspacePackageManagerCacheCleanupResult> =>
-      ipcRenderer.invoke('workspaceSpace:cleanupPackageManagerCache', request),
     onProgress: (callback: (progress: WorkspaceSpaceScanProgress) => void): (() => void) => {
       const listener = (
         _event: Electron.IpcRendererEvent,
@@ -581,7 +582,17 @@ const api = {
     scan: (args: WorkspacePortScanRequest): Promise<WorkspacePortScanResult> =>
       ipcRenderer.invoke('workspacePorts:scan', args),
     kill: (args: WorkspacePortKillRequest): Promise<WorkspacePortKillResult> =>
-      ipcRenderer.invoke('workspacePorts:kill', args)
+      ipcRenderer.invoke('workspacePorts:kill', args),
+    onAdvertisedUrlChanged: (
+      callback: (event: WorkspacePortAdvertisedUrlChangedEvent) => void
+    ): (() => void) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        event: WorkspacePortAdvertisedUrlChangedEvent
+      ): void => callback(event)
+      ipcRenderer.on('workspacePorts:advertised-url-changed', listener)
+      return () => ipcRenderer.removeListener('workspacePorts:advertised-url-changed', listener)
+    }
   },
 
   pty: {
@@ -753,16 +764,12 @@ const api = {
 
   crashReports: {
     getLatestPending: () => ipcRenderer.invoke('crashReports:getLatestPending'),
+    getLatestReport: () => ipcRenderer.invoke('crashReports:getLatestReport'),
     dismiss: (args: { reportId: string }) => ipcRenderer.invoke('crashReports:dismiss', args),
+    submit: (args: CrashReportSubmitArgs): Promise<CrashReportSubmitResult> =>
+      ipcRenderer.invoke('crashReports:submit', args),
     copyLatestDiagnostics: (args?: { reportId?: string; notes?: string }) =>
-      ipcRenderer.invoke('crashReports:copyLatestDiagnostics', args),
-    submit: (args: {
-      reportId?: string
-      notes?: string
-      submitAnonymously?: boolean
-      githubLogin: string | null
-      githubEmail: string | null
-    }) => ipcRenderer.invoke('crashReports:submit', args)
+      ipcRenderer.invoke('crashReports:copyLatestDiagnostics', args)
   },
 
   export: {
@@ -785,6 +792,7 @@ const api = {
       repoId?: string
       branch: string
       linkedPRNumber?: number | null
+      fallbackPRNumber?: number | null
     }): Promise<unknown> => ipcRenderer.invoke('gh:prForBranch', args),
 
     refreshPRNow: (args: { candidate: GitHubPRRefreshCandidate }): Promise<unknown> =>
@@ -1212,6 +1220,27 @@ const api = {
   telemetryGetConsentState: (): Promise<TelemetryConsentState> =>
     ipcRenderer.invoke('telemetry:getConsentState'),
 
+  // Why: diagnostics is the renderer-facing surface for the error-tracking
+  // lane (telemetry-error-tracking.md §User controls). All five channels
+  // are gated by main-side handlers that strictly type-narrow their inputs
+  // (renderer is untrusted by design); the bridges here are deliberately
+  // loose for the same reason the telemetry bridges are.
+  diagnostics: {
+    getStatus: (): Promise<unknown> => ipcRenderer.invoke('diagnostics:getStatus'),
+    openTraceFolder: (): Promise<void> => ipcRenderer.invoke('diagnostics:openTraceFolder'),
+    clearTraces: (): Promise<void> => ipcRenderer.invoke('diagnostics:clearTraces'),
+    collectBundle: (lookbackMinutes?: number): Promise<unknown> =>
+      ipcRenderer.invoke('diagnostics:collectBundle', lookbackMinutes),
+    openBundlePreview: (bundleSubmissionId: string): Promise<void> =>
+      ipcRenderer.invoke('diagnostics:openBundlePreview', bundleSubmissionId),
+    discardBundlePreview: (bundleSubmissionId: string): Promise<void> =>
+      ipcRenderer.invoke('diagnostics:discardBundlePreview', bundleSubmissionId),
+    uploadBundle: (bundleSubmissionId: string): Promise<unknown> =>
+      ipcRenderer.invoke('diagnostics:uploadBundle', bundleSubmissionId),
+    deleteBundle: (ticketId: string): Promise<void> =>
+      ipcRenderer.invoke('diagnostics:deleteBundle', ticketId)
+  },
+
   settings: {
     get: (): Promise<unknown> => ipcRenderer.invoke('settings:get'),
 
@@ -1230,6 +1259,26 @@ const api = {
       ): void => callback(updates)
       ipcRenderer.on('settings:changed', listener)
       return () => ipcRenderer.removeListener('settings:changed', listener)
+    }
+  },
+
+  keybindings: {
+    get: (): Promise<KeybindingFileSnapshot> => ipcRenderer.invoke('keybindings:get'),
+    ensureFile: (): Promise<KeybindingFileSnapshot> => ipcRenderer.invoke('keybindings:ensureFile'),
+    setAction: (args: {
+      actionId: KeybindingActionId
+      bindings: string[] | null
+    }): Promise<KeybindingFileSnapshot> => ipcRenderer.invoke('keybindings:setAction', args),
+    reload: (): Promise<KeybindingFileSnapshot> => ipcRenderer.invoke('keybindings:reload'),
+    openFile: (): Promise<KeybindingFileSnapshot> => ipcRenderer.invoke('keybindings:openFile'),
+    revealFile: (): Promise<KeybindingFileSnapshot> => ipcRenderer.invoke('keybindings:revealFile'),
+    onChanged: (callback: (snapshot: KeybindingFileSnapshot) => void): (() => void) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        snapshot: KeybindingFileSnapshot
+      ): void => callback(snapshot)
+      ipcRenderer.on('keybindings:changed', listener)
+      return () => ipcRenderer.removeListener('keybindings:changed', listener)
     }
   },
 
@@ -1534,6 +1583,9 @@ const api = {
     pickAttachment: (): Promise<string | null> => ipcRenderer.invoke('shell:pickAttachment'),
 
     pickImage: (): Promise<string | null> => ipcRenderer.invoke('shell:pickImage'),
+
+    pickRepoIconImage: (): Promise<{ dataUrl: string; fileName: string } | null> =>
+      ipcRenderer.invoke('shell:pickRepoIconImage'),
 
     pickAudio: (): Promise<string | null> => ipcRenderer.invoke('shell:pickAudio'),
 
@@ -2173,9 +2225,13 @@ const api = {
     upstreamStatus: (args: {
       worktreePath: string
       connectionId?: string
+      pushTarget?: GitPushTarget
     }): Promise<GitUpstreamStatus> => ipcRenderer.invoke('git:upstreamStatus', args),
-    fetch: (args: { worktreePath: string; connectionId?: string }): Promise<void> =>
-      ipcRenderer.invoke('git:fetch', args),
+    fetch: (args: {
+      worktreePath: string
+      connectionId?: string
+      pushTarget?: GitPushTarget
+    }): Promise<void> => ipcRenderer.invoke('git:fetch', args),
     push: (args: {
       worktreePath: string
       publish?: boolean
@@ -2183,8 +2239,16 @@ const api = {
       connectionId?: string
       pushTarget?: unknown
     }): Promise<void> => ipcRenderer.invoke('git:push', args),
-    pull: (args: { worktreePath: string; connectionId?: string }): Promise<void> =>
-      ipcRenderer.invoke('git:pull', args),
+    pull: (args: {
+      worktreePath: string
+      connectionId?: string
+      pushTarget?: GitPushTarget
+    }): Promise<void> => ipcRenderer.invoke('git:pull', args),
+    rebaseFromBase: (args: {
+      worktreePath: string
+      baseRef: string
+      connectionId?: string
+    }): Promise<void> => ipcRenderer.invoke('git:rebaseFromBase', args),
     branchDiff: (args: {
       worktreePath: string
       compare: { baseRef: string; baseOid: string; headOid: string; mergeBase: string }
@@ -2286,11 +2350,6 @@ const api = {
       ipcRenderer.on('ui:openCrashReport', listener)
       return () => ipcRenderer.removeListener('ui:openCrashReport', listener)
     },
-    onShowFeatureTourNudge: (callback: () => void): (() => void) => {
-      const listener = (_event: Electron.IpcRendererEvent) => callback()
-      ipcRenderer.on('ui:showFeatureTourNudge', listener)
-      return () => ipcRenderer.removeListener('ui:showFeatureTourNudge', listener)
-    },
     onToggleLeftSidebar: (callback: () => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent) => callback()
       ipcRenderer.on('ui:toggleLeftSidebar', listener)
@@ -2311,6 +2370,16 @@ const api = {
       ipcRenderer.on('ui:toggleFloatingTerminal', listener)
       return () => ipcRenderer.removeListener('ui:toggleFloatingTerminal', listener)
     },
+    onTerminalShortcutCaptured: (
+      callback: (data: { actionId: KeybindingActionId }) => void
+    ): (() => void) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        data: { actionId: KeybindingActionId }
+      ) => callback(data)
+      ipcRenderer.on('ui:terminalShortcutCaptured', listener)
+      return () => ipcRenderer.removeListener('ui:terminalShortcutCaptured', listener)
+    },
     onOpenQuickOpen: (callback: () => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent) => callback()
       ipcRenderer.on('ui:openQuickOpen', listener)
@@ -2320,6 +2389,11 @@ const api = {
       const listener = (_event: Electron.IpcRendererEvent) => callback()
       ipcRenderer.on('ui:openNewWorkspace', listener)
       return () => ipcRenderer.removeListener('ui:openNewWorkspace', listener)
+    },
+    onOpenTasks: (callback: () => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent) => callback()
+      ipcRenderer.on('ui:openTasks', listener)
+      return () => ipcRenderer.removeListener('ui:openTasks', listener)
     },
     onJumpToWorktreeIndex: (callback: (index: number) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, index: number) => callback(index)
@@ -2426,6 +2500,11 @@ const api = {
       const listener = (_event: Electron.IpcRendererEvent, direction: 1 | -1) => callback(direction)
       ipcRenderer.on('ui:switchTabAcrossAllTypes', listener)
       return () => ipcRenderer.removeListener('ui:switchTabAcrossAllTypes', listener)
+    },
+    onSwitchRecentTab: (callback: () => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent) => callback()
+      ipcRenderer.on('ui:switchRecentTab', listener)
+      return () => ipcRenderer.removeListener('ui:switchRecentTab', listener)
     },
     onSwitchTerminalTab: (callback: (direction: 1 | -1) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, direction: 1 | -1) => callback(direction)
@@ -2710,6 +2789,15 @@ const api = {
     // while the markdown editor owns focus, letting TipTap apply bold instead.
     setMarkdownEditorFocused: (focused: boolean): void => {
       ipcRenderer.send('ui:setMarkdownEditorFocused', focused)
+    },
+    setTerminalInputFocused: (focused: boolean): void => {
+      ipcRenderer.send('ui:setTerminalInputFocused', focused)
+    },
+    setFloatingTerminalInputFocused: (focused: boolean): void => {
+      ipcRenderer.send('ui:setFloatingTerminalInputFocused', focused)
+    },
+    setShortcutRecorderFocused: (focused: boolean): void => {
+      ipcRenderer.send('ui:setShortcutRecorderFocused', focused)
     },
     onRichMarkdownContextCommand: (
       callback: (payload: RichMarkdownContextMenuCommandPayload) => void
@@ -3036,7 +3124,7 @@ const api = {
     listPortForwards: (args?: { targetId?: string }): Promise<PortForwardEntry[]> =>
       ipcRenderer.invoke('ssh:listPortForwards', args),
 
-    listDetectedPorts: (args: { targetId: string }): Promise<DetectedPort[]> =>
+    listDetectedPorts: (args: { targetId: string }): Promise<EnrichedDetectedPort[]> =>
       ipcRenderer.invoke('ssh:listDetectedPorts', args),
 
     onPortForwardsChanged: (
@@ -3051,11 +3139,11 @@ const api = {
     },
 
     onDetectedPortsChanged: (
-      callback: (data: { targetId: string; ports: DetectedPort[] }) => void
+      callback: (data: { targetId: string; ports: EnrichedDetectedPort[] }) => void
     ): (() => void) => {
       const handler = (
         _event: Electron.IpcRendererEvent,
-        data: { targetId: string; ports: DetectedPort[] }
+        data: { targetId: string; ports: EnrichedDetectedPort[] }
       ) => callback(data)
       ipcRenderer.on('ssh:detected-ports-changed', handler)
       return () => ipcRenderer.removeListener('ssh:detected-ports-changed', handler)

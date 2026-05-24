@@ -214,6 +214,28 @@ describe('createPtySubprocess', () => {
     expect(env.ORCA_WORKTREE_ID).toBe('child-worktree')
   })
 
+  it('does not inherit ELECTRON_RUN_AS_NODE from the daemon process env', () => {
+    // Why: the daemon is forked with ELECTRON_RUN_AS_NODE=1. If that flag
+    // reaches user shells, nested Electron commands run as plain Node.
+    const proc = mockPtyProcess()
+    spawnMock.mockReturnValue(proc)
+    const previous = process.env.ELECTRON_RUN_AS_NODE
+    process.env.ELECTRON_RUN_AS_NODE = '1'
+
+    try {
+      createPtySubprocess({ sessionId: 'test', cols: 80, rows: 24 })
+    } finally {
+      if (previous === undefined) {
+        delete process.env.ELECTRON_RUN_AS_NODE
+      } else {
+        process.env.ELECTRON_RUN_AS_NODE = previous
+      }
+    }
+
+    const env = spawnMock.mock.calls.at(-1)?.[2].env
+    expect(env.ELECTRON_RUN_AS_NODE).toBeUndefined()
+  })
+
   it('does not inherit parent agent hook endpoint for development hook env', () => {
     const proc = mockPtyProcess()
     spawnMock.mockReturnValue(proc)
@@ -783,6 +805,66 @@ describe('createPtySubprocess', () => {
       'wsl.exe',
       ['-d', 'Ubuntu', '--', 'bash', '-c', "cd '/home/jin/repo' && exec bash -l"],
       expect.objectContaining({ cwd: expect.any(String) })
+    )
+  })
+
+  it('does not pass a Windows Codex home into daemon WSL terminals', () => {
+    const proc = mockPtyProcess()
+    spawnMock.mockReturnValue(proc)
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')
+
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+
+    try {
+      createPtySubprocess({
+        sessionId: 'test',
+        cols: 80,
+        rows: 24,
+        cwd: '\\\\wsl.localhost\\Ubuntu\\home\\jin\\repo',
+        env: { CODEX_HOME: 'C:\\Users\\jin\\.codex' }
+      })
+    } finally {
+      if (platform) {
+        Object.defineProperty(process, 'platform', platform)
+      }
+    }
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      'wsl.exe',
+      ['-d', 'Ubuntu', '--', 'bash', '-c', "cd '/home/jin/repo' && exec bash -l"],
+      expect.objectContaining({
+        env: expect.not.objectContaining({ CODEX_HOME: expect.anything() })
+      })
+    )
+  })
+
+  it('preserves an explicit Linux Codex home in daemon WSL terminals', () => {
+    const proc = mockPtyProcess()
+    spawnMock.mockReturnValue(proc)
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')
+
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+
+    try {
+      createPtySubprocess({
+        sessionId: 'test',
+        cols: 80,
+        rows: 24,
+        cwd: '\\\\wsl.localhost\\Ubuntu\\home\\jin\\repo',
+        env: { CODEX_HOME: '/home/jin/.codex-alt' }
+      })
+    } finally {
+      if (platform) {
+        Object.defineProperty(process, 'platform', platform)
+      }
+    }
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      'wsl.exe',
+      ['-d', 'Ubuntu', '--', 'bash', '-c', "cd '/home/jin/repo' && exec bash -l"],
+      expect.objectContaining({
+        env: expect.objectContaining({ CODEX_HOME: '/home/jin/.codex-alt' })
+      })
     )
   })
 

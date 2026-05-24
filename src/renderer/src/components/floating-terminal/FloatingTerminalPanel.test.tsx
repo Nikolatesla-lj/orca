@@ -491,7 +491,7 @@ describe('FloatingTerminalPanel close behavior', () => {
     mocks.createWebRuntimeSessionTerminal.mockResolvedValue(false)
     mocks.getFloatingMarkdownDirectory.mockResolvedValue('/tmp/orca/floating-notes')
     mocks.getFloatingTerminalCwd.mockResolvedValue('/tmp/orca')
-    mocks.getInstallStatus.mockResolvedValue({ state: 'installed' })
+    mocks.getInstallStatus.mockResolvedValue({ state: 'installed', pathConfigured: true })
     mocks.isWebRuntimeSessionActive.mockReturnValue(false)
     mocks.pickFloatingMarkdownDocument.mockResolvedValue(null)
     vi.stubGlobal('window', {
@@ -503,7 +503,8 @@ describe('FloatingTerminalPanel close behavior', () => {
           pickFloatingMarkdownDocument: mocks.pickFloatingMarkdownDocument
         },
         browser: { notifyActiveTabChanged: vi.fn() },
-        cli: { getInstallStatus: mocks.getInstallStatus }
+        cli: { getInstallStatus: mocks.getInstallStatus },
+        ui: { setFloatingTerminalInputFocused: vi.fn() }
       },
       innerWidth: 1200,
       removeEventListener: vi.fn()
@@ -576,7 +577,10 @@ describe('FloatingTerminalPanel close behavior', () => {
     setFloatingTabs([makeTab({ id: 'tab-1' })])
     const element = await renderPanel(true)
     const panel = findByProp(element, 'data-floating-terminal-panel')
-    const titlebarTarget = { closest: vi.fn().mockReturnValue({}) }
+    const titlebarTarget = {
+      closest: vi.fn().mockReturnValue({}),
+      getAttribute: vi.fn().mockReturnValue(null)
+    }
     Object.setPrototypeOf(titlebarTarget, HTMLElement.prototype)
     const preventDefault = vi.fn()
 
@@ -657,7 +661,10 @@ describe('FloatingTerminalPanel close behavior', () => {
     const onOpenChange = vi.fn()
     const element = await renderPanel(true, onOpenChange)
     const panel = findByProp(element, 'data-floating-terminal-panel')
-    const emptyStateTarget = { closest: vi.fn().mockReturnValue({}) }
+    const emptyStateTarget = {
+      closest: vi.fn().mockReturnValue({}),
+      getAttribute: vi.fn().mockReturnValue(null)
+    }
     Object.setPrototypeOf(emptyStateTarget, HTMLElement.prototype)
 
     ;(panel.props.onKeyDownCapture as (event: unknown) => void)({

@@ -277,13 +277,71 @@ export type UISlice = {
   acknowledgedAgentsByPaneKey: Record<string, number>
   acknowledgeAgents: (paneKeys: string[]) => void
   unacknowledgeAgents: (paneKeys: string[]) => void
-  activeView: 'terminal' | 'settings' | 'tasks' | 'activity' | 'automations' | 'space' | 'skills'
-  previousViewBeforeTasks: 'terminal' | 'settings' | 'activity' | 'automations' | 'space' | 'skills'
-  previousViewBeforeSettings: 'terminal' | 'tasks' | 'activity' | 'automations' | 'space' | 'skills'
-  previousViewBeforeActivity: 'terminal' | 'settings' | 'tasks' | 'automations' | 'space' | 'skills'
-  previousViewBeforeAutomations: 'terminal' | 'settings' | 'tasks' | 'activity' | 'space' | 'skills'
-  previousViewBeforeSpace: 'terminal' | 'settings' | 'tasks' | 'activity' | 'automations' | 'skills'
-  previousViewBeforeSkills: 'terminal' | 'settings' | 'tasks' | 'activity' | 'automations' | 'space'
+  activeView:
+    | 'terminal'
+    | 'settings'
+    | 'tasks'
+    | 'activity'
+    | 'automations'
+    | 'space'
+    | 'skills'
+    | 'mobile'
+  previousViewBeforeTasks:
+    | 'terminal'
+    | 'settings'
+    | 'activity'
+    | 'automations'
+    | 'space'
+    | 'skills'
+    | 'mobile'
+  previousViewBeforeSettings:
+    | 'terminal'
+    | 'tasks'
+    | 'activity'
+    | 'automations'
+    | 'space'
+    | 'skills'
+    | 'mobile'
+  previousViewBeforeActivity:
+    | 'terminal'
+    | 'settings'
+    | 'tasks'
+    | 'automations'
+    | 'space'
+    | 'skills'
+    | 'mobile'
+  previousViewBeforeAutomations:
+    | 'terminal'
+    | 'settings'
+    | 'tasks'
+    | 'activity'
+    | 'space'
+    | 'skills'
+    | 'mobile'
+  previousViewBeforeSpace:
+    | 'terminal'
+    | 'settings'
+    | 'tasks'
+    | 'activity'
+    | 'automations'
+    | 'skills'
+    | 'mobile'
+  previousViewBeforeSkills:
+    | 'terminal'
+    | 'settings'
+    | 'tasks'
+    | 'activity'
+    | 'automations'
+    | 'space'
+    | 'mobile'
+  previousViewBeforeMobile:
+    | 'terminal'
+    | 'settings'
+    | 'tasks'
+    | 'activity'
+    | 'automations'
+    | 'space'
+    | 'skills'
   setActiveView: (view: UISlice['activeView']) => void
   taskPageData: {
     preselectedRepoId?: string
@@ -332,6 +390,8 @@ export type UISlice = {
   closeSpacePage: () => void
   openSkillsPage: () => void
   closeSkillsPage: () => void
+  openMobilePage: () => void
+  closeMobilePage: () => void
   setNewWorkspaceDraft: (draft: NonNullable<UISlice['newWorkspaceDraft']>) => void
   clearNewWorkspaceDraft: () => void
   openSettingsPage: () => void
@@ -339,6 +399,7 @@ export type UISlice = {
   settingsNavigationTarget: {
     pane:
       | 'general'
+      | 'integrations'
       | 'browser'
       | 'appearance'
       | 'input'
@@ -355,6 +416,7 @@ export type UISlice = {
       | 'experimental'
       | 'servers'
       | 'mobile'
+      | 'notifications'
       | 'ssh'
     repoId: string | null
     sectionId?: string
@@ -372,6 +434,8 @@ export type UISlice = {
     | 'quick-open'
     | 'worktree-palette'
     | 'workspace-cleanup'
+    | 'project-added'
+    | 'worktree-visibility'
     | 'feature-wall'
     | 'feature-tips'
     | 'new-workspace-composer'
@@ -381,9 +445,6 @@ export type UISlice = {
   closeModal: () => void
   featureTipsSeenIds: FeatureTipId[]
   markFeatureTipsSeen: (ids: FeatureTipId[]) => void
-  featureTourNudgeVisible: boolean
-  showFeatureTourNudge: () => void
-  dismissFeatureTourNudge: () => void
   trustedOrcaHooks: PersistedTrustedOrcaHooks
   markOrcaHookScriptConfirmed: (
     repoId: string,
@@ -546,6 +607,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   previousViewBeforeAutomations: 'terminal',
   previousViewBeforeSpace: 'terminal',
   previousViewBeforeSkills: 'terminal',
+  previousViewBeforeMobile: 'terminal',
   setActiveView: (view) => set({ activeView: view }),
   taskPageData: {},
   taskResumeState: undefined,
@@ -754,6 +816,16 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
     set((state) => ({
       activeView: state.previousViewBeforeSkills
     })),
+  openMobilePage: () =>
+    set((state) => ({
+      activeView: 'mobile',
+      previousViewBeforeMobile:
+        state.activeView === 'mobile' ? state.previousViewBeforeMobile : state.activeView
+    })),
+  closeMobilePage: () =>
+    set((state) => ({
+      activeView: state.previousViewBeforeMobile
+    })),
   setNewWorkspaceDraft: (draft) => set({ newWorkspaceDraft: draft }),
   clearNewWorkspaceDraft: () => set({ newWorkspaceDraft: null }),
   openSettingsPage: () =>
@@ -781,13 +853,12 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
 
   activeModal: 'none',
   modalData: {},
-  openModal: (modal, data = {}) =>
-    set((state) => ({
+  openModal: (modal, data = {}) => {
+    set({
       activeModal: modal,
-      modalData: data,
-      featureTourNudgeVisible:
-        modal === 'feature-wall' || modal === 'feature-tips' ? false : state.featureTourNudgeVisible
-    })),
+      modalData: data
+    })
+  },
   closeModal: () => set({ activeModal: 'none', modalData: {} }),
   featureTipsSeenIds: [],
   markFeatureTipsSeen: (ids) =>
@@ -810,15 +881,6 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       window.api.ui.set({ featureTipsSeenIds: next }).catch(console.error)
       return { featureTipsSeenIds: next }
     }),
-  featureTourNudgeVisible: false,
-  showFeatureTourNudge: () => {
-    const activeModal = get().activeModal
-    if (activeModal !== 'feature-wall' && activeModal !== 'feature-tips') {
-      set({ featureTourNudgeVisible: true })
-    }
-  },
-  dismissFeatureTourNudge: () => set({ featureTourNudgeVisible: false }),
-
   trustedOrcaHooks: {},
   markOrcaHookScriptConfirmed: (repoId, kind, contentHash) =>
     set((s) => {
@@ -872,7 +934,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       return { setupScriptPromptDismissedRepoIds: next }
     }),
 
-  groupBy: 'workspace-status',
+  groupBy: 'repo',
   // Why: group keys are mode-specific (e.g. repo id vs PR status), so
   // collapsed state from one mode is meaningless in another. Clearing
   // also prevents unbounded accumulation of stale keys across mode switches.

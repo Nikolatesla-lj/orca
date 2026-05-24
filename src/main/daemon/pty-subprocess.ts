@@ -19,6 +19,7 @@ import {
 import { resolveWindowsShellLaunchArgs } from '../providers/windows-shell-args'
 import { resolveEffectiveWindowsPowerShell } from '../providers/windows-powershell'
 import { isPwshAvailable } from '../pwsh'
+import { isHostCodexHomeForWsl } from '../pty/codex-home-wsl-env'
 import { removeInheritedNoColor } from '../pty/terminal-color-env'
 import { parseWslPath } from '../wsl'
 import { getWslContextFromSessionId } from './wsl-session-context'
@@ -76,6 +77,12 @@ function removeInheritedDevAgentHookEndpoint(
     // merged, so dev terminals must explicitly drop a parent endpoint.env.
     delete env.ORCA_AGENT_HOOK_ENDPOINT
   }
+}
+
+function removeInheritedElectronRunAsNode(env: Record<string, string>): void {
+  // Why: the daemon needs ELECTRON_RUN_AS_NODE=1 internally, but user shells
+  // must not inherit it or nested Electron commands run as plain Node.
+  delete env.ELECTRON_RUN_AS_NODE
 }
 
 function formatMissingDaemonPathError(kind: 'helper' | 'cwd', path: string): DaemonProtocolError {
@@ -181,6 +188,7 @@ export function createPtySubprocess(opts: PtySubprocessOptions): SubprocessHandl
   // of the terminal that launched `pn dev`; each PTY must opt into its own.
   removeUnspecifiedPaneIdentityEnv(env, opts.env)
   removeInheritedDevAgentHookEndpoint(env, opts.env)
+  removeInheritedElectronRunAsNode(env)
   removeInheritedNoColor(env)
 
   env.LANG ??= 'en_US.UTF-8'
@@ -237,6 +245,14 @@ export function createPtySubprocess(opts: PtySubprocessOptions): SubprocessHandl
     shellArgs = resolved.shellArgs
     spawnCwd = resolved.effectiveCwd
     validationCwd = resolved.validationCwd
+    if (
+      pathWin32.basename(shellPath).toLowerCase() === 'wsl.exe' &&
+      isHostCodexHomeForWsl(env.CODEX_HOME)
+    ) {
+      // Why: Orca's selected Codex runtime home is host-local. WSL Codex must
+      // use its Linux-side ~/.codex instead of inheriting a Windows path.
+      delete env.CODEX_HOME
+    }
   } else {
     // Why: any Orca-injected overlay env that user rc files can clobber
     // needs the wrapper so the post-rc restore line runs.

@@ -7,9 +7,10 @@ import {
   isShellProcess
 } from '../../shared/agent-detection'
 import type { AgentStatus } from '../../shared/agent-detection'
+import type { AgentStatusOrchestrationContext } from '../../shared/agent-status-types'
 import { gitExecFileAsync, wslAwareSpawn } from '../git/runner'
 import { isWslPath, parseWslPath, getWslHome } from '../wsl'
-import { randomUUID } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import { basename, isAbsolute, join } from 'path'
 import { mkdir, readFile, readdir, rm, stat } from 'fs/promises'
 import { OrchestrationDb } from './orchestration/db'
@@ -24,6 +25,8 @@ import type {
 import type {
   BaseRefSearchResult,
   CreateWorktreeResult,
+  DetectedWorktree,
+  DetectedWorktreeListResult,
   GitPushTarget,
   GitWorktreeInfo,
   GitHubOwnerRepo,
@@ -43,16 +46,33 @@ import type {
   TabGroupLayoutNode,
   TuiAgent
 } from '../../shared/types'
-import { splitWorktreeId } from '../../shared/worktree-id'
+import { FOLDER_WORKSPACE_INSTANCE_SEPARATOR, splitWorktreeId } from '../../shared/worktree-id'
 import { isFolderRepo } from '../../shared/repo-kind'
+import { DEFAULT_WORKSPACE_STATUS_ID } from '../../shared/workspace-statuses'
 import { buildSetupRunnerCommand } from '../../shared/setup-runner-command'
 import { FIRST_PANE_ID } from '../../shared/pane-key'
 import { isTerminalLeafId, makePaneKey, parsePaneKey } from '../../shared/stable-pane-id'
 import { isValidHostTerminalTabId } from '../../shared/terminal-tab-id'
+import { buildAgentDraftLaunchPlan, buildAgentStartupPlan } from '../../shared/tui-agent-startup'
+import { pickTuiAgent } from '../../shared/tui-agent-selection'
+import { TUI_AGENT_CONFIG, isTuiAgent } from '../../shared/tui-agent-config'
+import { detectInstalledAgents, detectRemoteAgents } from '../ipc/preflight'
 import {
+  markCodexProjectTrusted,
+  markCopilotFolderTrusted,
+  markCursorWorkspaceTrusted
+} from '../agent-trust-presets'
+import { upsertProjectTrustLevelInContent } from '../codex/config-toml-trust'
+import {
+  isWindowsAbsolutePathLike,
   isPathInsideOrEqual,
   normalizeRuntimePathForComparison
 } from '../../shared/cross-platform-path'
+import {
+  buildKnownOrcaWorkspaceLayouts,
+  isLegacyRepoForExternalWorktreeVisibility,
+  toDetectedWorktree
+} from '../../shared/worktree-ownership'
 import {
   MIN_COMPATIBLE_RUNTIME_CLIENT_VERSION,
   RUNTIME_CAPABILITIES,
@@ -69,6 +89,7 @@ import {
   killWorkspacePort,
   scanWorkspacePortProbes
 } from '../ports/workspace-port-ownership'
+import { advertisedUrlWatcher } from '../ports/advertised-url-watcher'
 import type {
   RuntimeGraphStatus,
   RuntimeRepoSearchRefs,
@@ -122,6 +143,7 @@ import {
   getPRForBranch,
   getRepoSlug,
   getWorkItem,
+  listIssues as listGitHubIssues,
   listWorkItems,
   countWorkItems,
   getPRChecks,
@@ -133,6 +155,7 @@ import {
   setPRFileViewed,
   getWorkItemByOwnerRepo,
   updatePRTitle,
+  updatePRDetails,
   mergePR,
   updatePRState,
   requestPRReviewers,
@@ -148,11 +171,40 @@ import {
 import { resolveGitHubPrStartPoint } from '../github/pr-start-point'
 import { getWorkItemDetails, getPRFileContents } from '../github/work-item-details'
 import { getRateLimit } from '../github/rate-limit'
+import {
+  closeMR as closeGitLabMR,
+  createIssue as createGitLabIssue,
+  getProjectRefForRemote as getGitLabProjectRefForRemote,
+  getWorkItemByProjectRef as getGitLabWorkItemByProjectRef,
+  addIssueComment as addGitLabIssueComment,
+  addMRComment as addGitLabMRComment,
+  listTodos as listGitLabTodos,
+  listIssues as listGitLabIssues,
+  listMergeRequests as listGitLabMergeRequests,
+  listWorkItems as listGitLabWorkItems,
+  mergeMR as mergeGitLabMR,
+  reopenMR as reopenGitLabMR,
+  updateMR as updateGitLabMR,
+  updateIssue as updateGitLabIssue
+} from '../gitlab/client'
+import { getGlabKnownHosts } from '../gitlab/gl-utils'
+import { getWorkItemDetails as getGitLabWorkItemDetails } from '../gitlab/work-item-details'
+import {
+  normalizeGitLabIssueListArgs,
+  normalizeGitLabMRListState,
+  normalizeGitLabPositiveInteger,
+  type GitLabIssueListState
+} from '../gitlab/gitlab-preload-args'
+import { recordGitLabProjectRecent } from '../gitlab/gitlab-project-recents'
 import type {
   GitHubIssueUpdate,
   GitHubPullRequestStateUpdate,
   GitHubPRFile,
-  GitHubPRReviewCommentInput
+  GitHubPRReviewCommentInput,
+  GitLabIssueUpdate,
+  GitLabProjectRef,
+  GitLabWorkItem,
+  MRListState
 } from '../../shared/types'
 import { inspectSetupScriptImportCandidates } from '../../shared/setup-script-imports'
 import type {
@@ -268,6 +320,7 @@ import {
 import { DEFAULT_REPO_BADGE_COLOR, getDefaultVoiceSettings } from '../../shared/constants'
 import { listRepoWorktrees } from '../repo-worktrees'
 import { createWorktreeSymlinks } from '../ipc/worktree-symlinks'
+import { deleteWorktreeHistoryDir } from '../terminal-history'
 import {
   cleanupUnusedWorktreePushTargetRemote,
   cleanupUnusedWorktreePushTargetRemoteSsh,
@@ -291,7 +344,11 @@ import {
   shouldSetDisplayName,
   areWorktreePathsEqual
 } from '../ipc/worktree-logic'
-import { canSafelyRemoveOrphanedWorktreeDirectory } from '../worktree-removal-safety'
+import {
+  canSafelyRemoveOrphanedWorktreeDirectory,
+  findRegisteredDeletableWorktree,
+  isWorktreePathMissing
+} from '../worktree-removal-safety'
 import { invalidateAuthorizedRootsCache } from '../ipc/filesystem-auth'
 import { HeadlessEmulator } from '../daemon/headless-emulator'
 import { killAllProcessesForWorktree } from './worktree-teardown'
@@ -299,6 +356,7 @@ import { MOBILE_SUBSCRIBE_SCROLLBACK_ROWS } from './scrollback-limits'
 import type { IFilesystemProvider, IPtyProvider } from '../providers/types'
 import { getSshFilesystemProvider } from '../providers/ssh-filesystem-dispatch'
 import { getSshGitProvider, requireSshGitProvider } from '../providers/ssh-git-dispatch'
+import { getActiveMultiplexer } from '../ipc/ssh'
 import type { ClaudeAccountService } from '../claude-accounts/service'
 import type { CodexAccountService } from '../codex-accounts/service'
 import type { RateLimitService } from '../rate-limits/service'
@@ -353,12 +411,23 @@ type RuntimeStore = {
   createAutomation?: Store['createAutomation']
   updateAutomation?: Store['updateAutomation']
   deleteAutomation?: Store['deleteAutomation']
+  getSparsePresets?: Store['getSparsePresets']
+  saveSparsePreset?: Store['saveSparsePreset']
   getSettings(): {
     workspaceDir: string
     nestWorkspaces: boolean
     refreshLocalBaseRefOnWorktreeCreate: boolean
     branchPrefix: string
     branchPrefixCustom: string
+    defaultTuiAgent?: GlobalSettings['defaultTuiAgent']
+    agentCmdOverrides?: GlobalSettings['agentCmdOverrides']
+    defaultTaskSource?: GlobalSettings['defaultTaskSource']
+    defaultTaskViewPreset?: GlobalSettings['defaultTaskViewPreset']
+    visibleTaskProviders?: GlobalSettings['visibleTaskProviders']
+    defaultRepoSelection?: GlobalSettings['defaultRepoSelection']
+    defaultLinearTeamSelection?: GlobalSettings['defaultLinearTeamSelection']
+    githubProjects?: GlobalSettings['githubProjects']
+    gitlabProjects?: GlobalSettings['gitlabProjects']
     experimentalWorktreeSymlinks?: boolean
     mobileAutoRestoreFitMs?: number | null
     voice?: VoiceSettings
@@ -385,6 +454,36 @@ export type RuntimeAutomationUpdateInput = Omit<
 > & {
   repo?: string
   workspace?: string
+}
+
+function normalizeSparsePresetName(name: string): string {
+  const trimmed = name.trim()
+  if (!trimmed) {
+    throw new Error('Preset name is required.')
+  }
+  if (trimmed.length > 80) {
+    throw new Error('Preset name is too long.')
+  }
+  return trimmed
+}
+
+function normalizeSparsePresetDirectoriesForSave(directories: string[]): string[] {
+  let normalized: string[]
+  try {
+    normalized = normalizeSparseDirectories(directories)
+  } catch (err) {
+    if (
+      err instanceof Error &&
+      err.message === 'Sparse checkout directories must be repo-relative paths.'
+    ) {
+      throw new Error('Preset directories must be repo-relative paths.')
+    }
+    throw err
+  }
+  if (normalized.length === 0) {
+    throw new Error('Preset must have at least one directory.')
+  }
+  return normalized
 }
 
 function hasRuntimeAutomationUpdateValue<K extends keyof RuntimeAutomationUpdateInput>(
@@ -467,6 +566,19 @@ type RuntimePtyController = {
   hasRendererSerializer?(ptyId: string): boolean
   getSize?(ptyId: string): { cols: number; rows: number } | null
 }
+
+type WorktreeStartupDraftPaste = {
+  agent: TuiAgent
+  content: string
+}
+
+const DECSET_BRACKETED_PASTE = '\x1b[?2004h'
+const CODEX_COMPOSER_PROMPT = '›'
+const BRACKETED_PASTE_BEGIN = '\x1b[200~'
+const BRACKETED_PASTE_END = '\x1b[201~'
+const BRACKETED_PASTE_QUIET_MS = 1500
+const DRAFT_PASTE_READY_TIMEOUT_MS = 8000
+const RECENT_PTY_OUTPUT_LIMIT = 4096
 
 type RuntimeNotifier = {
   worktreesChanged(repoId: string): void
@@ -566,6 +678,133 @@ function omitUndefinedProperties<T extends Record<string, unknown>>(value: T): P
   ) as Partial<T>
 }
 
+async function isRuntimeWorktreePathMissing(repo: Repo, worktreePath: string): Promise<boolean> {
+  if (!repo.connectionId) {
+    return isWorktreePathMissing(worktreePath)
+  }
+
+  const fsProvider = getSshFilesystemProvider(repo.connectionId)
+  if (!fsProvider) {
+    return false
+  }
+  return isWorktreePathMissing(worktreePath, (path) => fsProvider.stat(path))
+}
+
+type RuntimeWorktreeRemovalTarget = {
+  id: string
+  repoId: string
+  path: string
+  pushTarget?: GitPushTarget
+}
+
+type RuntimeWorktreeRemovalInFlight = {
+  optionsKey: string
+  promise: Promise<{ warning?: string }>
+}
+
+function getRuntimeWorktreeRemovalOptionsKey(force: boolean, runHooks: boolean): string {
+  return `${force ? 'force' : 'normal'}:${runHooks ? 'run-hooks' : 'skip-hooks'}`
+}
+
+function getRuntimeFolderWorkspaceRootId(repo: Repo): string {
+  return `${repo.id}::${repo.path}`
+}
+
+function getRuntimeFolderWorkspaceInstanceId(repo: Repo, instanceId: string): string {
+  return `${getRuntimeFolderWorkspaceRootId(repo)}${FOLDER_WORKSPACE_INSTANCE_SEPARATOR}${instanceId}`
+}
+
+function getRuntimeFolderWorkspaceInstanceIdentity(repo: Repo, worktreeId: string): string {
+  const prefix = `${getRuntimeFolderWorkspaceRootId(repo)}${FOLDER_WORKSPACE_INSTANCE_SEPARATOR}`
+  return worktreeId.startsWith(prefix) ? worktreeId.slice(prefix.length) : randomUUID()
+}
+
+function isRuntimeFolderWorkspaceIdForRepo(repo: Repo, worktreeId: string): boolean {
+  const rootId = getRuntimeFolderWorkspaceRootId(repo)
+  return (
+    worktreeId === rootId ||
+    worktreeId.startsWith(`${rootId}${FOLDER_WORKSPACE_INSTANCE_SEPARATOR}`)
+  )
+}
+
+function mergeRuntimeFolderWorkspace(repo: Repo, worktreeId: string, meta: WorktreeMeta): Worktree {
+  return {
+    id: worktreeId,
+    ...(meta.instanceId !== undefined ? { instanceId: meta.instanceId } : {}),
+    repoId: repo.id,
+    path: repo.path,
+    head: '',
+    branch: '',
+    isBare: false,
+    isMainWorktree: worktreeId === getRuntimeFolderWorkspaceRootId(repo),
+    displayName: meta.displayName || repo.displayName,
+    comment: meta.comment || '',
+    linkedIssue: meta.linkedIssue ?? null,
+    linkedPR: meta.linkedPR ?? null,
+    linkedLinearIssue: meta.linkedLinearIssue ?? null,
+    linkedGitLabMR: meta.linkedGitLabMR ?? null,
+    linkedGitLabIssue: meta.linkedGitLabIssue ?? null,
+    isArchived: meta.isArchived ?? false,
+    isUnread: meta.isUnread ?? false,
+    isPinned: meta.isPinned ?? false,
+    sortOrder: meta.sortOrder ?? 0,
+    ...(meta.manualOrder !== undefined ? { manualOrder: meta.manualOrder } : {}),
+    lastActivityAt: meta.lastActivityAt ?? 0,
+    ...(meta.createdAt !== undefined ? { createdAt: meta.createdAt } : {}),
+    ...(meta.createdWithAgent !== undefined ? { createdWithAgent: meta.createdWithAgent } : {}),
+    workspaceStatus: meta.workspaceStatus ?? DEFAULT_WORKSPACE_STATUS_ID,
+    diffComments: meta.diffComments
+  }
+}
+
+function listRuntimeFolderWorkspaces(
+  store: Pick<RuntimeStore, 'getAllWorktreeMeta' | 'setWorktreeMeta'>,
+  repo: Repo
+): Worktree[] {
+  const rootId = getRuntimeFolderWorkspaceRootId(repo)
+  const allMeta = store.getAllWorktreeMeta()
+  const ids = Object.keys(allMeta).filter((worktreeId) =>
+    isRuntimeFolderWorkspaceIdForRepo(repo, worktreeId)
+  )
+  if (!ids.includes(rootId)) {
+    ids.unshift(rootId)
+  } else {
+    ids.sort((left, right) => {
+      if (left === rootId) {
+        return -1
+      }
+      if (right === rootId) {
+        return 1
+      }
+      return 0
+    })
+  }
+
+  return ids.map((worktreeId) => {
+    const existing = allMeta[worktreeId]
+    const meta = existing?.instanceId
+      ? existing
+      : store.setWorktreeMeta(worktreeId, {
+          instanceId: getRuntimeFolderWorkspaceInstanceIdentity(repo, worktreeId),
+          ...(existing ? {} : { displayName: repo.displayName, lastActivityAt: Date.now() })
+        })
+    return mergeRuntimeFolderWorkspace(repo, worktreeId, meta)
+  })
+}
+
+function parseExactWorktreeIdSelector(selector: string): RuntimeWorktreeRemovalTarget | null {
+  const worktreeId = selector.startsWith('id:') ? selector.slice(3) : selector
+  const parsed = splitWorktreeId(worktreeId)
+  if (!parsed || !parsed.repoId || !parsed.worktreePath) {
+    return null
+  }
+  return {
+    id: worktreeId,
+    repoId: parsed.repoId,
+    path: parsed.worktreePath
+  }
+}
+
 async function resolveCreateBranchName(
   repoPath: string,
   branchNameOverride: string | undefined,
@@ -581,6 +820,32 @@ async function resolveCreateBranchName(
   }
   await gitExecFileAsync(['check-ref-format', '--branch', branchNameOverride], { cwd: repoPath })
   return branchNameOverride
+}
+
+function normalizeLocalBranchName(branchName: string | undefined): string {
+  return branchName?.replace(/^refs\/heads\//, '') ?? ''
+}
+
+async function canCheckoutExistingLocalBranch(
+  repoPath: string,
+  branchName: string,
+  baseBranch: string
+): Promise<boolean> {
+  if (normalizeLocalBranchName(baseBranch) !== branchName) {
+    return false
+  }
+  try {
+    await gitExecFileAsync(
+      ['rev-parse', '--verify', '--quiet', `refs/heads/${branchName}^{commit}`],
+      {
+        cwd: repoPath
+      }
+    )
+  } catch {
+    return false
+  }
+  const worktrees = await listWorktrees(repoPath)
+  return !worktrees.some((worktree) => normalizeLocalBranchName(worktree.branch) === branchName)
 }
 
 type ResolvedWorktree = Worktree & {
@@ -738,6 +1003,9 @@ export class OrcaRuntimeService {
   // These listeners fire on every onPtyData call, enabling real-time streaming
   // without polling. Keyed by ptyId for O(1) lookup per data event.
   private dataListeners = new Map<string, Set<(data: string) => void>>()
+  // Why: startup draft paste can subscribe after the agent already emitted its
+  // ready marker. Keep a bounded raw buffer so fast startup output is replayed.
+  private recentPtyOutputById = new Map<string, string>()
   // Why: mobile clients need to know when the desktop restores a terminal
   // from mobile-fit so they can update their UI. These listeners are
   // invoked from resizeForClient and onClientDisconnected/onPtyExit.
@@ -965,6 +1233,7 @@ export class OrcaRuntimeService {
   // canonical key is resolved at most once per repo+remote in the process.
   private canonicalFetchKeyCache = new Map<string, string>()
   private optimisticReconcileTokens = new Map<string, string>()
+  private removeManagedWorktreeInFlight = new Map<string, RuntimeWorktreeRemovalInFlight>()
   private readonly getLocalProviderFn: (() => IPtyProvider) | null
   private accountServices: RuntimeAccountServices | null = null
   private commitMessageAgentEnv: CommitMessageAgentEnvironmentResolvers | null = null
@@ -1020,6 +1289,60 @@ export class OrcaRuntimeService {
     }
     this.store.updateUI(updates)
     return this.store.getUI()
+  }
+
+  getClientSettings(): Pick<
+    GlobalSettings,
+    | 'defaultTuiAgent'
+    | 'agentCmdOverrides'
+    | 'defaultTaskSource'
+    | 'defaultTaskViewPreset'
+    | 'visibleTaskProviders'
+    | 'defaultRepoSelection'
+    | 'defaultLinearTeamSelection'
+    | 'githubProjects'
+  > {
+    if (!this.store?.getSettings) {
+      throw new Error('runtime_unavailable')
+    }
+    const settings = this.store.getSettings()
+    return {
+      defaultTuiAgent: settings.defaultTuiAgent ?? null,
+      agentCmdOverrides: settings.agentCmdOverrides ?? {},
+      defaultTaskSource: settings.defaultTaskSource ?? 'github',
+      defaultTaskViewPreset: settings.defaultTaskViewPreset ?? 'issues',
+      visibleTaskProviders: settings.visibleTaskProviders ?? ['github', 'gitlab', 'linear'],
+      defaultRepoSelection: settings.defaultRepoSelection ?? null,
+      defaultLinearTeamSelection: settings.defaultLinearTeamSelection ?? null,
+      githubProjects: settings.githubProjects
+    }
+  }
+
+  updateClientSettings(
+    updates: Pick<
+      Partial<GlobalSettings>,
+      | 'defaultTaskSource'
+      | 'defaultTaskViewPreset'
+      | 'defaultRepoSelection'
+      | 'defaultLinearTeamSelection'
+      | 'githubProjects'
+    >
+  ): Pick<
+    GlobalSettings,
+    | 'defaultTuiAgent'
+    | 'agentCmdOverrides'
+    | 'defaultTaskSource'
+    | 'defaultTaskViewPreset'
+    | 'visibleTaskProviders'
+    | 'defaultRepoSelection'
+    | 'defaultLinearTeamSelection'
+    | 'githubProjects'
+  > {
+    if (!this.store?.updateSettings) {
+      throw new Error('runtime_unavailable')
+    }
+    this.store.updateSettings(updates)
+    return this.getClientSettings()
   }
 
   listAutomations(): Automation[] {
@@ -1715,6 +2038,8 @@ export class OrcaRuntimeService {
   pullRuntimeGit: RuntimeGitCommands['pullRuntimeGit'] = this.gitCommands.pullRuntimeGit.bind(
     this.gitCommands
   )
+  rebaseRuntimeGitFromBase: RuntimeGitCommands['rebaseRuntimeGitFromBase'] =
+    this.gitCommands.rebaseRuntimeGitFromBase.bind(this.gitCommands)
   pushRuntimeGit: RuntimeGitCommands['pushRuntimeGit'] = this.gitCommands.pushRuntimeGit.bind(
     this.gitCommands
   )
@@ -1814,9 +2139,17 @@ export class OrcaRuntimeService {
   }
 
   onPtyData(ptyId: string, data: string, at: number): void {
+    this.recentPtyOutputById.set(
+      ptyId,
+      `${this.recentPtyOutputById.get(ptyId) ?? ''}${data}`.slice(-RECENT_PTY_OUTPUT_LIMIT)
+    )
     // Agent detection runs on raw data before leaf processing, since the
     // tail buffer logic normalizes away the OSC sequences we need.
     this.agentDetector?.onData(ptyId, data, at)
+    // Why: watch terminal output for advertised dev-server URLs (e.g. Vite's
+    // `Network: https://local.example.com:3001/`) so the workspace ports
+    // panel can surface them in place of the kernel bind address.
+    advertisedUrlWatcher.ingest(ptyId, data, at)
     // Ordering invariant (DO NOT REORDER): maybeHydrateHeadlessFromRenderer
     // MUST run before trackHeadlessTerminalData so the eager-state pattern
     // (set headlessTerminals + writeChain head = seedPromise) is in place
@@ -1834,11 +2167,30 @@ export class OrcaRuntimeService {
     const oscTitle = extractLastOscTitle(data)
     const agentStatus = oscTitle ? detectAgentStatusFromTitle(oscTitle) : null
 
+    let normalizedData: string | null = null
+    const getNormalizedData = (): string => {
+      normalizedData ??= normalizeTerminalChunk(data)
+      return normalizedData
+    }
     const pty = this.getOrCreatePtyWorktreeRecord(ptyId)
+    const ptyTailBefore = pty
+      ? {
+          lines: pty.tailBuffer,
+          partialLine: pty.tailPartialLine,
+          truncated: pty.tailTruncated,
+          linesTotal: pty.tailLinesTotal
+        }
+      : null
+    let ptyTailAfter: ReturnType<typeof appendNormalizedToTailBuffer> | null = null
     if (pty) {
       pty.connected = true
       pty.lastOutputAt = at
-      const nextTail = appendToTailBuffer(pty.tailBuffer, pty.tailPartialLine, data)
+      const nextTail = appendNormalizedToTailBuffer(
+        pty.tailBuffer,
+        pty.tailPartialLine,
+        getNormalizedData()
+      )
+      ptyTailAfter = nextTail
       pty.tailBuffer = nextTail.lines
       pty.tailPartialLine = nextTail.partialLine
       pty.tailTruncated = pty.tailTruncated || nextTail.truncated
@@ -1868,12 +2220,37 @@ export class OrcaRuntimeService {
       leaf.connected = true
       leaf.writable = this.graphStatus === 'ready'
       leaf.lastOutputAt = at
-      const nextTail = appendToTailBuffer(leaf.tailBuffer, leaf.tailPartialLine, data)
-      leaf.tailBuffer = nextTail.lines
-      leaf.tailPartialLine = nextTail.partialLine
-      leaf.tailTruncated = leaf.tailTruncated || nextTail.truncated
-      leaf.tailLinesTotal += nextTail.newCompleteLines
-      leaf.preview = buildPreview(leaf.tailBuffer, leaf.tailPartialLine)
+      if (
+        pty &&
+        ptyTailBefore &&
+        ptyTailAfter &&
+        tailStateMatches(
+          leaf.tailBuffer,
+          leaf.tailPartialLine,
+          leaf.tailTruncated,
+          leaf.tailLinesTotal,
+          ptyTailBefore
+        )
+      ) {
+        // Why: the leaf and PTY record usually mirror the same terminal. Reuse
+        // the PTY tail update instead of splitting large output twice.
+        leaf.tailBuffer = pty.tailBuffer
+        leaf.tailPartialLine = pty.tailPartialLine
+        leaf.tailTruncated = pty.tailTruncated
+        leaf.tailLinesTotal = pty.tailLinesTotal
+        leaf.preview = pty.preview
+      } else {
+        const nextTail = appendNormalizedToTailBuffer(
+          leaf.tailBuffer,
+          leaf.tailPartialLine,
+          getNormalizedData()
+        )
+        leaf.tailBuffer = nextTail.lines
+        leaf.tailPartialLine = nextTail.partialLine
+        leaf.tailTruncated = leaf.tailTruncated || nextTail.truncated
+        leaf.tailLinesTotal += nextTail.newCompleteLines
+        leaf.preview = buildPreview(leaf.tailBuffer, leaf.tailPartialLine)
+      }
 
       if (oscTitle !== null) {
         // Why: keep the latest OSC title on the leaf so worktree.ps can
@@ -2917,11 +3294,13 @@ export class OrcaRuntimeService {
   }
 
   onPtyExit(ptyId: string, exitCode: number): void {
+    advertisedUrlWatcher.unbindPty(ptyId)
     // Clean up new mobile state for this PTY
     this.mobileSubscribers.delete(ptyId)
     this.mobileDisplayModes.delete(ptyId)
     this.resizeListeners.delete(ptyId)
     this.lastRendererSizes.delete(ptyId)
+    this.recentPtyOutputById.delete(ptyId)
     // Layout state machine: clear `layouts` and `layoutQueues`. Any
     // already-queued applyLayout work for this ptyId will run, but every
     // applyLayout re-checks `layouts.has(ptyId)` (or fresh-subscribe) and
@@ -2960,6 +3339,7 @@ export class OrcaRuntimeService {
       pty.connected = false
       pty.lastExitCode = exitCode
       this.resolvePtyExitWaiters(pty, ptyId)
+      this.pruneDisconnectedPtyTranscript(pty)
     }
 
     for (const leaf of this.leaves.values()) {
@@ -4187,49 +4567,27 @@ export class OrcaRuntimeService {
     }
   }
 
-  async readTerminal(handle: string, opts: { cursor?: number } = {}): Promise<RuntimeTerminalRead> {
+  async readTerminal(
+    handle: string,
+    opts: { cursor?: number; limit?: number } = {}
+  ): Promise<RuntimeTerminalRead> {
     const pty = this.getLivePtyForHandle(handle)
     if (pty) {
       return this.readPtyTerminal(handle, pty.pty, opts)
     }
 
     const { leaf } = this.getLiveLeafForHandle(handle)
-    const allLines = buildTailLines(leaf.tailBuffer, leaf.tailPartialLine)
-
-    let tail: string[]
-    let truncated: boolean
-
-    if (typeof opts.cursor === 'number' && opts.cursor >= 0) {
-      // Why: the buffer only retains the last MAX_TAIL_LINES lines. If the
-      // caller's cursor points to lines that were already evicted, we can only
-      // return what's still in memory and mark truncated=true to signal the gap.
-      const bufferStart = leaf.tailLinesTotal - leaf.tailBuffer.length
-      const sliceFrom = Math.max(0, opts.cursor - bufferStart)
-      // Why: cursor-based reads return only completed lines, excluding the
-      // trailing partial line. Including the partial would cause duplication:
-      // the consumer sees "hel" now, then "hello\n" on the next read after
-      // the line completes — same content delivered twice.
-      tail = leaf.tailBuffer.slice(sliceFrom)
-      truncated = opts.cursor < bufferStart
-    } else {
-      tail = allLines
-      // Why: Orca does not have a truthful main-owned screen model yet,
-      // especially for hidden panes. Focused v1 therefore returns the bounded
-      // tail lines directly instead of duplicating the same text in a fake
-      // screen field that would waste agent tokens.
-      truncated = leaf.tailTruncated
-    }
-
-    return {
+    const read = readTerminalTail({
       handle,
       status: getTerminalState(leaf),
-      tail,
-      truncated,
-      // Why: cursors advance by completed lines only. If we count the current
-      // partial line here, later reads can skip continued output on that same
-      // line because no new complete line was emitted yet.
-      nextCursor: String(leaf.tailLinesTotal)
-    }
+      completedLines: leaf.tailBuffer,
+      partialLine: leaf.tailPartialLine,
+      completedLineCount: leaf.tailLinesTotal,
+      bufferTruncated: leaf.tailTruncated,
+      cursor: opts.cursor,
+      limit: opts.limit
+    })
+    return read
   }
 
   async sendTerminal(
@@ -4661,6 +5019,38 @@ export class OrcaRuntimeService {
     return this.store?.getRepos() ?? []
   }
 
+  async listSparsePresets(repoSelector: string) {
+    if (!this.store?.getSparsePresets) {
+      throw new Error('runtime_unavailable')
+    }
+    const repo = await this.resolveRepoSelector(repoSelector)
+    return this.store.getSparsePresets(repo.id)
+  }
+
+  async saveSparsePreset(
+    repoSelector: string,
+    args: { id?: string; name: string; directories: string[] }
+  ) {
+    if (!this.store?.getSparsePresets || !this.store.saveSparsePreset) {
+      throw new Error('runtime_unavailable')
+    }
+    const repo = await this.resolveRepoSelector(repoSelector)
+    const name = normalizeSparsePresetName(args.name)
+    const directories = normalizeSparsePresetDirectoriesForSave(args.directories)
+    const now = Date.now()
+    const existing = args.id
+      ? this.store.getSparsePresets(repo.id).find((preset) => preset.id === args.id)
+      : undefined
+    return this.store.saveSparsePreset({
+      id: existing?.id ?? randomUUID(),
+      repoId: repo.id,
+      name,
+      directories,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now
+    })
+  }
+
   async addRepo(path: string, kind: 'git' | 'folder' = 'git'): Promise<Repo> {
     if (!this.store) {
       throw new Error('runtime_unavailable')
@@ -4685,7 +5075,13 @@ export class OrcaRuntimeService {
       displayName: getRepoName(path),
       badgeColor: DEFAULT_REPO_BADGE_COLOR,
       addedAt: Date.now(),
-      kind
+      kind,
+      ...(kind === 'git'
+        ? {
+            externalWorktreeVisibility: 'hide' as const,
+            externalWorktreeVisibilityLegacy: false
+          }
+        : {})
     }
     this.store.addRepo(repo)
     this.invalidateResolvedWorktreeCache()
@@ -4793,7 +5189,13 @@ export class OrcaRuntimeService {
       displayName: trimmedName,
       badgeColor: DEFAULT_REPO_BADGE_COLOR,
       addedAt: Date.now(),
-      kind: repoKind
+      kind: repoKind,
+      ...(repoKind === 'git'
+        ? {
+            externalWorktreeVisibility: 'hide' as const,
+            externalWorktreeVisibilityLegacy: false
+          }
+        : {})
     }
     this.store.addRepo(repo)
     invalidateAuthorizedRootsCache()
@@ -4860,7 +5262,9 @@ export class OrcaRuntimeService {
       displayName: getRepoName(clonePath),
       badgeColor: DEFAULT_REPO_BADGE_COLOR,
       addedAt: Date.now(),
-      kind: 'git'
+      kind: 'git',
+      externalWorktreeVisibility: 'hide',
+      externalWorktreeVisibilityLegacy: false
     }
     this.store.addRepo(repo)
     invalidateAuthorizedRootsCache()
@@ -4897,11 +5301,14 @@ export class OrcaRuntimeService {
         Repo,
         | 'displayName'
         | 'badgeColor'
+        | 'repoIcon'
         | 'hookSettings'
         | 'worktreeBaseRef'
         | 'kind'
         | 'symlinkPaths'
         | 'issueSourcePreference'
+        | 'externalWorktreeVisibility'
+        | 'externalWorktreeVisibilityPromptDismissedAt'
       >
     >
   ): Promise<Repo> {
@@ -5068,12 +5475,6 @@ export class OrcaRuntimeService {
     }
   }
 
-  private assertHostIntegrationRepoIsLocal(repo: Repo, operation: string): void {
-    if (repo.connectionId) {
-      throw new Error(`${operation}_unsupported_for_ssh_repo`)
-    }
-  }
-
   private async resolveHostedReviewTarget(args: {
     repoSelector: string
     worktreeSelector?: string
@@ -5092,8 +5493,7 @@ export class OrcaRuntimeService {
 
   async getRepoSlug(repoSelector: string): Promise<{ owner: string; repo: string } | null> {
     const repo = await this.resolveRepoSelector(repoSelector)
-    this.assertHostIntegrationRepoIsLocal(repo, 'repo_slug')
-    return getRepoSlug(repo.path)
+    return getRepoSlug(repo.path, repo.connectionId ?? null)
   }
 
   async listRepoWorkItems(
@@ -5103,8 +5503,28 @@ export class OrcaRuntimeService {
     before?: string
   ): Promise<Awaited<ReturnType<typeof listWorkItems>>> {
     const repo = await this.resolveRepoSelector(repoSelector)
-    this.assertHostIntegrationRepoIsLocal(repo, 'repo_work_items')
-    return listWorkItems(repo.path, limit, query, before, repo.issueSourcePreference)
+    return listWorkItems(
+      repo.path,
+      limit,
+      query,
+      before,
+      repo.issueSourcePreference,
+      repo.connectionId ?? null
+    )
+  }
+
+  async listRepoIssues(
+    repoSelector: string,
+    limit?: number
+  ): Promise<Awaited<ReturnType<typeof listGitHubIssues>>['items']> {
+    const repo = await this.resolveRepoSelector(repoSelector)
+    const result = await listGitHubIssues(
+      repo.path,
+      limit,
+      repo.issueSourcePreference,
+      repo.connectionId ?? null
+    )
+    return result.items
   }
 
   async getRepoWorkItem(
@@ -5113,8 +5533,7 @@ export class OrcaRuntimeService {
     type?: 'issue' | 'pr'
   ): Promise<Awaited<ReturnType<typeof getWorkItem>>> {
     const repo = await this.resolveRepoSelector(repoSelector)
-    this.assertHostIntegrationRepoIsLocal(repo, 'repo_work_item')
-    return getWorkItem(repo.path, number, type)
+    return getWorkItem(repo.path, number, type, repo.connectionId ?? null)
   }
 
   async getRepoWorkItemByOwnerRepo(
@@ -5124,8 +5543,7 @@ export class OrcaRuntimeService {
     type: 'issue' | 'pr'
   ): Promise<Awaited<ReturnType<typeof getWorkItemByOwnerRepo>>> {
     const repo = await this.resolveRepoSelector(repoSelector)
-    this.assertHostIntegrationRepoIsLocal(repo, 'repo_work_item')
-    return getWorkItemByOwnerRepo(repo.path, ownerRepo, number, type)
+    return getWorkItemByOwnerRepo(repo.path, ownerRepo, number, type, repo.connectionId ?? null)
   }
 
   async getRepoWorkItemDetails(
@@ -5134,28 +5552,24 @@ export class OrcaRuntimeService {
     type?: 'issue' | 'pr'
   ): Promise<Awaited<ReturnType<typeof getWorkItemDetails>>> {
     const repo = await this.resolveRepoSelector(repoSelector)
-    this.assertHostIntegrationRepoIsLocal(repo, 'repo_work_item_details')
-    return getWorkItemDetails(repo.path, number, type)
+    return getWorkItemDetails(repo.path, number, type, repo.connectionId ?? null)
   }
 
   async countRepoWorkItems(repoSelector: string, query?: string): Promise<number> {
     const repo = await this.resolveRepoSelector(repoSelector)
-    this.assertHostIntegrationRepoIsLocal(repo, 'repo_work_items')
-    return countWorkItems(repo.path, query, repo.issueSourcePreference)
+    return countWorkItems(repo.path, query, repo.issueSourcePreference, repo.connectionId ?? null)
   }
 
   async listRepoLabels(repoSelector: string): Promise<Awaited<ReturnType<typeof listLabels>>> {
     const repo = await this.resolveRepoSelector(repoSelector)
-    this.assertHostIntegrationRepoIsLocal(repo, 'repo_labels')
-    return listLabels(repo.path, repo.issueSourcePreference)
+    return listLabels(repo.path, repo.issueSourcePreference, repo.connectionId ?? null)
   }
 
   async listRepoAssignableUsers(
     repoSelector: string
   ): Promise<Awaited<ReturnType<typeof listAssignableUsers>>> {
     const repo = await this.resolveRepoSelector(repoSelector)
-    this.assertHostIntegrationRepoIsLocal(repo, 'repo_assignable_users')
-    return listAssignableUsers(repo.path, repo.issueSourcePreference)
+    return listAssignableUsers(repo.path, repo.issueSourcePreference, repo.connectionId ?? null)
   }
 
   getGitHubRateLimit(options?: {
@@ -5167,28 +5581,36 @@ export class OrcaRuntimeService {
   async getRepoPRForBranch(
     repoSelector: string,
     branch: string,
-    linkedPRNumber?: number | null
+    linkedPRNumber?: number | null,
+    fallbackPRNumber?: number | null
   ): Promise<Awaited<ReturnType<typeof getPRForBranch>>> {
     const repo = await this.resolveRepoSelector(repoSelector)
-    this.assertHostIntegrationRepoIsLocal(repo, 'repo_pr')
-    return getPRForBranch(repo.path, branch, linkedPRNumber ?? null)
+    return getPRForBranch(
+      repo.path,
+      branch,
+      linkedPRNumber ?? null,
+      repo.connectionId ?? null,
+      linkedPRNumber == null ? (fallbackPRNumber ?? null) : null
+    )
   }
 
   async getHostedReviewForBranch(args: {
     repoSelector: string
     branch: string
     linkedGitHubPR?: number | null
+    fallbackGitHubPR?: number | null
     linkedGitLabMR?: number | null
     linkedBitbucketPR?: number | null
     linkedAzureDevOpsPR?: number | null
     linkedGiteaPR?: number | null
   }): Promise<HostedReviewInfo | null> {
     const repo = await this.resolveRepoSelector(args.repoSelector)
-    this.assertHostIntegrationRepoIsLocal(repo, 'hosted_review')
     const review = await getHostedReviewForBranchFromRepo({
       repoPath: repo.path,
+      connectionId: repo.connectionId ?? null,
       branch: args.branch,
       linkedGitHubPR: args.linkedGitHubPR ?? null,
+      fallbackGitHubPR: args.linkedGitHubPR == null ? (args.fallbackGitHubPR ?? null) : null,
       linkedGitLabMR: args.linkedGitLabMR ?? null,
       linkedBitbucketPR: args.linkedBitbucketPR ?? null,
       linkedAzureDevOpsPR: args.linkedAzureDevOpsPR ?? null,
@@ -5212,9 +5634,9 @@ export class OrcaRuntimeService {
     }
   ): Promise<HostedReviewCreationEligibility> {
     const { repo, repoPath } = await this.resolveHostedReviewTarget(args)
-    this.assertHostIntegrationRepoIsLocal(repo, 'hosted_review')
     return getHostedReviewCreationEligibilityFromRepo({
       repoPath,
+      connectionId: repo.connectionId ?? null,
       branch: args.branch,
       base: args.base ?? null,
       hasUncommittedChanges: args.hasUncommittedChanges,
@@ -5222,6 +5644,7 @@ export class OrcaRuntimeService {
       ahead: args.ahead,
       behind: args.behind,
       linkedGitHubPR: args.linkedGitHubPR ?? null,
+      fallbackGitHubPR: args.linkedGitHubPR == null ? (args.fallbackGitHubPR ?? null) : null,
       linkedGitLabMR: args.linkedGitLabMR ?? null,
       linkedBitbucketPR: args.linkedBitbucketPR ?? null,
       linkedAzureDevOpsPR: args.linkedAzureDevOpsPR ?? null,
@@ -5233,15 +5656,18 @@ export class OrcaRuntimeService {
     args: CreateHostedReviewInput & { repoSelector: string; worktreeSelector?: string }
   ): Promise<CreateHostedReviewResult> {
     const { repo, repoPath } = await this.resolveHostedReviewTarget(args)
-    this.assertHostIntegrationRepoIsLocal(repo, 'hosted_review')
-    const result = await createHostedReviewFromRepo(repoPath, {
-      provider: args.provider,
-      base: args.base,
-      head: args.head,
-      title: args.title,
-      body: args.body,
-      draft: args.draft
-    })
+    const result = await createHostedReviewFromRepo(
+      repoPath,
+      {
+        provider: args.provider,
+        base: args.base,
+        head: args.head,
+        title: args.title,
+        body: args.body,
+        draft: args.draft
+      },
+      repo.connectionId ?? null
+    )
     if (result.ok && this.stats && !this.stats.hasCountedPR(result.url)) {
       this.stats.record({
         type: 'pr_created',
@@ -5253,13 +5679,264 @@ export class OrcaRuntimeService {
     return result
   }
 
+  async listGitLabRepoWorkItems(
+    repoSelector: string,
+    state?: MRListState,
+    page?: number,
+    perPage?: number,
+    query?: string
+  ): Promise<Awaited<ReturnType<typeof listGitLabWorkItems>>> {
+    const repo = await this.resolveRepoSelector(repoSelector)
+    return listGitLabWorkItems(
+      repo.path,
+      state ?? 'opened',
+      page ?? 1,
+      perPage ?? 20,
+      repo.issueSourcePreference,
+      query,
+      repo.connectionId ?? null
+    )
+  }
+
+  async listGitLabRepoMRs(
+    repoSelector: string,
+    state?: MRListState,
+    page?: number,
+    perPage?: number,
+    query?: string
+  ): Promise<Awaited<ReturnType<typeof listGitLabMergeRequests>>> {
+    const repo = await this.resolveRepoSelector(repoSelector)
+    return listGitLabMergeRequests(
+      repo.path,
+      normalizeGitLabMRListState(state),
+      normalizeGitLabPositiveInteger(page, 1, 10_000),
+      normalizeGitLabPositiveInteger(perPage, 20, 100),
+      repo.issueSourcePreference,
+      query,
+      repo.connectionId ?? null
+    )
+  }
+
+  async listGitLabRepoIssues(
+    repoSelector: string,
+    state?: GitLabIssueListState,
+    assignee?: string,
+    limit?: number
+  ): Promise<{
+    items: GitLabWorkItem[]
+    error?: Awaited<ReturnType<typeof listGitLabIssues>>['error']
+  }> {
+    const repo = await this.resolveRepoSelector(repoSelector)
+    const normalized = normalizeGitLabIssueListArgs({ state, assignee, limit })
+    const result = await listGitLabIssues(
+      repo.path,
+      normalized.limit,
+      repo.issueSourcePreference,
+      normalized.state,
+      normalized.assignee,
+      repo.connectionId ?? null
+    )
+    // Why: web runtime mirrors the desktop preload contract, where GitLab
+    // issue rows share the GitLabWorkItem shape with MRs on TaskPage.
+    const items: GitLabWorkItem[] = result.items.map((issue) => ({
+      id: `gitlab-issue-${repo.id}-${issue.number}`,
+      type: 'issue' as const,
+      number: issue.number,
+      title: issue.title,
+      state: issue.state,
+      url: issue.url,
+      labels: issue.labels,
+      updatedAt: issue.updatedAt ?? '',
+      author: issue.author ?? null,
+      repoId: repo.id
+    }))
+    return { items, ...(result.error ? { error: result.error } : {}) }
+  }
+
+  async listGitLabRepoTodos(
+    repoSelector: string
+  ): Promise<Awaited<ReturnType<typeof listGitLabTodos>>> {
+    const repo = await this.resolveRepoSelector(repoSelector)
+    return listGitLabTodos(repo.path, repo.connectionId ?? null)
+  }
+
+  async createGitLabRepoIssue(
+    repoSelector: string,
+    title: string,
+    body: string
+  ): Promise<Awaited<ReturnType<typeof createGitLabIssue>>> {
+    const repo = await this.resolveRepoSelector(repoSelector)
+    return createGitLabIssue(
+      repo.path,
+      title,
+      body,
+      repo.issueSourcePreference,
+      repo.connectionId ?? null
+    )
+  }
+
+  async updateGitLabRepoIssue(
+    repoSelector: string,
+    number: number,
+    updates: GitLabIssueUpdate,
+    projectRef?: GitLabProjectRef | null
+  ): Promise<Awaited<ReturnType<typeof updateGitLabIssue>>> {
+    const repo = await this.resolveRepoSelector(repoSelector)
+    return updateGitLabIssue(
+      repo.path,
+      number,
+      updates,
+      repo.issueSourcePreference,
+      repo.connectionId ?? null,
+      projectRef
+    )
+  }
+
+  async addGitLabRepoIssueComment(
+    repoSelector: string,
+    number: number,
+    body: string,
+    projectRef?: GitLabProjectRef | null
+  ): Promise<Awaited<ReturnType<typeof addGitLabIssueComment>>> {
+    const repo = await this.resolveRepoSelector(repoSelector)
+    return addGitLabIssueComment(
+      repo.path,
+      number,
+      body,
+      repo.issueSourcePreference,
+      repo.connectionId ?? null,
+      projectRef
+    )
+  }
+
+  async addGitLabRepoMRComment(
+    repoSelector: string,
+    iid: number,
+    body: string,
+    projectRef?: GitLabProjectRef | null
+  ): Promise<Awaited<ReturnType<typeof addGitLabMRComment>>> {
+    const repo = await this.resolveRepoSelector(repoSelector)
+    return addGitLabMRComment(
+      repo.path,
+      iid,
+      body,
+      repo.issueSourcePreference,
+      repo.connectionId ?? null,
+      projectRef
+    )
+  }
+
+  async mergeGitLabRepoMR(
+    repoSelector: string,
+    iid: number,
+    method?: 'merge' | 'squash' | 'rebase',
+    projectRef?: GitLabProjectRef | null
+  ): Promise<Awaited<ReturnType<typeof mergeGitLabMR>>> {
+    const repo = await this.resolveRepoSelector(repoSelector)
+    return mergeGitLabMR(
+      repo.path,
+      iid,
+      method ?? 'merge',
+      repo.issueSourcePreference,
+      repo.connectionId ?? null,
+      projectRef
+    )
+  }
+
+  async updateGitLabRepoMRState(
+    repoSelector: string,
+    iid: number,
+    state: 'opened' | 'closed',
+    projectRef?: GitLabProjectRef | null
+  ): Promise<Awaited<ReturnType<typeof closeGitLabMR>>> {
+    const repo = await this.resolveRepoSelector(repoSelector)
+    return state === 'closed'
+      ? closeGitLabMR(
+          repo.path,
+          iid,
+          repo.issueSourcePreference,
+          repo.connectionId ?? null,
+          projectRef
+        )
+      : reopenGitLabMR(
+          repo.path,
+          iid,
+          repo.issueSourcePreference,
+          repo.connectionId ?? null,
+          projectRef
+        )
+  }
+
+  async updateGitLabRepoMR(
+    repoSelector: string,
+    iid: number,
+    updates: { title?: string; body?: string; addLabels?: string[]; removeLabels?: string[] },
+    projectRef?: GitLabProjectRef | null
+  ): Promise<Awaited<ReturnType<typeof updateGitLabMR>>> {
+    const repo = await this.resolveRepoSelector(repoSelector)
+    return updateGitLabMR(
+      repo.path,
+      iid,
+      updates,
+      repo.issueSourcePreference,
+      repo.connectionId ?? null,
+      projectRef
+    )
+  }
+
+  async getGitLabRepoWorkItemDetails(
+    repoSelector: string,
+    iid: number,
+    type: 'issue' | 'mr',
+    projectRef?: GitLabProjectRef | null
+  ): Promise<Awaited<ReturnType<typeof getGitLabWorkItemDetails>>> {
+    const repo = await this.resolveRepoSelector(repoSelector)
+    return getGitLabWorkItemDetails(
+      repo.path,
+      iid,
+      type,
+      repo.issueSourcePreference,
+      repo.connectionId ?? null,
+      projectRef
+    )
+  }
+
+  async getGitLabRepoWorkItemByPath(
+    repoSelector: string,
+    projectRef: GitLabProjectRef,
+    iid: number,
+    type: 'issue' | 'mr'
+  ): Promise<Awaited<ReturnType<typeof getGitLabWorkItemByProjectRef>>> {
+    const repo = await this.resolveRepoSelector(repoSelector)
+    const result = await getGitLabWorkItemByProjectRef(
+      repo.path,
+      projectRef,
+      iid,
+      type,
+      repo.connectionId ?? null
+    )
+    // Why: remote pasted-URL lookups should update GitLab recents exactly
+    // like the desktop IPC path, but only after a successful lookup.
+    if (result && this.store?.updateSettings) {
+      const store = this.store
+      recordGitLabProjectRecent(
+        {
+          getSettings: () => store.getSettings(),
+          updateSettings: (updates) => store.updateSettings?.(updates)
+        },
+        projectRef.host,
+        projectRef.path
+      )
+    }
+    return result
+  }
+
   async getRepoIssue(
     repoSelector: string,
     number: number
   ): Promise<Awaited<ReturnType<typeof getIssue>>> {
     const repo = await this.resolveRepoSelector(repoSelector)
-    this.assertHostIntegrationRepoIsLocal(repo, 'repo_issue')
-    return getIssue(repo.path, number)
+    return getIssue(repo.path, number, repo.connectionId ?? null)
   }
 
   async getRepoPRChecks(
@@ -5270,8 +5947,14 @@ export class OrcaRuntimeService {
     options?: { noCache?: boolean }
   ): Promise<Awaited<ReturnType<typeof getPRChecks>>> {
     const repo = await this.resolveRepoSelector(repoSelector)
-    this.assertHostIntegrationRepoIsLocal(repo, 'repo_pr_checks')
-    return getPRChecks(repo.path, prNumber, headSha, prRepo ?? null, options)
+    return getPRChecks(
+      repo.path,
+      prNumber,
+      headSha,
+      prRepo ?? null,
+      options,
+      repo.connectionId ?? null
+    )
   }
 
   async rerunRepoPRChecks(
@@ -5280,8 +5963,7 @@ export class OrcaRuntimeService {
     options?: { headSha?: string; failedOnly?: boolean }
   ): Promise<Awaited<ReturnType<typeof rerunPRChecks>>> {
     const repo = await this.resolveRepoSelector(repoSelector)
-    this.assertHostIntegrationRepoIsLocal(repo, 'repo_pr_checks_rerun')
-    return rerunPRChecks(repo.path, prNumber, options)
+    return rerunPRChecks(repo.path, prNumber, options, repo.connectionId ?? null)
   }
 
   async getRepoPRCheckDetails(
@@ -5306,8 +5988,12 @@ export class OrcaRuntimeService {
     options?: { noCache?: boolean }
   ): Promise<Awaited<ReturnType<typeof getPRComments>>> {
     const repo = await this.resolveRepoSelector(repoSelector)
-    this.assertHostIntegrationRepoIsLocal(repo, 'repo_pr_comments')
-    return getPRComments(repo.path, prNumber, { ...options, prRepo: prRepo ?? null })
+    return getPRComments(
+      repo.path,
+      prNumber,
+      { ...options, prRepo: prRepo ?? null },
+      repo.connectionId ?? null
+    )
   }
 
   async getRepoPRFileContents(
@@ -5322,8 +6008,11 @@ export class OrcaRuntimeService {
     }
   ): Promise<Awaited<ReturnType<typeof getPRFileContents>>> {
     const repo = await this.resolveRepoSelector(repoSelector)
-    this.assertHostIntegrationRepoIsLocal(repo, 'repo_pr_file_contents')
-    return getPRFileContents({ repoPath: repo.path, ...args })
+    return getPRFileContents({
+      repoPath: repo.path,
+      connectionId: repo.connectionId ?? null,
+      ...args
+    })
   }
 
   async resolveRepoReviewThread(
@@ -5332,8 +6021,7 @@ export class OrcaRuntimeService {
     resolve: boolean
   ): Promise<Awaited<ReturnType<typeof resolveReviewThread>>> {
     const repo = await this.resolveRepoSelector(repoSelector)
-    this.assertHostIntegrationRepoIsLocal(repo, 'repo_pr_review_thread')
-    return resolveReviewThread(repo.path, threadId, resolve)
+    return resolveReviewThread(repo.path, threadId, resolve, repo.connectionId ?? null)
   }
 
   async setRepoPRFileViewed(
@@ -5345,8 +6033,11 @@ export class OrcaRuntimeService {
     }
   ): Promise<Awaited<ReturnType<typeof setPRFileViewed>>> {
     const repo = await this.resolveRepoSelector(repoSelector)
-    this.assertHostIntegrationRepoIsLocal(repo, 'repo_pr_file_viewed')
-    return setPRFileViewed({ repoPath: repo.path, ...args })
+    return setPRFileViewed({
+      repoPath: repo.path,
+      connectionId: repo.connectionId ?? null,
+      ...args
+    })
   }
 
   async updateRepoPRTitle(
@@ -5356,8 +6047,17 @@ export class OrcaRuntimeService {
     prRepo?: GitHubOwnerRepo | null
   ): Promise<Awaited<ReturnType<typeof updatePRTitle>>> {
     const repo = await this.resolveRepoSelector(repoSelector)
-    this.assertHostIntegrationRepoIsLocal(repo, 'repo_pr_title')
-    return updatePRTitle(repo.path, prNumber, title, undefined, prRepo ?? null)
+    return updatePRTitle(repo.path, prNumber, title, repo.connectionId ?? null, prRepo ?? null)
+  }
+
+  async updateRepoPRDetails(
+    repoSelector: string,
+    prNumber: number,
+    updates: { title?: string; body?: string },
+    prRepo?: GitHubOwnerRepo | null
+  ): Promise<Awaited<ReturnType<typeof updatePRDetails>>> {
+    const repo = await this.resolveRepoSelector(repoSelector)
+    return updatePRDetails(repo.path, prNumber, updates, repo.connectionId ?? null, prRepo ?? null)
   }
 
   async mergeRepoPR(
@@ -5367,8 +6067,7 @@ export class OrcaRuntimeService {
     prRepo?: GitHubOwnerRepo | null
   ): Promise<Awaited<ReturnType<typeof mergePR>>> {
     const repo = await this.resolveRepoSelector(repoSelector)
-    this.assertHostIntegrationRepoIsLocal(repo, 'repo_pr_merge')
-    return mergePR(repo.path, prNumber, method, undefined, prRepo ?? null)
+    return mergePR(repo.path, prNumber, method, repo.connectionId ?? null, prRepo ?? null)
   }
 
   async updateRepoPRState(
@@ -5377,8 +6076,7 @@ export class OrcaRuntimeService {
     updates: GitHubPullRequestStateUpdate
   ): Promise<Awaited<ReturnType<typeof updatePRState>>> {
     const repo = await this.resolveRepoSelector(repoSelector)
-    this.assertHostIntegrationRepoIsLocal(repo, 'repo_pr_state')
-    return updatePRState(repo.path, prNumber, updates)
+    return updatePRState(repo.path, prNumber, updates, repo.connectionId ?? null)
   }
 
   async requestRepoPRReviewers(
@@ -5387,8 +6085,7 @@ export class OrcaRuntimeService {
     reviewers: string[]
   ): Promise<Awaited<ReturnType<typeof requestPRReviewers>>> {
     const repo = await this.resolveRepoSelector(repoSelector)
-    this.assertHostIntegrationRepoIsLocal(repo, 'repo_pr_reviewers')
-    return requestPRReviewers(repo.path, prNumber, reviewers)
+    return requestPRReviewers(repo.path, prNumber, reviewers, repo.connectionId ?? null)
   }
 
   async removeRepoPRReviewers(
@@ -5407,8 +6104,13 @@ export class OrcaRuntimeService {
     body: string
   ): Promise<Awaited<ReturnType<typeof createIssue>>> {
     const repo = await this.resolveRepoSelector(repoSelector)
-    this.assertHostIntegrationRepoIsLocal(repo, 'repo_issue_create')
-    return createIssue(repo.path, title, body, repo.issueSourcePreference)
+    return createIssue(
+      repo.path,
+      title,
+      body,
+      repo.issueSourcePreference,
+      repo.connectionId ?? null
+    )
   }
 
   async updateRepoIssue(
@@ -5417,8 +6119,7 @@ export class OrcaRuntimeService {
     updates: GitHubIssueUpdate
   ): Promise<Awaited<ReturnType<typeof updateIssue>>> {
     const repo = await this.resolveRepoSelector(repoSelector)
-    this.assertHostIntegrationRepoIsLocal(repo, 'repo_issue_update')
-    return updateIssue(repo.path, number, updates)
+    return updateIssue(repo.path, number, updates, repo.connectionId ?? null)
   }
 
   async addRepoIssueComment(
@@ -5427,8 +6128,7 @@ export class OrcaRuntimeService {
     body: string
   ): Promise<Awaited<ReturnType<typeof addIssueComment>>> {
     const repo = await this.resolveRepoSelector(repoSelector)
-    this.assertHostIntegrationRepoIsLocal(repo, 'repo_issue_comment')
-    return addIssueComment(repo.path, number, body)
+    return addIssueComment(repo.path, number, body, repo.connectionId ?? null)
   }
 
   async addRepoPRReviewComment(
@@ -5436,8 +6136,11 @@ export class OrcaRuntimeService {
     args: Omit<GitHubPRReviewCommentInput, 'repoPath'>
   ): Promise<Awaited<ReturnType<typeof addPRReviewComment>>> {
     const repo = await this.resolveRepoSelector(repoSelector)
-    this.assertHostIntegrationRepoIsLocal(repo, 'repo_pr_review_comment')
-    return addPRReviewComment({ repoPath: repo.path, ...args })
+    return addPRReviewComment({
+      repoPath: repo.path,
+      connectionId: repo.connectionId ?? null,
+      ...args
+    })
   }
 
   async addRepoPRReviewCommentReply(
@@ -5452,7 +6155,6 @@ export class OrcaRuntimeService {
     }
   ): Promise<Awaited<ReturnType<typeof addPRReviewCommentReply>>> {
     const repo = await this.resolveRepoSelector(repoSelector)
-    this.assertHostIntegrationRepoIsLocal(repo, 'repo_pr_review_comment_reply')
     return addPRReviewCommentReply(
       repo.path,
       args.prNumber,
@@ -5460,7 +6162,8 @@ export class OrcaRuntimeService {
       args.body,
       args.threadId,
       args.path,
-      args.line
+      args.line,
+      repo.connectionId ?? null
     )
   }
 
@@ -5558,6 +6261,30 @@ export class OrcaRuntimeService {
     return deleteIssueCommentBySlug(args)
   }
 
+  private getSetupHookTrustPayload(
+    repo: Repo,
+    setupScript: string | undefined
+  ): { contentHash: string; scriptContent: string } | undefined {
+    const scriptContent = setupScript?.trim()
+    if (!scriptContent || repo.hookSettings?.commandSourcePolicy === 'local-only') {
+      return undefined
+    }
+    return {
+      contentHash: createHash('sha256').update(scriptContent).digest('hex'),
+      scriptContent
+    }
+  }
+
+  private getSharedSetupHookTrustPayload(
+    repo: Repo,
+    sharedSetupScript: string | undefined
+  ): { contentHash: string; scriptContent: string } | undefined {
+    if (repo.hookSettings?.commandSourcePolicy === 'local-only') {
+      return undefined
+    }
+    return this.getSetupHookTrustPayload(repo, sharedSetupScript)
+  }
+
   async getRepoHooks(repoSelector: string) {
     const repo = await this.resolveRepoSelector(repoSelector)
     if (repo.connectionId) {
@@ -5577,7 +6304,8 @@ export class OrcaRuntimeService {
           hasHooksFile: Boolean(hooks),
           hooks,
           setupRunPolicy: getEffectiveSetupRunPolicy(repo),
-          source: hooks ? 'orca.yaml' : null
+          source: hooks ? 'orca.yaml' : null,
+          setupTrust: this.getSharedSetupHookTrustPayload(repo, hooks?.scripts?.setup)
         }
       } catch {
         return {
@@ -5590,12 +6318,14 @@ export class OrcaRuntimeService {
     }
     const hasFile = hasHooksFile(repo.path)
     const hooks = getEffectiveHooks(repo)
+    const sharedHooks = hasFile ? loadHooks(repo.path) : null
     const setupRunPolicy = getEffectiveSetupRunPolicy(repo)
     return {
       hasHooksFile: hasFile,
       hooks,
       setupRunPolicy,
-      source: hasFile ? 'orca.yaml' : hooks ? 'legacy' : null
+      source: hasFile ? 'orca.yaml' : hooks ? 'legacy' : null,
+      setupTrust: this.getSharedSetupHookTrustPayload(repo, sharedHooks?.scripts?.setup)
     }
   }
 
@@ -5798,12 +6528,87 @@ export class OrcaRuntimeService {
     }
     const resolved = await this.listResolvedWorktrees()
     const repoId = repoSelector ? (await this.resolveRepoSelector(repoSelector)).id : null
-    const worktrees = resolved.filter((worktree) => !repoId || worktree.repoId === repoId)
+    const worktrees = resolved.filter((worktree) => {
+      if (repoId && worktree.repoId !== repoId) {
+        return false
+      }
+      return this.isRuntimeWorktreeVisible(worktree)
+    })
     return {
       worktrees: worktrees.slice(0, limit),
       totalCount: worktrees.length,
       truncated: worktrees.length > limit
     }
+  }
+
+  async listDetectedManagedWorktrees(repoSelector: string): Promise<DetectedWorktreeListResult> {
+    const repo = await this.resolveRepoSelector(repoSelector)
+    if (isFolderRepo(repo)) {
+      const worktrees = listRuntimeFolderWorkspaces(this.requireStore(), repo)
+      return {
+        repoId: repo.id,
+        authoritative: true,
+        source: 'git',
+        worktrees: worktrees.map((worktree) => this.toRuntimeDetectedWorktree(repo, worktree))
+      }
+    }
+    let scan: RuntimeWorktreeScanResult
+    try {
+      scan = await this.listRepoWorktreesForResolution(repo)
+    } catch {
+      scan = { ok: false, worktrees: [] }
+    }
+    if (scan.ok) {
+      this.pruneLineageForMissingRepoWorktrees(repo, scan.worktrees)
+    }
+    const detected = scan.worktrees.map((gitWorktree) => {
+      const worktreeId = `${repo.id}::${gitWorktree.path}`
+      const meta = this.store?.getWorktreeMeta(worktreeId)
+      const worktree = mergeWorktree(repo.id, gitWorktree, meta, repo.displayName)
+      const detectedWorktree = this.toRuntimeDetectedWorktree(repo, worktree)
+      if (scan.ok) {
+        return detectedWorktree
+      }
+      return {
+        ...detectedWorktree,
+        visible: true,
+        ownership: detectedWorktree.ownership === 'orca-managed' ? 'orca-managed' : 'unknown-legacy'
+      } satisfies DetectedWorktree
+    })
+    return {
+      repoId: repo.id,
+      authoritative: scan.ok,
+      source: scan.ok ? 'git' : 'metadata-fallback',
+      worktrees: detected
+    }
+  }
+
+  private isRuntimeWorktreeVisible(worktree: Worktree): boolean {
+    const repo = this.store?.getRepo(worktree.repoId)
+    if (!repo || !this.store) {
+      return true
+    }
+    return this.toRuntimeDetectedWorktree(repo, worktree).visible
+  }
+
+  private toRuntimeDetectedWorktree(repo: Repo, worktree: Worktree): DetectedWorktree {
+    const settings = this.store?.getSettings()
+    if (!settings) {
+      return {
+        ...worktree,
+        ownership: 'unknown-legacy',
+        selectedCheckout: false,
+        visible: true
+      }
+    }
+    return toDetectedWorktree({
+      repo,
+      worktree,
+      meta: this.store?.getWorktreeMeta(worktree.id),
+      settings,
+      knownOrcaLayouts: repo.connectionId ? [] : buildKnownOrcaWorkspaceLayouts(settings, repo),
+      isLegacyRepoForVisibility: isLegacyRepoForExternalWorktreeVisibility(repo)
+    })
   }
 
   async showManagedWorktree(worktreeSelector: string) {
@@ -5865,6 +6670,341 @@ export class OrcaRuntimeService {
     return { repoId: repo.id, worktreeId: worktree.id, activated: true }
   }
 
+  private async buildStartupForDraft(
+    repo: Repo,
+    draft: string,
+    requestedAgent?: TuiAgent
+  ): Promise<{
+    agent: TuiAgent
+    startup: WorktreeStartupLaunch
+    draftPaste?: WorktreeStartupDraftPaste
+  } | null> {
+    if (!this.store) {
+      return null
+    }
+    const content = draft.trim()
+    if (!content) {
+      return null
+    }
+    const settings = this.store.getSettings()
+    const preferredAgent = requestedAgent ?? settings.defaultTuiAgent
+    if (preferredAgent === 'blank') {
+      // Why: `blank` is an explicit user preference to create a shell-only
+      // workspace, so linked task drafts must not auto-pick a detected agent.
+      return null
+    }
+    let agent = isTuiAgent(preferredAgent) ? preferredAgent : null
+    if (!agent) {
+      let detected: string[] = []
+      try {
+        detected = repo.connectionId
+          ? await detectRemoteAgents({ connectionId: repo.connectionId })
+          : await detectInstalledAgents()
+      } catch {
+        detected = []
+      }
+      const typedDetected = detected.filter(isTuiAgent)
+      agent = pickTuiAgent(null, typedDetected)
+    }
+    if (!agent) {
+      return null
+    }
+
+    // Why: a mobile client can run on Windows while the workspace shell is
+    // Linux over SSH. Startup command quoting must target the shell that runs it.
+    const agentLaunchPlatform: NodeJS.Platform = repo.connectionId ? 'linux' : process.platform
+    const draftLaunchPlan = buildAgentDraftLaunchPlan({
+      agent,
+      draft: content,
+      cmdOverrides: settings.agentCmdOverrides ?? {},
+      platform: agentLaunchPlatform
+    })
+    if (draftLaunchPlan) {
+      return {
+        agent,
+        startup: {
+          command: draftLaunchPlan.launchCommand,
+          ...(draftLaunchPlan.env ? { env: draftLaunchPlan.env } : {})
+        }
+      }
+    }
+
+    const startupPlan = buildAgentStartupPlan({
+      agent,
+      prompt: '',
+      cmdOverrides: settings.agentCmdOverrides ?? {},
+      platform: agentLaunchPlatform,
+      allowEmptyPromptLaunch: true
+    })
+    if (!startupPlan) {
+      return null
+    }
+    return {
+      agent,
+      startup: {
+        command: startupPlan.launchCommand,
+        ...(startupPlan.env ? { env: startupPlan.env } : {})
+      },
+      draftPaste: { agent, content }
+    }
+  }
+
+  private markLocalWorkspaceTrustedForAgent(agent: TuiAgent, workspacePath: string): void {
+    const preset = TUI_AGENT_CONFIG[agent].preflightTrust
+    if (!preset) {
+      return
+    }
+    try {
+      if (preset === 'cursor') {
+        markCursorWorkspaceTrusted(workspacePath)
+      } else if (preset === 'copilot') {
+        markCopilotFolderTrusted(workspacePath)
+      } else if (preset === 'codex') {
+        markCodexProjectTrusted(workspacePath)
+      }
+    } catch {
+      // Best-effort: the user can still accept the agent trust prompt manually.
+    }
+  }
+
+  private async markRemoteWorkspaceTrustedForAgent(
+    agent: TuiAgent,
+    connectionId: string,
+    workspacePath: string
+  ): Promise<void> {
+    const preset = TUI_AGENT_CONFIG[agent].preflightTrust
+    if (!preset) {
+      return
+    }
+    try {
+      const home = await this.resolveRemoteHome(connectionId)
+      const fsProvider = getSshFilesystemProvider(connectionId)
+      if (!home || !fsProvider) {
+        return
+      }
+      const absPath = await this.canonicalizeRemoteWorkspacePath(fsProvider, workspacePath)
+      if (preset === 'codex') {
+        await this.markRemoteCodexProjectTrusted(fsProvider, home, absPath)
+      } else if (preset === 'cursor') {
+        await this.markRemoteCursorWorkspaceTrusted(fsProvider, home, absPath)
+      } else if (preset === 'copilot') {
+        await this.markRemoteCopilotFolderTrusted(fsProvider, home, absPath)
+      }
+    } catch {
+      // Best-effort: the user can still accept the remote agent trust prompt manually.
+    }
+  }
+
+  private async resolveRemoteHome(connectionId: string): Promise<string | null> {
+    const mux = getActiveMultiplexer(connectionId)
+    if (!mux || mux.isDisposed?.()) {
+      return null
+    }
+    const result = (await mux.request('session.resolveHome', { path: '~' })) as {
+      resolvedPath?: unknown
+    }
+    const home = typeof result.resolvedPath === 'string' ? result.resolvedPath.trim() : ''
+    return home && home.startsWith('/') && !/[\u0000\r\n]/.test(home)
+      ? home.replace(/\/$/, '')
+      : null
+  }
+
+  private async canonicalizeRemoteWorkspacePath(
+    fsProvider: IFilesystemProvider,
+    workspacePath: string
+  ): Promise<string> {
+    try {
+      return await fsProvider.realpath(workspacePath)
+    } catch {
+      return workspacePath
+    }
+  }
+
+  private async readRemoteTextFile(
+    fsProvider: IFilesystemProvider,
+    filePath: string
+  ): Promise<string> {
+    try {
+      const result = await fsProvider.readFile(filePath)
+      return result.isBinary ? '' : result.content
+    } catch {
+      return ''
+    }
+  }
+
+  private async markRemoteCodexProjectTrusted(
+    fsProvider: IFilesystemProvider,
+    remoteHome: string,
+    workspacePath: string
+  ): Promise<void> {
+    const codexDir = `${remoteHome}/.codex`
+    const configPath = `${codexDir}/config.toml`
+    const existing = await this.readRemoteTextFile(fsProvider, configPath)
+    const updated = upsertProjectTrustLevelInContent(existing, workspacePath, 'trusted')
+    if (updated === existing) {
+      return
+    }
+    await fsProvider.createDir(codexDir)
+    await fsProvider.writeFile(configPath, updated)
+  }
+
+  private async markRemoteCursorWorkspaceTrusted(
+    fsProvider: IFilesystemProvider,
+    remoteHome: string,
+    workspacePath: string
+  ): Promise<void> {
+    const slug = workspacePath.replace(/^[\\/]+/, '').replace(/[\\/]+/g, '-')
+    if (!slug) {
+      return
+    }
+    const trustDir = `${remoteHome}/.cursor/projects/${slug}`
+    const trustFile = `${trustDir}/.workspace-trusted`
+    try {
+      await fsProvider.stat(trustFile)
+      return
+    } catch {
+      // Missing marker: write the same shape the local trust preset writes.
+    }
+    await fsProvider.createDir(trustDir)
+    await fsProvider.writeFile(
+      trustFile,
+      `${JSON.stringify({ trustedAt: new Date().toISOString(), workspacePath }, null, 2)}\n`
+    )
+  }
+
+  private async markRemoteCopilotFolderTrusted(
+    fsProvider: IFilesystemProvider,
+    remoteHome: string,
+    workspacePath: string
+  ): Promise<void> {
+    const configDir = `${remoteHome}/.copilot`
+    const configPath = `${configDir}/config.json`
+    const raw = await this.readRemoteTextFile(fsProvider, configPath)
+    let config: Record<string, unknown> = {}
+    if (raw.trim()) {
+      try {
+        const parsed = JSON.parse(raw)
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          config = parsed as Record<string, unknown>
+        }
+      } catch {
+        return
+      }
+    }
+    const existing = Array.isArray(config.trustedFolders)
+      ? (config.trustedFolders as unknown[])
+      : []
+    if (existing.includes(workspacePath)) {
+      return
+    }
+    config.trustedFolders = [
+      ...existing.filter((entry) => typeof entry === 'string'),
+      workspacePath
+    ]
+    await fsProvider.createDir(configDir)
+    await fsProvider.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`)
+  }
+
+  private pasteStartupDraftWhenReady(handle: string, draft: WorktreeStartupDraftPaste): void {
+    void this.waitForStartupDraftReady(handle, draft.agent)
+      .then((ptyId) => {
+        if (!ptyId) {
+          console.warn('[worktree-create] agent did not become ready for draft paste')
+          return
+        }
+        this.ptyController?.write(
+          ptyId,
+          `${BRACKETED_PASTE_BEGIN}${draft.content}${BRACKETED_PASTE_END}`
+        )
+      })
+      .catch((error) => {
+        console.warn('[worktree-create] failed to paste startup draft:', error)
+      })
+  }
+
+  private waitForStartupDraftReady(handle: string, agent: TuiAgent): Promise<string | null> {
+    const livePty = this.getLivePtyForHandle(handle)
+    const ptyId = livePty?.pty.ptyId
+    if (!ptyId) {
+      return Promise.resolve(null)
+    }
+    const readySignal =
+      TUI_AGENT_CONFIG[agent].draftPasteReadySignal ?? 'render-quiet-after-bracketed-paste'
+    return new Promise<string | null>((resolve) => {
+      let settled = false
+      let recent = ''
+      let postHandshakeRecent = ''
+      let saw2004 = false
+      let quietTimer: NodeJS.Timeout | null = null
+      let hardTimer: NodeJS.Timeout | null = null
+      let unsubscribe: (() => void) | null = null
+
+      const finish = (value: string | null): void => {
+        if (settled) {
+          return
+        }
+        settled = true
+        if (quietTimer) {
+          clearTimeout(quietTimer)
+        }
+        if (hardTimer) {
+          clearTimeout(hardTimer)
+        }
+        unsubscribe?.()
+        resolve(value)
+      }
+
+      const armQuietTimer = (): void => {
+        if (quietTimer) {
+          clearTimeout(quietTimer)
+        }
+        quietTimer = setTimeout(() => finish(ptyId), BRACKETED_PASTE_QUIET_MS)
+      }
+
+      const observeData = (data: string): void => {
+        const combined = recent + data
+        recent = combined.slice(-512)
+        if (!saw2004) {
+          const markerIndex = combined.indexOf(DECSET_BRACKETED_PASTE)
+          if (markerIndex === -1) {
+            return
+          }
+          saw2004 = true
+          const postHandshakeChunk = combined.slice(markerIndex + DECSET_BRACKETED_PASTE.length)
+          if (readySignal === 'codex-composer-prompt') {
+            if (postHandshakeChunk.includes(CODEX_COMPOSER_PROMPT)) {
+              finish(ptyId)
+              return
+            }
+            postHandshakeRecent = postHandshakeChunk.slice(-512)
+            return
+          }
+          postHandshakeRecent = postHandshakeChunk.slice(-512)
+        } else {
+          if (
+            readySignal === 'codex-composer-prompt' &&
+            (data.includes(CODEX_COMPOSER_PROMPT) ||
+              (postHandshakeRecent + data).includes(CODEX_COMPOSER_PROMPT))
+          ) {
+            finish(ptyId)
+            return
+          }
+          postHandshakeRecent = (postHandshakeRecent + data).slice(-512)
+        }
+        if (readySignal !== 'codex-composer-prompt' && saw2004) {
+          armQuietTimer()
+        }
+      }
+
+      unsubscribe = this.subscribeToTerminalData(ptyId, observeData)
+      const replay = this.recentPtyOutputById.get(ptyId)
+      if (replay) {
+        observeData(replay)
+      }
+      hardTimer = setTimeout(() => finish(null), DRAFT_PASTE_READY_TIMEOUT_MS)
+    })
+  }
+
   async createManagedWorktree(args: {
     repoSelector: string
     name: string
@@ -5886,6 +7026,8 @@ export class OrcaRuntimeService {
     setupDecision?: 'run' | 'skip' | 'inherit'
     createdWithAgent?: TuiAgent
     startup?: WorktreeStartupLaunch
+    startupDraft?: string
+    startupDraftPaste?: WorktreeStartupDraftPaste
     lineage?: WorktreeLineageInput
   }): Promise<CreateWorktreeResult> {
     if (!this.store) {
@@ -5893,11 +7035,109 @@ export class OrcaRuntimeService {
     }
 
     const repo = await this.resolveRepoSelector(args.repoSelector)
+    const draftStartup = args.startupDraft
+      ? await this.buildStartupForDraft(repo, args.startupDraft, args.createdWithAgent)
+      : null
+    const effectiveStartup = args.startup ?? draftStartup?.startup
+    const effectiveCreatedWithAgent = args.createdWithAgent ?? draftStartup?.agent
+    const effectiveDraftPaste = args.startupDraftPaste ?? draftStartup?.draftPaste
     if (isFolderRepo(repo)) {
-      throw new Error('Folder mode does not support creating worktrees.')
+      const now = Date.now()
+      const settings = this.store.getSettings()
+      const instanceId = randomUUID()
+      const worktreeId = getRuntimeFolderWorkspaceInstanceId(repo, instanceId)
+      const meta = this.store.setWorktreeMeta(worktreeId, {
+        instanceId,
+        displayName: args.displayName?.trim() || args.name,
+        lastActivityAt: now,
+        createdAt: now,
+        orcaCreatedAt: now,
+        orcaCreationSource: 'runtime',
+        orcaCreationWorkspaceLayout: {
+          path: settings.workspaceDir,
+          nestWorkspaces: settings.nestWorkspaces
+        },
+        ...(args.linkedIssue !== undefined ? { linkedIssue: args.linkedIssue } : {}),
+        ...(args.linkedPR !== undefined ? { linkedPR: args.linkedPR } : {}),
+        ...(args.linkedLinearIssue !== undefined
+          ? { linkedLinearIssue: args.linkedLinearIssue }
+          : {}),
+        ...(args.linkedGitLabIssue !== undefined
+          ? { linkedGitLabIssue: args.linkedGitLabIssue }
+          : {}),
+        ...(args.linkedGitLabMR !== undefined ? { linkedGitLabMR: args.linkedGitLabMR } : {}),
+        ...(effectiveCreatedWithAgent ? { createdWithAgent: effectiveCreatedWithAgent } : {}),
+        ...(args.comment !== undefined ? { comment: args.comment } : {}),
+        ...(args.manualOrder !== undefined ? { manualOrder: args.manualOrder } : {}),
+        ...(args.workspaceStatus !== undefined ? { workspaceStatus: args.workspaceStatus } : {})
+      })
+      const worktree = mergeRuntimeFolderWorkspace(repo, worktreeId, meta)
+      this.invalidateResolvedWorktreeCache()
+      this.notifier?.worktreesChanged(repo.id)
+      const shouldActivate = args.activate === true || args.runHooks === true
+      let warning: string | undefined
+      let didSpawnStartup = false
+      if (effectiveStartup && this.ptyController?.spawn) {
+        try {
+          const startupTrustAgent = effectiveDraftPaste?.agent ?? effectiveCreatedWithAgent
+          if (startupTrustAgent) {
+            this.markLocalWorkspaceTrustedForAgent(startupTrustAgent, worktree.path)
+          }
+          const terminal = await this.createTerminal(`id:${worktree.id}`, {
+            command: effectiveStartup.command,
+            env: effectiveStartup.env
+          })
+          if (effectiveDraftPaste) {
+            this.pasteStartupDraftWhenReady(terminal.handle, effectiveDraftPaste)
+          }
+          didSpawnStartup = true
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          warning = `Failed to create the startup terminal for ${worktree.path}: ${message}`
+          console.warn(`[worktree-create] ${warning}`)
+        }
+      }
+      if (shouldActivate) {
+        if (effectiveStartup && !didSpawnStartup) {
+          this.notifier?.activateWorktree(repo.id, worktree.id, undefined, effectiveStartup)
+        } else {
+          this.notifier?.activateWorktree(repo.id, worktree.id)
+        }
+      } else if (this.ptyController?.spawn && !didSpawnStartup) {
+        try {
+          await this.createTerminal(`id:${worktree.id}`)
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          warning = warning
+            ? `${warning} Also failed to create the initial terminal for ${worktree.path}: ${message}`
+            : `Failed to create the initial terminal for ${worktree.path}: ${message}`
+          console.warn(`[worktree-create] ${warning}`)
+        }
+      }
+      return {
+        worktree: {
+          ...worktree,
+          parentWorktreeId: null,
+          childWorktreeIds: [],
+          lineage: null,
+          git: {
+            path: worktree.path,
+            head: worktree.head,
+            branch: worktree.branch,
+            isBare: worktree.isBare,
+            isMainWorktree: worktree.isMainWorktree
+          }
+        },
+        ...(warning ? { warning } : {})
+      }
     }
     if (repo.connectionId) {
-      return await this.createManagedRemoteWorktree(repo, args)
+      return await this.createManagedRemoteWorktree(repo, {
+        ...args,
+        ...(effectiveStartup ? { startup: effectiveStartup } : {}),
+        ...(effectiveCreatedWithAgent ? { createdWithAgent: effectiveCreatedWithAgent } : {}),
+        ...(effectiveDraftPaste ? { startupDraftPaste: effectiveDraftPaste } : {})
+      })
     }
     const lineageInput =
       args.lineage || args.comment ? { ...args.lineage, comment: args.comment } : undefined
@@ -5926,23 +7166,32 @@ export class OrcaRuntimeService {
       )
     }
 
-    const branchConflictKind = await getBranchConflictKind(repo.path, branchName, baseBranch)
+    const checkoutExistingBranch = await canCheckoutExistingLocalBranch(
+      repo.path,
+      branchName,
+      baseBranch
+    )
+    const branchConflictKind = checkoutExistingBranch
+      ? null
+      : await getBranchConflictKind(repo.path, branchName, baseBranch)
     if (branchConflictKind) {
       throw new Error(
         `Branch "${branchName}" already exists ${branchConflictKind === 'local' ? 'locally' : 'on a remote'}.`
       )
     }
 
-    let existingPR: Awaited<ReturnType<typeof getPRForBranch>> | null = null
-    try {
-      existingPR = await getPRForBranch(repo.path, branchName)
-    } catch {
-      // Why: worktree creation should not hard-fail on transient GitHub reachability
-      // issues because git state is still the source of truth for whether the
-      // worktree can be created locally.
-    }
-    if (existingPR) {
-      throw new Error(`Branch "${branchName}" already has PR #${existingPR.number}.`)
+    if (!checkoutExistingBranch) {
+      let existingPR: Awaited<ReturnType<typeof getPRForBranch>> | null = null
+      try {
+        existingPR = await getPRForBranch(repo.path, branchName)
+      } catch {
+        // Why: worktree creation should not hard-fail on transient GitHub reachability
+        // issues because git state is still the source of truth for whether the
+        // worktree can be created locally.
+      }
+      if (existingPR) {
+        throw new Error(`Branch "${branchName}" already has PR #${existingPR.number}.`)
+      }
     }
 
     let worktreePath = computeWorktreePath(sanitizedName, repo.path, settings)
@@ -6002,22 +7251,45 @@ export class OrcaRuntimeService {
       )
     }
 
-    await (sparseDirectories.length > 0
-      ? addSparseWorktree(
-          repo.path,
-          worktreePath,
-          branchName,
-          sparseDirectories,
-          baseBranch,
-          settings.refreshLocalBaseRefOnWorktreeCreate
-        )
-      : addWorktree(
-          repo.path,
-          worktreePath,
-          branchName,
-          baseBranch,
-          settings.refreshLocalBaseRefOnWorktreeCreate
-        ))
+    const existingBranchOption = { checkoutExistingBranch }
+    if (sparseDirectories.length > 0) {
+      await (checkoutExistingBranch
+        ? addSparseWorktree(
+            repo.path,
+            worktreePath,
+            branchName,
+            sparseDirectories,
+            baseBranch,
+            settings.refreshLocalBaseRefOnWorktreeCreate,
+            existingBranchOption
+          )
+        : addSparseWorktree(
+            repo.path,
+            worktreePath,
+            branchName,
+            sparseDirectories,
+            baseBranch,
+            settings.refreshLocalBaseRefOnWorktreeCreate
+          ))
+    } else {
+      await (checkoutExistingBranch
+        ? addWorktree(
+            repo.path,
+            worktreePath,
+            branchName,
+            baseBranch,
+            settings.refreshLocalBaseRefOnWorktreeCreate,
+            false,
+            existingBranchOption
+          )
+        : addWorktree(
+            repo.path,
+            worktreePath,
+            branchName,
+            baseBranch,
+            settings.refreshLocalBaseRefOnWorktreeCreate
+          ))
+    }
 
     let configuredPushTarget: GitPushTarget | undefined
     if (preparedPushTarget) {
@@ -6052,8 +7324,15 @@ export class OrcaRuntimeService {
       // push it down before the user has had a chance to notice it. Smart-sort
       // uses max(lastActivityAt, createdAt + CREATE_GRACE_MS).
       createdAt: now,
+      orcaCreatedAt: now,
+      orcaCreationSource: 'runtime',
+      orcaCreationWorkspaceLayout: {
+        path: settings.workspaceDir,
+        nestWorkspaces: settings.nestWorkspaces
+      },
       ...displayNameMeta,
       baseRef: baseBranch,
+      ...(checkoutExistingBranch ? { preserveBranchOnDelete: true } : {}),
       ...(configuredPushTarget ? { pushTarget: configuredPushTarget } : {}),
       ...(sparseDirectories.length > 0
         ? {
@@ -6067,11 +7346,11 @@ export class OrcaRuntimeService {
       ...(args.linkedLinearIssue !== undefined
         ? { linkedLinearIssue: args.linkedLinearIssue }
         : {}),
-      ...(args.linkedGitLabMR !== undefined ? { linkedGitLabMR: args.linkedGitLabMR } : {}),
       ...(args.linkedGitLabIssue !== undefined
         ? { linkedGitLabIssue: args.linkedGitLabIssue }
         : {}),
-      ...(args.createdWithAgent ? { createdWithAgent: args.createdWithAgent } : {}),
+      ...(args.linkedGitLabMR !== undefined ? { linkedGitLabMR: args.linkedGitLabMR } : {}),
+      ...(effectiveCreatedWithAgent ? { createdWithAgent: effectiveCreatedWithAgent } : {}),
       ...(args.comment !== undefined ? { comment: args.comment } : {}),
       ...(args.manualOrder !== undefined ? { manualOrder: args.manualOrder } : {}),
       ...(args.workspaceStatus !== undefined ? { workspaceStatus: args.workspaceStatus } : {})
@@ -6175,16 +7454,25 @@ export class OrcaRuntimeService {
     const shouldActivate = args.activate === true || args.runHooks === true
     let didSpawnStartup = false
     let didSpawnSetup = false
-    if (args.startup && this.ptyController?.spawn) {
+    let startupTerminalHandle: string | null = null
+    if (effectiveStartup && this.ptyController?.spawn) {
       try {
         // Why: automation startup must not depend on a renderer TerminalPane
         // mounting. Runtime-spawned PTYs run immediately and the UI adopts the
         // session later, matching `orca terminal create` background semantics.
-        await this.createTerminal(`id:${worktree.id}`, {
-          command: args.startup.command,
-          env: args.startup.env
+        const startupTrustAgent = effectiveDraftPaste?.agent ?? effectiveCreatedWithAgent
+        if (startupTrustAgent) {
+          this.markLocalWorkspaceTrustedForAgent(startupTrustAgent, worktreePath)
+        }
+        const terminal = await this.createTerminal(`id:${worktree.id}`, {
+          command: effectiveStartup.command,
+          env: effectiveStartup.env
         })
+        if (effectiveDraftPaste) {
+          this.pasteStartupDraftWhenReady(terminal.handle, effectiveDraftPaste)
+        }
         didSpawnStartup = true
+        startupTerminalHandle = terminal.handle
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         warning = warning
@@ -6196,16 +7484,32 @@ export class OrcaRuntimeService {
     if (didSpawnStartup && setup && this.ptyController?.spawn) {
       try {
         // Why: reveal-on-adopt can create the startup tab before renderer
-        // activation handles setup. Spawn setup in runtime too so startup+setup
-        // cannot be skipped by the renderer's "terminal already exists" guard.
-        await this.createTerminal(`id:${worktree.id}`, {
-          title: 'Setup',
-          command: buildSetupRunnerCommand(
-            setup.runnerScriptPath,
-            process.platform === 'win32' ? 'windows' : 'posix'
-          ),
-          env: setup.envVars
-        })
+        // activation handles setup. Honor the same split-vs-tab setting here
+        // because renderer activation will skip setup once the startup tab exists.
+        const setupCommand = buildSetupRunnerCommand(
+          setup.runnerScriptPath,
+          process.platform === 'win32' ? 'windows' : 'posix'
+        )
+        const setupLaunchMode =
+          (this.store.getSettings() as Partial<Pick<GlobalSettings, 'setupScriptLaunchMode'>>)
+            .setupScriptLaunchMode ?? 'new-tab'
+        if (setupLaunchMode === 'split-vertical' || setupLaunchMode === 'split-horizontal') {
+          if (!startupTerminalHandle) {
+            throw new Error('startup_terminal_missing')
+          }
+          await this.splitTerminal(startupTerminalHandle, {
+            direction: setupLaunchMode === 'split-horizontal' ? 'horizontal' : 'vertical',
+            command: setupCommand,
+            env: setup.envVars,
+            activate: false
+          })
+        } else {
+          await this.createTerminal(`id:${worktree.id}`, {
+            title: 'Setup',
+            command: setupCommand,
+            env: setup.envVars
+          })
+        }
         didSpawnSetup = true
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
@@ -6220,8 +7524,8 @@ export class OrcaRuntimeService {
       // Explicit activation and hook-running still use renderer activation so
       // the user can watch prompts/output in a visible pane.
       const activationSetup = didSpawnSetup ? undefined : setup
-      if (args.startup && !didSpawnStartup) {
-        this.notifier?.activateWorktree(repo.id, worktree.id, activationSetup, args.startup)
+      if (effectiveStartup && !didSpawnStartup) {
+        this.notifier?.activateWorktree(repo.id, worktree.id, activationSetup, effectiveStartup)
       } else {
         this.notifier?.activateWorktree(repo.id, worktree.id, activationSetup)
       }
@@ -6283,6 +7587,7 @@ export class OrcaRuntimeService {
       setupDecision?: 'run' | 'skip' | 'inherit'
       createdWithAgent?: TuiAgent
       startup?: WorktreeStartupLaunch
+      startupDraftPaste?: WorktreeStartupDraftPaste
     }
   ): Promise<CreateWorktreeResult> {
     if (!this.store) {
@@ -6330,22 +7635,97 @@ export class OrcaRuntimeService {
     this.invalidateResolvedWorktreeCache()
     this.notifier?.worktreesChanged(repo.id)
 
+    let warning = result.warning
+    let didSpawnStartup = false
+    let didSpawnSetup = false
+    let startupTerminalHandle: string | null = null
     if (args.startup && this.ptyController?.spawn) {
       try {
-        await this.createTerminal(`path:${result.worktree.path}`, {
+        const startupTrustAgent = args.startupDraftPaste?.agent ?? args.createdWithAgent
+        if (startupTrustAgent) {
+          await this.markRemoteWorkspaceTrustedForAgent(
+            startupTrustAgent,
+            repo.connectionId!,
+            result.worktree.path
+          )
+        }
+        const terminal = await this.createTerminal(`path:${result.worktree.path}`, {
           command: args.startup.command,
           env: args.startup.env
         })
+        if (args.startupDraftPaste) {
+          this.pasteStartupDraftWhenReady(terminal.handle, args.startupDraftPaste)
+        }
+        didSpawnStartup = true
+        startupTerminalHandle = terminal.handle
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
-        return {
-          ...result,
-          warning: `Failed to create the startup terminal for ${result.worktree.path}: ${message}`
-        }
+        warning = warning
+          ? `${warning} Also failed to create the startup terminal for ${result.worktree.path}: ${message}`
+          : `Failed to create the startup terminal for ${result.worktree.path}: ${message}`
       }
     }
 
-    return result
+    if (didSpawnStartup && result.setup && this.ptyController?.spawn) {
+      try {
+        // Why: remote/mobile task creates spawn the agent terminal in runtime,
+        // so renderer activation never receives the setup payload. Runtime
+        // must apply the same user-selected split-vs-tab setup placement.
+        const setupCommand = buildSetupRunnerCommand(
+          result.setup.runnerScriptPath,
+          isWindowsAbsolutePathLike(result.setup.runnerScriptPath) ? 'windows' : 'posix'
+        )
+        const setupLaunchMode =
+          (this.store.getSettings() as Partial<Pick<GlobalSettings, 'setupScriptLaunchMode'>>)
+            .setupScriptLaunchMode ?? 'new-tab'
+        if (setupLaunchMode === 'split-vertical' || setupLaunchMode === 'split-horizontal') {
+          if (!startupTerminalHandle) {
+            throw new Error('startup_terminal_missing')
+          }
+          await this.splitTerminal(startupTerminalHandle, {
+            direction: setupLaunchMode === 'split-horizontal' ? 'horizontal' : 'vertical',
+            command: setupCommand,
+            env: result.setup.envVars,
+            activate: false
+          })
+        } else {
+          await this.createTerminal(`path:${result.worktree.path}`, {
+            title: 'Setup',
+            command: setupCommand,
+            env: result.setup.envVars
+          })
+        }
+        didSpawnSetup = true
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        warning = warning
+          ? `${warning} Also failed to create the setup terminal for ${result.worktree.path}: ${message}`
+          : `Failed to create the setup terminal for ${result.worktree.path}: ${message}`
+      }
+    }
+
+    if (!args.startup && this.ptyController?.spawn) {
+      try {
+        await this.createTerminal(`path:${result.worktree.path}`)
+        if (result.setup && !didSpawnSetup) {
+          await this.createTerminal(`path:${result.worktree.path}`, {
+            title: 'Setup',
+            command: buildSetupRunnerCommand(
+              result.setup.runnerScriptPath,
+              isWindowsAbsolutePathLike(result.setup.runnerScriptPath) ? 'windows' : 'posix'
+            ),
+            env: result.setup.envVars
+          })
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        warning = warning
+          ? `${warning} Also failed to create the initial terminal for ${result.worktree.path}: ${message}`
+          : `Failed to create the initial terminal for ${result.worktree.path}: ${message}`
+      }
+    }
+
+    return warning ? { ...result, warning } : result
   }
 
   /**
@@ -6793,7 +8173,7 @@ export class OrcaRuntimeService {
   }
 
   async resolveManagedPrBase(args: {
-    repoId: string
+    repoSelector: string
     prNumber: number
     headRefName?: string
     isCrossRepository?: boolean
@@ -6801,25 +8181,275 @@ export class OrcaRuntimeService {
     if (!this.store) {
       throw new Error('runtime_unavailable')
     }
-    const repo = this.store.getRepo(args.repoId)
-    if (!repo) {
+    let repo: Repo
+    try {
+      repo = await this.resolveRepoSelector(args.repoSelector)
+    } catch {
       return { error: 'Repo not found' }
-    }
-    if (repo.connectionId) {
-      return { error: 'PR start points are not supported for remote repos yet.' }
     }
     if (isFolderRepo(repo)) {
       return { error: 'Folder mode does not support creating worktrees.' }
     }
+    const sshGitProvider = repo.connectionId ? requireSshGitProvider(repo.connectionId) : null
+    const gitExec = sshGitProvider
+      ? (gitArgs: string[]) => sshGitProvider.exec(gitArgs, repo.path)
+      : (gitArgs: string[]) => gitExecFileAsync(gitArgs, { cwd: repo.path })
+    const resolveRemote = sshGitProvider
+      ? async () => {
+          const { stdout } = await sshGitProvider.exec(['remote'], repo.path)
+          const remotes = stdout
+            .split('\n')
+            .map((line) => line.trim())
+            .filter(Boolean)
+          if (remotes.includes('origin')) {
+            return 'origin'
+          }
+          if (remotes.length === 1) {
+            return remotes[0]!
+          }
+          if (remotes.length === 0) {
+            throw new Error('Repo has no configured git remotes.')
+          }
+          throw new Error(
+            `Repo has multiple remotes (${remotes.join(', ')}) and no default is configured.`
+          )
+        }
+      : () => getDefaultRemote(repo.path)
 
     return resolveGitHubPrStartPoint({
       repoPath: repo.path,
       prNumber: args.prNumber,
       headRefName: args.headRefName,
       isCrossRepository: args.isCrossRepository,
-      gitExec: (gitArgs) => gitExecFileAsync(gitArgs, { cwd: repo.path }),
-      resolveRemote: () => getDefaultRemote(repo.path)
+      connectionId: repo.connectionId ?? null,
+      gitExec,
+      resolveRemote
     })
+  }
+
+  async resolveManagedMrBase(args: {
+    repoSelector: string
+    mrIid: number
+    sourceBranch?: string
+    isCrossRepository?: boolean
+  }): Promise<{ baseBranch: string; pushTarget?: GitPushTarget } | { error: string }> {
+    if (!this.store) {
+      throw new Error('runtime_unavailable')
+    }
+    let repo: Repo
+    try {
+      repo = await this.resolveRepoSelector(args.repoSelector)
+    } catch {
+      return { error: 'Repo not found' }
+    }
+    if (isFolderRepo(repo)) {
+      return { error: 'Folder mode does not support creating worktrees.' }
+    }
+    const sshGitProvider = repo.connectionId ? requireSshGitProvider(repo.connectionId) : null
+    const gitExec = sshGitProvider
+      ? (gitArgs: string[]) => sshGitProvider.exec(gitArgs, repo.path)
+      : (gitArgs: string[]) => gitExecFileAsync(gitArgs, { cwd: repo.path })
+
+    let sourceBranch = args.sourceBranch?.trim() ?? ''
+    let isCrossRepository = args.isCrossRepository === true
+
+    if (!sourceBranch) {
+      let remote: string
+      try {
+        remote = await this.resolveGitLabIssueSourceRemote(
+          repo.path,
+          repo.issueSourcePreference,
+          repo.connectionId ?? null
+        )
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : 'Could not resolve git remote.' }
+      }
+      const knownHosts = await getGlabKnownHosts()
+      const projectRef = await getGitLabProjectRefForRemote(
+        repo.path,
+        remote,
+        knownHosts,
+        repo.connectionId ?? null
+      )
+      if (!projectRef) {
+        return { error: 'No GitLab project found for this repository.' }
+      }
+      const item = await getGitLabWorkItemByProjectRef(
+        repo.path,
+        projectRef,
+        args.mrIid,
+        'mr',
+        repo.connectionId ?? null
+      )
+      if (!item || item.type !== 'mr') {
+        return { error: `MR !${args.mrIid} not found.` }
+      }
+      sourceBranch = (item.branchName ?? '').trim()
+      if (!sourceBranch) {
+        return { error: `MR !${args.mrIid} has no source branch.` }
+      }
+      if (item.isCrossRepository === true) {
+        isCrossRepository = true
+      }
+    }
+
+    let remote: string
+    try {
+      remote = await this.resolveGitLabIssueSourceRemote(
+        repo.path,
+        repo.issueSourcePreference,
+        repo.connectionId ?? null
+      )
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : 'Could not resolve git remote.' }
+    }
+
+    if (isCrossRepository) {
+      const mrRef = `refs/merge-requests/${args.mrIid}/head`
+      // Why: GitLab exposes fork MR heads on the target project, so mobile/SSH
+      // can match desktop without adding the contributor fork as a remote.
+      try {
+        await gitExec(['fetch', remote, mrRef])
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        return { error: `Failed to fetch ${mrRef}: ${message.split('\n')[0]}` }
+      }
+      let sha: string
+      try {
+        const { stdout } = await gitExec(['rev-parse', '--verify', 'FETCH_HEAD'])
+        sha = stdout.trim()
+      } catch {
+        return { error: `Could not resolve fork MR !${args.mrIid} head after fetch.` }
+      }
+      if (!sha) {
+        return { error: `Empty SHA resolving fork MR !${args.mrIid} head.` }
+      }
+      return { baseBranch: sha }
+    }
+
+    try {
+      await gitExec([
+        'fetch',
+        remote,
+        `+refs/heads/${sourceBranch}:refs/remotes/${remote}/${sourceBranch}`
+      ])
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return { error: `Failed to fetch ${remote}/${sourceBranch}: ${message.split('\n')[0]}` }
+    }
+
+    const remoteRef = `${remote}/${sourceBranch}`
+    try {
+      await gitExec(['rev-parse', '--verify', remoteRef])
+    } catch {
+      return { error: `Remote ref ${remoteRef} does not exist after fetch.` }
+    }
+    return { baseBranch: remoteRef, pushTarget: { remoteName: remote, branchName: sourceBranch } }
+  }
+
+  private async resolveGitLabIssueSourceRemote(
+    repoPath: string,
+    preference?: Repo['issueSourcePreference'],
+    connectionId?: string | null
+  ): Promise<string> {
+    const knownHosts = await getGlabKnownHosts()
+    if (preference === 'origin') {
+      const origin = await getGitLabProjectRefForRemote(
+        repoPath,
+        'origin',
+        knownHosts,
+        connectionId
+      )
+      if (origin) {
+        return 'origin'
+      }
+      throw new Error('No GitLab project found for origin.')
+    }
+    if (preference === 'upstream') {
+      const upstream = await getGitLabProjectRefForRemote(
+        repoPath,
+        'upstream',
+        knownHosts,
+        connectionId
+      )
+      if (upstream) {
+        return 'upstream'
+      }
+      const origin = await getGitLabProjectRefForRemote(
+        repoPath,
+        'origin',
+        knownHosts,
+        connectionId
+      )
+      if (origin) {
+        return 'origin'
+      }
+      throw new Error('No GitLab project found for upstream or origin.')
+    }
+    const upstream = await getGitLabProjectRefForRemote(
+      repoPath,
+      'upstream',
+      knownHosts,
+      connectionId
+    )
+    if (upstream) {
+      return 'upstream'
+    }
+    const origin = await getGitLabProjectRefForRemote(repoPath, 'origin', knownHosts, connectionId)
+    if (origin) {
+      return 'origin'
+    }
+    if (connectionId) {
+      const provider = requireSshGitProvider(connectionId)
+      const { stdout } = await provider.exec(['remote'], repoPath)
+      const remotes = stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+      if (remotes.includes('origin')) {
+        return 'origin'
+      }
+      if (remotes.length === 1) {
+        return remotes[0]!
+      }
+      if (remotes.length === 0) {
+        throw new Error('Repo has no configured git remotes.')
+      }
+      throw new Error(
+        `Repo has multiple remotes (${remotes.join(', ')}) and no default is configured.`
+      )
+    }
+    return getDefaultRemote(repoPath)
+  }
+
+  private async resolveWorktreeRemovalTarget(
+    worktreeSelector: string,
+    force: boolean
+  ): Promise<RuntimeWorktreeRemovalTarget> {
+    try {
+      const worktree = await this.resolveWorktreeSelector(worktreeSelector)
+      const removalTarget = {
+        id: worktree.id,
+        repoId: worktree.repoId,
+        path: worktree.path
+      }
+      return worktree.pushTarget
+        ? { ...removalTarget, pushTarget: worktree.pushTarget }
+        : removalTarget
+    } catch (error) {
+      if (!force || !(error instanceof Error) || error.message !== 'selector_not_found') {
+        throw error
+      }
+      const removalTarget = parseExactWorktreeIdSelector(worktreeSelector)
+      const meta = removalTarget ? this.store?.getWorktreeMeta(removalTarget.id) : undefined
+      if (!removalTarget || !meta) {
+        throw error
+      }
+      // Why: force-delete retries can arrive after Git no longer lists the
+      // worktree. Only exact IDs with persisted Orca metadata are accepted here
+      // so branch/path selectors cannot resolve to an arbitrary missing path.
+      return meta.pushTarget ? { ...removalTarget, pushTarget: meta.pushTarget } : removalTarget
+    }
   }
 
   async removeManagedWorktree(
@@ -6830,131 +8460,217 @@ export class OrcaRuntimeService {
     if (!this.store) {
       throw new Error('runtime_unavailable')
     }
-    const worktree = await this.resolveWorktreeSelector(worktreeSelector)
-    const repo = this.store.getRepo(worktree.repoId)
-    if (!repo) {
-      throw new Error('repo_not_found')
-    }
-    if (isFolderRepo(repo)) {
-      throw new Error('Folder mode does not support deleting worktrees.')
-    }
-    if (repo.connectionId) {
-      const provider = requireSshGitProvider(repo.connectionId)
-      await provider.removeWorktree(worktree.path, force)
-      await cleanupUnusedWorktreePushTargetRemoteSsh(
-        provider,
-        repo.path,
-        worktree.id,
-        worktree.pushTarget,
-        this.store
-      )
-      this.clearOptimisticReconcileToken(worktree.id)
-      this.store.removeWorktreeMeta(worktree.id)
-      this.invalidateResolvedWorktreeCache()
-      invalidateAuthorizedRootsCache()
-      this.notifier?.worktreesChanged(repo.id)
-      return {}
-    }
-
-    const hooks = getEffectiveHooks(repo)
-    let warning: string | undefined
-    if (hooks?.scripts.archive && runHooks) {
-      const result = await runHook('archive', worktree.path, repo)
-      if (!result.success) {
-        console.error(`[hooks] archive hook failed for ${worktree.path}:`, result.output)
+    const store = this.store
+    const removalTarget = await this.resolveWorktreeRemovalTarget(worktreeSelector, force)
+    const optionsKey = getRuntimeWorktreeRemovalOptionsKey(force, runHooks)
+    const inFlightRemoval = this.removeManagedWorktreeInFlight.get(removalTarget.id)
+    if (inFlightRemoval) {
+      if (inFlightRemoval.optionsKey === optionsKey) {
+        return inFlightRemoval.promise
       }
-    } else if (hooks?.scripts.archive) {
-      // Runtime RPC calls have no renderer trust prompt, so hooks require explicit CLI opt-in.
-      warning = `orca.yaml archive hook skipped for ${worktree.path}; pass --run-hooks to run it.`
-      console.warn(`[hooks] ${warning}`)
+      throw new Error(`Worktree deletion already in progress: ${removalTarget.id}`)
     }
 
-    let shouldTearDownPtys = true
-    try {
-      await assertWorktreeCleanForRemoval(worktree.path, force)
-    } catch (error) {
-      if (!isOrphanCompatiblePreflightError(error)) {
-        throw new Error(formatWorktreeRemovalError(error, worktree.path, force))
+    // Why: runtime callers can race the same workspace through CLI/mobile
+    // retries. Share one destructive Git/filesystem operation per worktree ID.
+    const removal = (async (): Promise<{ warning?: string }> => {
+      const repo = store.getRepo(removalTarget.repoId)
+      if (!repo) {
+        throw new Error('repo_not_found')
       }
-      // Why: orphan cleanup does not need live shells to be killed first,
-      // and preflight did not prove the worktree is cleanly removable.
-      shouldTearDownPtys = false
-    }
-
-    const localProvider = this.getLocalProvider()
-    if (localProvider && shouldTearDownPtys) {
-      // Why: once preflight proves normal deletion is clean, kill PTYs before
-      // git-level removal so shells cannot keep the directory busy. This also
-      // closes the headless-CLI leak for confirmed-removable worktrees.
-      await killAllProcessesForWorktree(worktree.id, {
-        runtime: this,
-        localProvider
-      })
-        .then((r) => {
-          const total = r.runtimeStopped + r.providerStopped + r.registryStopped
-          if (total > 0) {
-            // Why (design §4.4 observability): breadcrumb lets ops
-            // distinguish a renderer-state-induced leak (diff-path purge
-            // non-empty) from a backend-induced one (nothing to kill but
-            // memory still pinned). Emit only when the sweep actually did
-            // work so steady-state logs stay quiet.
-            console.info(
-              `[worktree-teardown] ${worktree.id} killed runtime=${r.runtimeStopped} provider=${r.providerStopped} registry=${r.registryStopped}`
-            )
-          }
-        })
-        .catch((err) => {
-          console.warn(`[worktree-teardown] failed for ${worktree.id}:`, err)
-        })
-    }
-
-    try {
-      await removeWorktree(repo.path, worktree.path, force)
-    } catch (error) {
-      if (isOrphanedWorktreeError(error)) {
-        if (await canSafelyRemoveOrphanedWorktreeDirectory(worktree.path, repo.path)) {
-          await rm(worktree.path, { recursive: true, force: true }).catch(() => {})
-        } else {
-          console.warn(
-            `[worktrees] Refusing recursive cleanup for unproven worktree directory: ${worktree.path}`
+      if (isFolderRepo(repo)) {
+        if (removalTarget.id === getRuntimeFolderWorkspaceRootId(repo)) {
+          throw new Error(
+            'Cannot delete the project root workspace. Remove the folder project instead.'
           )
         }
-        // Why: `git worktree remove` failed, so git's internal worktree tracking
-        // (`.git/worktrees/<name>`) is still intact. Without pruning, `git worktree
-        // list` continues to show the stale entry and the branch it had checked out
-        // remains locked — other worktrees cannot check it out.
-        await gitExecFileAsync(['worktree', 'prune'], { cwd: repo.path }).catch(() => {})
-        await cleanupUnusedWorktreePushTargetRemote(
+        const localProvider = this.getLocalProvider()
+        if (localProvider) {
+          // Why: folder workspace deletion has no Git removal phase where PTYs
+          // would otherwise be swept; tear them down before hiding the workspace.
+          await killAllProcessesForWorktree(removalTarget.id, {
+            runtime: this,
+            localProvider
+          }).catch((err) => {
+            console.warn(`[worktree-teardown] failed for ${removalTarget.id}:`, err)
+          })
+        }
+        store.removeWorktreeMeta(removalTarget.id)
+        deleteWorktreeHistoryDir(removalTarget.id)
+        this.invalidateResolvedWorktreeCache()
+        this.notifier?.worktreesChanged(repo.id)
+        return {}
+      }
+      const provider = repo.connectionId ? requireSshGitProvider(repo.connectionId) : null
+      const registeredWorktrees = repo.connectionId
+        ? await provider!.listWorktrees(repo.path)
+        : await listWorktrees(repo.path)
+      const removedMeta = store.getWorktreeMeta(removalTarget.id)
+      const removedPushTarget = removedMeta?.pushTarget ?? removalTarget.pushTarget
+      const registeredWorktree = findRegisteredDeletableWorktree(
+        repo.path,
+        removalTarget.path,
+        registeredWorktrees
+      )
+      if (!registeredWorktree) {
+        if (force && (await isRuntimeWorktreePathMissing(repo, removalTarget.path))) {
+          // Why: runtime clients can retry a force delete after another surface
+          // already removed the worktree. Finish Orca cleanup without touching
+          // any unregistered path that still exists.
+          await (repo.connectionId
+            ? cleanupUnusedWorktreePushTargetRemoteSsh(
+                provider!,
+                repo.path,
+                removalTarget.id,
+                removedPushTarget,
+                store
+              )
+            : cleanupUnusedWorktreePushTargetRemote(
+                repo.path,
+                removalTarget.id,
+                removedPushTarget,
+                store
+              ))
+          this.clearOptimisticReconcileToken(removalTarget.id)
+          store.removeWorktreeMeta(removalTarget.id)
+          this.invalidateResolvedWorktreeCache()
+          invalidateAuthorizedRootsCache()
+          this.notifier?.worktreesChanged(repo.id)
+          return {}
+        }
+        throw new Error(`Refusing to delete unregistered worktree path: ${removalTarget.path}`)
+      }
+      const canonicalWorktreePath = registeredWorktree.path
+      const deleteBranch = removedMeta?.preserveBranchOnDelete !== true
+      if (repo.connectionId) {
+        await (deleteBranch
+          ? provider!.removeWorktree(canonicalWorktreePath, force)
+          : provider!.removeWorktree(canonicalWorktreePath, force, { deleteBranch }))
+        await cleanupUnusedWorktreePushTargetRemoteSsh(
+          provider!,
           repo.path,
-          worktree.id,
-          worktree.pushTarget,
-          this.store
+          removalTarget.id,
+          removedPushTarget,
+          store
         )
-        this.clearOptimisticReconcileToken(worktree.id)
-        this.store.removeWorktreeMeta(worktree.id)
+        this.clearOptimisticReconcileToken(removalTarget.id)
+        store.removeWorktreeMeta(removalTarget.id)
         this.invalidateResolvedWorktreeCache()
         invalidateAuthorizedRootsCache()
         this.notifier?.worktreesChanged(repo.id)
-        return {
-          ...(warning ? { warning } : {})
-        }
+        return {}
       }
-      throw new Error(formatWorktreeRemovalError(error, worktree.path, force))
-    }
 
-    await cleanupUnusedWorktreePushTargetRemote(
-      repo.path,
-      worktree.id,
-      worktree.pushTarget,
-      this.store
-    )
-    this.clearOptimisticReconcileToken(worktree.id)
-    this.store.removeWorktreeMeta(worktree.id)
-    this.invalidateResolvedWorktreeCache()
-    invalidateAuthorizedRootsCache()
-    this.notifier?.worktreesChanged(repo.id)
-    return {
-      ...(warning ? { warning } : {})
+      const hooks = getEffectiveHooks(repo)
+      let warning: string | undefined
+      if (hooks?.scripts.archive && runHooks) {
+        const result = await runHook('archive', canonicalWorktreePath, repo)
+        if (!result.success) {
+          console.error(`[hooks] archive hook failed for ${canonicalWorktreePath}:`, result.output)
+        }
+      } else if (hooks?.scripts.archive) {
+        // Runtime RPC calls have no renderer trust prompt, so hooks require explicit CLI opt-in.
+        warning = `orca.yaml archive hook skipped for ${canonicalWorktreePath}; pass --run-hooks to run it.`
+        console.warn(`[hooks] ${warning}`)
+      }
+
+      let shouldTearDownPtys = true
+      try {
+        await assertWorktreeCleanForRemoval(canonicalWorktreePath, force)
+      } catch (error) {
+        if (!isOrphanCompatiblePreflightError(error)) {
+          throw new Error(formatWorktreeRemovalError(error, canonicalWorktreePath, force))
+        }
+        // Why: orphan cleanup does not need live shells to be killed first,
+        // and preflight did not prove the worktree is cleanly removable.
+        shouldTearDownPtys = false
+      }
+
+      const localProvider = this.getLocalProvider()
+      if (localProvider && shouldTearDownPtys) {
+        // Why: once preflight proves normal deletion is clean, kill PTYs before
+        // git-level removal so shells cannot keep the directory busy. This also
+        // closes the headless-CLI leak for confirmed-removable worktrees.
+        await killAllProcessesForWorktree(removalTarget.id, {
+          runtime: this,
+          localProvider
+        })
+          .then((r) => {
+            const total = r.runtimeStopped + r.providerStopped + r.registryStopped
+            if (total > 0) {
+              // Why (design §4.4 observability): breadcrumb lets ops
+              // distinguish a renderer-state-induced leak (diff-path purge
+              // non-empty) from a backend-induced one (nothing to kill but
+              // memory still pinned). Emit only when the sweep actually did
+              // work so steady-state logs stay quiet.
+              console.info(
+                `[worktree-teardown] ${removalTarget.id} killed runtime=${r.runtimeStopped} provider=${r.providerStopped} registry=${r.registryStopped}`
+              )
+            }
+          })
+          .catch((err) => {
+            console.warn(`[worktree-teardown] failed for ${removalTarget.id}:`, err)
+          })
+      }
+
+      try {
+        await (deleteBranch
+          ? removeWorktree(repo.path, canonicalWorktreePath, force)
+          : removeWorktree(repo.path, canonicalWorktreePath, force, { deleteBranch }))
+      } catch (error) {
+        if (isOrphanedWorktreeError(error)) {
+          if (await canSafelyRemoveOrphanedWorktreeDirectory(canonicalWorktreePath, repo.path)) {
+            await rm(canonicalWorktreePath, { recursive: true, force: true }).catch(() => {})
+          } else {
+            console.warn(
+              `[worktrees] Refusing recursive cleanup for unproven worktree directory: ${canonicalWorktreePath}`
+            )
+          }
+          // Why: `git worktree remove` failed, so git's internal worktree tracking
+          // (`.git/worktrees/<name>`) is still intact. Without pruning, `git worktree
+          // list` continues to show the stale entry and the branch it had checked out
+          // remains locked — other worktrees cannot check it out.
+          await gitExecFileAsync(['worktree', 'prune'], { cwd: repo.path }).catch(() => {})
+          await cleanupUnusedWorktreePushTargetRemote(
+            repo.path,
+            removalTarget.id,
+            removedPushTarget,
+            store
+          )
+          this.clearOptimisticReconcileToken(removalTarget.id)
+          store.removeWorktreeMeta(removalTarget.id)
+          this.invalidateResolvedWorktreeCache()
+          invalidateAuthorizedRootsCache()
+          this.notifier?.worktreesChanged(repo.id)
+          return {
+            ...(warning ? { warning } : {})
+          }
+        }
+        throw new Error(formatWorktreeRemovalError(error, canonicalWorktreePath, force))
+      }
+
+      await cleanupUnusedWorktreePushTargetRemote(
+        repo.path,
+        removalTarget.id,
+        removedPushTarget,
+        store
+      )
+      this.clearOptimisticReconcileToken(removalTarget.id)
+      store.removeWorktreeMeta(removalTarget.id)
+      this.invalidateResolvedWorktreeCache()
+      invalidateAuthorizedRootsCache()
+      this.notifier?.worktreesChanged(repo.id)
+      return {
+        ...(warning ? { warning } : {})
+      }
+    })()
+    this.removeManagedWorktreeInFlight.set(removalTarget.id, { optionsKey, promise: removal })
+    try {
+      return await removal
+    } finally {
+      if (this.removeManagedWorktreeInFlight.get(removalTarget.id)?.promise === removal) {
+        this.removeManagedWorktreeInFlight.delete(removalTarget.id)
+      }
     }
   }
 
@@ -7464,13 +9180,18 @@ export class OrcaRuntimeService {
 
   async splitTerminal(
     handle: string,
-    opts: { direction?: 'horizontal' | 'vertical'; command?: string } = {}
+    opts: {
+      direction?: 'horizontal' | 'vertical'
+      command?: string
+      env?: Record<string, string>
+      activate?: boolean
+    } = {}
   ): Promise<RuntimeTerminalSplit> {
-    this.assertGraphReady()
     const livePty = this.getLivePtyForHandle(handle)
     if (livePty) {
       return await this.splitPtyBackedTerminal(livePty.pty, opts)
     }
+    this.assertGraphReady()
     const { leaf } = this.getLiveLeafForHandle(handle)
     const direction = opts.direction ?? 'horizontal'
 
@@ -7494,7 +9215,12 @@ export class OrcaRuntimeService {
 
   private async splitPtyBackedTerminal(
     pty: RuntimePtyWorktreeRecord,
-    opts: { direction?: 'horizontal' | 'vertical'; command?: string } = {}
+    opts: {
+      direction?: 'horizontal' | 'vertical'
+      command?: string
+      env?: Record<string, string>
+      activate?: boolean
+    } = {}
   ): Promise<RuntimeTerminalSplit> {
     if (!this.ptyController?.spawn) {
       throw new Error('runtime_unavailable')
@@ -7519,6 +9245,7 @@ export class OrcaRuntimeService {
       cwd: worktree.path,
       command: opts.command,
       env: {
+        ...opts.env,
         ORCA_PANE_KEY: paneKey,
         ORCA_TAB_ID: parentTabId,
         ORCA_WORKTREE_ID: worktree.id
@@ -7539,7 +9266,7 @@ export class OrcaRuntimeService {
       await this.notifier?.revealTerminalSession?.(worktree.id, {
         ptyId: result.id,
         title: null,
-        activate: true,
+        activate: opts.activate !== false,
         tabId: parentTabId,
         leafId,
         splitFromLeafId: parsedPaneKey.leafId,
@@ -8082,6 +9809,12 @@ export class OrcaRuntimeService {
     throw new Error('repo_not_found')
   }
 
+  private assertHostIntegrationRepoIsLocal(repo: Repo, operation: string): void {
+    if (repo.connectionId) {
+      throw new Error(`${operation}_unsupported_for_ssh_repo`)
+    }
+  }
+
   private requireStore(): Store {
     if (!this.store) {
       throw new Error('runtime_unavailable')
@@ -8120,6 +9853,23 @@ export class OrcaRuntimeService {
     const now = Date.now()
     const perRepoWorktrees = await Promise.all(
       this.store.getRepos().map(async (repo) => {
+        if (isFolderRepo(repo)) {
+          return listRuntimeFolderWorkspaces(this.requireStore(), repo).map((worktree) => ({
+            ...worktree,
+            parentWorktreeId: null,
+            childWorktreeIds: [],
+            lineage: null,
+            git: {
+              path: worktree.path,
+              head: worktree.head,
+              branch: worktree.branch,
+              isBare: worktree.isBare,
+              isMainWorktree: worktree.isMainWorktree
+            },
+            displayName: worktree.displayName,
+            comment: worktree.comment
+          }))
+        }
         // Why: mobile startup RPCs share this path. A slow repo scan should
         // degrade one repo's metadata, not block all terminal/session loading.
         const scan = await withTimeout(
@@ -8323,6 +10073,9 @@ export class OrcaRuntimeService {
         preview: state.preview ?? ''
       }
       this.ptysById.set(ptyId, pty)
+      // Why: restored/controller-discovered PTYs learn their worktree here
+      // without registerPty(), so URL enrichment must bind at this source.
+      advertisedUrlWatcher.bindPty(ptyId, worktreeId)
       return pty
     }
 
@@ -8342,6 +10095,9 @@ export class OrcaRuntimeService {
     if (state.preview !== undefined && state.preview.length > 0) {
       pty.preview = state.preview
     }
+    // Why: recordPtyWorktree is the common lifecycle point for every path that
+    // resolves a PTY's worktree, including renderer restore and controller list.
+    advertisedUrlWatcher.bindPty(ptyId, worktreeId)
     return pty
   }
 
@@ -8373,11 +10129,15 @@ export class OrcaRuntimeService {
     if (!this.ptyController?.listProcesses) {
       return
     }
-    const sessions = await withTimeout(
+    const sessionsResult = await withTimeoutResult(
       this.ptyController.listProcesses(),
-      PTY_CONTROLLER_LIST_TIMEOUT_MS,
-      []
+      PTY_CONTROLLER_LIST_TIMEOUT_MS
     )
+    if (!sessionsResult.ok) {
+      // Why: a transient controller failure is not evidence that retained PTYs exited.
+      return
+    }
+    const sessions = sessionsResult.value
     const livePtyIds = new Set(sessions.map((session) => session.id))
     for (const session of sessions) {
       const worktreeId =
@@ -8392,6 +10152,18 @@ export class OrcaRuntimeService {
         pty.connected = false
       }
     }
+  }
+
+  private pruneDisconnectedPtyTranscript(pty: RuntimePtyWorktreeRecord): void {
+    if (pty.connected) {
+      return
+    }
+    // Why: disconnected PTY records can stay addressable for status/exit reads,
+    // but their retained transcripts must not accumulate after the process dies.
+    pty.tailBuffer = []
+    pty.tailPartialLine = ''
+    pty.tailTruncated = false
+    pty.tailLinesTotal = 0
   }
 
   private leafExistsForPty(ptyId: string): boolean {
@@ -8773,6 +10545,67 @@ export class OrcaRuntimeService {
     }
   }
 
+  getAgentStatusOrchestrationContextForPaneKey(
+    paneKey: string
+  ): AgentStatusOrchestrationContext | undefined {
+    const handle = this.getTerminalHandleForPaneKey(paneKey)
+    if (!handle) {
+      return undefined
+    }
+    const db = this.getOrchestrationDbIfAvailable()
+    const dispatch = db?.getActiveDispatchForTerminal(handle)
+    if (!dispatch) {
+      return undefined
+    }
+    const task = db?.getTask(dispatch.task_id)
+    const activeRun = db?.getActiveCoordinatorRun()
+    const parentTerminalHandle =
+      task?.created_by_terminal_handle ??
+      (activeRun?.coordinator_handle && activeRun.coordinator_handle !== handle
+        ? activeRun.coordinator_handle
+        : undefined)
+    const parentPaneKey = parentTerminalHandle
+      ? this.getPaneKeyForTerminalHandle(parentTerminalHandle)
+      : undefined
+
+    return {
+      taskId: dispatch.task_id,
+      dispatchId: dispatch.id,
+      ...(parentTerminalHandle ? { parentTerminalHandle } : {}),
+      ...(parentPaneKey ? { parentPaneKey } : {}),
+      ...(activeRun?.coordinator_handle ? { coordinatorHandle: activeRun.coordinator_handle } : {}),
+      ...(activeRun?.id ? { orchestrationRunId: activeRun.id } : {})
+    }
+  }
+
+  private getTerminalHandleForPaneKey(paneKey: string): string | null {
+    const parsed = parsePaneKey(paneKey)
+    if (parsed) {
+      const leaf = this.leaves.get(this.getLeafKey(parsed.tabId, parsed.leafId))
+      if (leaf?.ptyId) {
+        return this.issueHandle(leaf)
+      }
+    }
+    for (const pty of this.ptysById.values()) {
+      if (pty.paneKey === paneKey) {
+        return this.issuePtyHandle(pty)
+      }
+    }
+    return null
+  }
+
+  private getPaneKeyForTerminalHandle(handle: string): string | null {
+    const livePty = this.getLivePtyForHandle(handle)
+    if (livePty?.pty.paneKey) {
+      return livePty.pty.paneKey
+    }
+    const record = this.handles.get(handle)
+    if (!record || record.runtimeId !== this.runtimeId) {
+      return null
+    }
+    return makePaneKey(record.tabId, record.leafId)
+  }
+
   // Why: OSC title detection via onPtyData is the tightest signal for agent
   // presence, but the runtime may not see PTY data for daemon-hosted terminals
   // (the daemon adapter stubs getForegroundProcess). This checks three signals
@@ -9007,30 +10840,18 @@ export class OrcaRuntimeService {
   private readPtyTerminal(
     handle: string,
     pty: RuntimePtyWorktreeRecord,
-    opts: { cursor?: number } = {}
+    opts: { cursor?: number; limit?: number } = {}
   ): RuntimeTerminalRead {
-    const allLines = buildTailLines(pty.tailBuffer, pty.tailPartialLine)
-
-    let tail: string[]
-    let truncated: boolean
-
-    if (typeof opts.cursor === 'number' && opts.cursor >= 0) {
-      const bufferStart = pty.tailLinesTotal - pty.tailBuffer.length
-      const sliceFrom = Math.max(0, opts.cursor - bufferStart)
-      tail = pty.tailBuffer.slice(sliceFrom)
-      truncated = opts.cursor < bufferStart
-    } else {
-      tail = allLines
-      truncated = pty.tailTruncated
-    }
-
-    return {
+    return readTerminalTail({
       handle,
       status: pty.connected ? 'running' : pty.lastExitCode !== null ? 'exited' : 'unknown',
-      tail,
-      truncated,
-      nextCursor: String(pty.tailLinesTotal)
-    }
+      completedLines: pty.tailBuffer,
+      partialLine: pty.tailPartialLine,
+      completedLineCount: pty.tailLinesTotal,
+      bufferTruncated: pty.tailTruncated,
+      cursor: opts.cursor,
+      limit: opts.limit
+    })
   }
 
   private issueHandle(leaf: RuntimeLeafRecord): string {
@@ -10043,8 +11864,12 @@ export class OrcaRuntimeService {
   }
 }
 
-const MAX_TAIL_LINES = 120
-const MAX_TAIL_CHARS = 4000
+const MAX_TAIL_LINES = 2000
+const MAX_TAIL_CHARS = 256 * 1024
+const MAX_TAIL_PARTIAL_CHARS = 4000
+const DEFAULT_TERMINAL_READ_LIMIT = 120
+const MAX_TERMINAL_READ_LIMIT = 2000
+const MAX_TERMINAL_PREVIEW_CHARS = 32 * 1024
 const MAX_PREVIEW_LINES = 6
 const MAX_PREVIEW_CHARS = 300
 const WORKTREE_STATUS_PRIORITY: Record<RuntimeWorktreeStatus, number> = {
@@ -10092,6 +11917,24 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Pr
   })
 }
 
+function withTimeoutResult<T>(
+  promise: Promise<T>,
+  timeoutMs: number
+): Promise<{ ok: true; value: T } | { ok: false }> {
+  let timeout: ReturnType<typeof setTimeout> | null = null
+  return new Promise<{ ok: true; value: T } | { ok: false }>((resolve) => {
+    timeout = setTimeout(() => resolve({ ok: false }), timeoutMs)
+    promise.then(
+      (value) => resolve({ ok: true, value }),
+      () => resolve({ ok: false })
+    )
+  }).finally(() => {
+    if (timeout) {
+      clearTimeout(timeout)
+    }
+  })
+}
+
 function buildPreview(lines: string[], partialLine: string): string {
   const previewLines = buildTailLines(lines, partialLine)
     .map((line) => line.trim())
@@ -10113,17 +11956,16 @@ function buildTerminalWaitText(lines: string[], partialLine: string, preview: st
   return waitText.length > 0 ? waitText : preview
 }
 
-function appendToTailBuffer(
+function appendNormalizedToTailBuffer(
   previousLines: string[],
   previousPartialLine: string,
-  chunk: string
+  normalizedChunk: string
 ): {
   lines: string[]
   partialLine: string
   truncated: boolean
   newCompleteLines: number
 } {
-  const normalizedChunk = normalizeTerminalChunk(chunk)
   if (normalizedChunk.length === 0) {
     return {
       lines: previousLines,
@@ -10133,33 +11975,191 @@ function appendToTailBuffer(
     }
   }
 
-  const pieces = `${previousPartialLine}${normalizedChunk}`.split('\n')
+  // Why: fullscreen TUIs often emit long, newline-free redraw streams. Keep the
+  // larger line transcript for pagination, but keep partial-line work bounded.
+  const previousPartialWasCapped = previousPartialLine.length > MAX_TAIL_PARTIAL_CHARS
+  const boundedPreviousPartialLine = previousPartialLine.slice(-MAX_TAIL_PARTIAL_CHARS)
+  const pieces = `${boundedPreviousPartialLine}${normalizedChunk}`.split('\n')
   const nextPartialLine = (pieces.pop() ?? '').replace(/[ \t]+$/g, '')
+  const retainedPartialLine = nextPartialLine.slice(-MAX_TAIL_PARTIAL_CHARS)
   const newCompleteLines = pieces.length
-  const nextLines = [...previousLines, ...pieces.map((line) => line.replace(/[ \t]+$/g, ''))]
-  let truncated = false
+  let nextLines =
+    newCompleteLines > 0
+      ? [...previousLines, ...pieces.map((line) => line.replace(/[ \t]+$/g, ''))]
+      : previousLines
+  let truncated = previousPartialWasCapped || nextPartialLine.length > MAX_TAIL_PARTIAL_CHARS
 
   while (nextLines.length > MAX_TAIL_LINES) {
     nextLines.shift()
     truncated = true
   }
 
-  let totalChars = nextLines.reduce((sum, line) => sum + line.length, 0) + nextPartialLine.length
-  while (nextLines.length > 0 && totalChars > MAX_TAIL_CHARS) {
-    totalChars -= nextLines.shift()!.length
-    truncated = true
+  if (newCompleteLines > 0 || retainedPartialLine.length > previousPartialLine.length) {
+    if (nextLines === previousLines) {
+      nextLines = [...previousLines]
+    }
+    let totalChars =
+      nextLines.reduce((sum, line) => sum + line.length, 0) + retainedPartialLine.length
+    while (nextLines.length > 0 && totalChars > MAX_TAIL_CHARS) {
+      totalChars -= nextLines.shift()!.length
+      truncated = true
+    }
   }
 
   return {
     lines: nextLines,
-    partialLine: nextPartialLine.slice(-MAX_TAIL_CHARS),
+    partialLine: retainedPartialLine,
     truncated,
     newCompleteLines
   }
 }
 
+function tailStateMatches(
+  lines: string[],
+  partialLine: string,
+  truncated: boolean,
+  linesTotal: number,
+  snapshot: {
+    lines: string[]
+    partialLine: string
+    truncated: boolean
+    linesTotal: number
+  }
+): boolean {
+  if (
+    partialLine !== snapshot.partialLine ||
+    truncated !== snapshot.truncated ||
+    linesTotal !== snapshot.linesTotal ||
+    lines.length !== snapshot.lines.length
+  ) {
+    return false
+  }
+  if (lines === snapshot.lines) {
+    return true
+  }
+  for (let index = 0; index < lines.length; index++) {
+    if (lines[index] !== snapshot.lines[index]) {
+      return false
+    }
+  }
+  return true
+}
+
 function buildTailLines(lines: string[], partialLine: string): string[] {
   return partialLine.length > 0 ? [...lines, partialLine] : lines
+}
+
+function terminalReadLimit(limit: number | undefined, defaultLimit: number): number {
+  if (typeof limit !== 'number' || !Number.isFinite(limit) || limit <= 0) {
+    return defaultLimit
+  }
+  return Math.min(Math.max(1, Math.floor(limit)), MAX_TERMINAL_READ_LIMIT)
+}
+
+function trimTerminalPreviewToCharacterBudget(
+  lines: string[],
+  characterBudget: number
+): { tail: string[]; limited: boolean; omittedLineCount: number; slicedFirstLine: boolean } {
+  let totalCharacters = lines.reduce((sum, line) => sum + line.length, 0)
+  if (totalCharacters <= characterBudget) {
+    return { tail: lines, limited: false, omittedLineCount: 0, slicedFirstLine: false }
+  }
+
+  const tail = [...lines]
+  let omittedLineCount = 0
+  while (tail.length > 0 && totalCharacters - tail[0].length >= characterBudget) {
+    totalCharacters -= tail.shift()!.length
+    omittedLineCount += 1
+  }
+
+  let slicedFirstLine = false
+  if (tail.length > 0 && totalCharacters > characterBudget) {
+    tail[0] = tail[0].slice(totalCharacters - characterBudget)
+    slicedFirstLine = true
+  }
+
+  return { tail, limited: true, omittedLineCount, slicedFirstLine }
+}
+
+function readTerminalTail(args: {
+  handle: string
+  status: RuntimeTerminalState
+  completedLines: string[]
+  partialLine: string
+  completedLineCount: number
+  bufferTruncated: boolean
+  cursor?: number
+  limit?: number
+}): RuntimeTerminalRead {
+  const oldestCursor = Math.max(0, args.completedLineCount - args.completedLines.length)
+  const latestCursor = args.completedLineCount
+
+  if (typeof args.cursor === 'number' && args.cursor >= 0) {
+    const limit = terminalReadLimit(args.limit, MAX_TERMINAL_READ_LIMIT)
+    if (args.cursor > latestCursor) {
+      return {
+        handle: args.handle,
+        status: args.status,
+        tail: [],
+        truncated: false,
+        limited: false,
+        oldestCursor: String(oldestCursor),
+        nextCursor: String(latestCursor),
+        latestCursor: String(latestCursor),
+        returnedLineCount: 0
+      }
+    }
+    // Why: cursor reads are transcript/pagination reads. They return completed
+    // lines only so a partial line is not delivered once as "hel" and again as
+    // "hello" after the newline arrives.
+    const startCursor = Math.max(args.cursor, oldestCursor)
+    const startIndex = startCursor - oldestCursor
+    const available = args.completedLines.slice(startIndex)
+    const tail = available.slice(0, limit)
+    const nextCursor = startCursor + tail.length
+    return {
+      handle: args.handle,
+      status: args.status,
+      tail,
+      truncated: args.cursor < oldestCursor,
+      limited: tail.length < available.length,
+      oldestCursor: String(oldestCursor),
+      nextCursor: String(nextCursor),
+      latestCursor: String(latestCursor),
+      returnedLineCount: tail.length
+    }
+  }
+
+  // Why: un-cursored reads are preview reads for humans/agents. Return the
+  // latest bounded view, while the larger retained buffer remains available
+  // through cursor reads plus --limit.
+  const limit = terminalReadLimit(args.limit, DEFAULT_TERMINAL_READ_LIMIT)
+  const allLines = buildTailLines(args.completedLines, args.partialLine)
+  const lineBoundedTail = allLines.slice(-limit)
+  const charBoundedTail = trimTerminalPreviewToCharacterBudget(
+    lineBoundedTail,
+    MAX_TERMINAL_PREVIEW_CHARS
+  )
+  const lineBoundedStartIndex = Math.max(0, allLines.length - lineBoundedTail.length)
+  const charBoundedStartIndex = lineBoundedStartIndex + charBoundedTail.omittedLineCount
+  const hasPageableOmittedCompletedLines =
+    Math.min(args.completedLineCount, charBoundedStartIndex) > 0 ||
+    (charBoundedTail.slicedFirstLine && charBoundedStartIndex < args.completedLineCount)
+  // Why: a long unterminated partial line can exceed the preview character
+  // budget, but cursor reads only page completed lines, so the trimmed bytes
+  // cannot be recovered by asking for nextCursor again.
+  const truncatedByNonPageablePartial = charBoundedTail.limited && !hasPageableOmittedCompletedLines
+  return {
+    handle: args.handle,
+    status: args.status,
+    tail: charBoundedTail.tail,
+    truncated: args.bufferTruncated || truncatedByNonPageablePartial,
+    limited: lineBoundedTail.length < allLines.length || charBoundedTail.limited,
+    oldestCursor: String(oldestCursor),
+    nextCursor: String(latestCursor),
+    latestCursor: String(latestCursor),
+    returnedLineCount: charBoundedTail.tail.length
+  }
 }
 
 function getTerminalState(leaf: RuntimeLeafRecord): RuntimeTerminalState {
@@ -10480,6 +12480,11 @@ function mergeWorktreeStatus(
 }
 
 function normalizeTerminalChunk(chunk: string): string {
+  // Why: most high-throughput PTY chunks are plain printable text. Avoid
+  // running every ANSI/OSC regex over megabytes that do not need normalization.
+  if (!terminalChunkNeedsNormalization(chunk)) {
+    return chunk
+  }
   return chunk
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
@@ -10488,6 +12493,22 @@ function normalizeTerminalChunk(chunk: string): string {
     .replace(/\x1b[@-_]/g, '')
     .replace(/\u0008/g, '')
     .replace(/[^\x09\x0a\x20-\x7e]/g, '')
+}
+
+function terminalChunkNeedsNormalization(chunk: string): boolean {
+  for (let index = 0; index < chunk.length; index++) {
+    const code = chunk.charCodeAt(index)
+    if (
+      code === 0x1b ||
+      code === 0x0d ||
+      code < 0x09 ||
+      (code > 0x0a && code < 0x20) ||
+      code > 0x7e
+    ) {
+      return true
+    }
+  }
+  return false
 }
 
 function maxTimestamp(left: number | null, right: number | null): number | null {

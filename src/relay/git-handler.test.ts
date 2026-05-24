@@ -54,6 +54,7 @@ describe('GitHandler', () => {
     expect(methods).toContain('git.fetchRemoteTrackingRef')
     expect(methods).toContain('git.push')
     expect(methods).toContain('git.pull')
+    expect(methods).toContain('git.rebaseFromBase')
     expect(methods).toContain('git.branchDiff')
     expect(methods).toContain('git.listWorktrees')
     expect(methods).toContain('git.addWorktree')
@@ -631,6 +632,36 @@ describe('GitHandler', () => {
       }
     })
 
+    it('fetches the explicit publish target remote', async () => {
+      const bareDir = mkdtempSync(path.join(tmpdir(), 'relay-git-fork-bare-'))
+      try {
+        execFileSync('git', ['init', '--bare'], { cwd: bareDir, stdio: 'pipe' })
+
+        gitInit(tmpDir)
+        writeFileSync(path.join(tmpDir, 'base.txt'), 'base')
+        gitCommit(tmpDir, 'initial')
+        execFileSync('git', ['remote', 'add', 'fork', bareDir], {
+          cwd: tmpDir,
+          stdio: 'pipe'
+        })
+        execFileSync('git', ['push', 'fork', 'HEAD:feature/fix'], {
+          cwd: tmpDir,
+          stdio: 'pipe'
+        })
+
+        await expect(
+          dispatcher.callRequest('git.fetch', {
+            worktreePath: tmpDir,
+            pushTarget: { remoteName: 'fork', branchName: 'feature/fix' }
+          })
+        ).resolves.not.toThrow()
+
+        await expect(fs.access(path.join(tmpDir, '.git', 'FETCH_HEAD'))).resolves.toBeUndefined()
+      } finally {
+        await fs.rm(bareDir, { recursive: true, force: true })
+      }
+    })
+
     it('refreshes one remote-tracking ref from a configured remote', async () => {
       const bareDir = mkdtempSync(path.join(tmpdir(), 'relay-git-bare-'))
       const producerParent = mkdtempSync(path.join(tmpdir(), 'relay-git-producer-'))
@@ -790,6 +821,23 @@ describe('GitHandler', () => {
       expect(gitMock.mock.calls[3]?.[1]).toBe('/relay/wt')
     })
 
+    it('checks out a selected existing local branch without creating a new branch', async () => {
+      const { localDispatcher, gitMock } = setupMockedHandler(['/relay/repo', '/relay/wt'])
+      gitMock.mockResolvedValueOnce({ stdout: '', stderr: '' }) // worktree add
+
+      await localDispatcher.callRequest('git.addWorktree', {
+        repoPath: '/relay/repo',
+        branchName: 'feature/test',
+        targetDir: '/relay/wt',
+        base: 'feature/test',
+        checkoutExistingBranch: true
+      })
+
+      expect(gitMock.mock.calls.map((c) => c[0])).toEqual([
+        ['worktree', 'add', '/relay/wt', 'feature/test']
+      ])
+    })
+
     it('qualifies bare branch name as refs/heads/ when a same-named tag exists', async () => {
       // Why: repos that fetch with --tags can end up with a local tag named
       // 'main', making `git worktree add ... main` fail with "fatal: Ambiguous
@@ -845,6 +893,33 @@ describe('GitHandler', () => {
         ],
         ['config', '--get', 'push.autoSetupRemote'],
         ['config', '--local', 'push.autoSetupRemote', 'true']
+      ])
+    })
+
+    it('passes --no-checkout when sparse setup will checkout after configuration', async () => {
+      const { localDispatcher, gitMock } = setupMockedHandler(['/relay/repo', '/relay/wt'])
+      gitMock.mockResolvedValueOnce({ stdout: '', stderr: '' }) // rev-parse refs/remotes/origin/main
+      gitMock.mockResolvedValueOnce({ stdout: '', stderr: '' }) // worktree add
+      gitMock.mockRejectedValueOnce(Object.assign(new Error('key unset'), { code: 1 })) // --get
+      gitMock.mockResolvedValueOnce({ stdout: '', stderr: '' }) // --local set
+
+      await localDispatcher.callRequest('git.addWorktree', {
+        repoPath: '/relay/repo',
+        branchName: 'feature/sparse',
+        targetDir: '/relay/wt',
+        base: 'origin/main',
+        noCheckout: true
+      })
+
+      expect(gitMock.mock.calls[1]?.[0]).toEqual([
+        'worktree',
+        'add',
+        '--no-track',
+        '--no-checkout',
+        '-b',
+        'feature/sparse',
+        '/relay/wt',
+        'refs/remotes/origin/main'
       ])
     })
 

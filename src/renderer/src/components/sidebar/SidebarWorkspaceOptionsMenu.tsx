@@ -31,10 +31,15 @@ const GROUP_BY_OPTIONS = [
   { id: 'none', label: 'None' },
   { id: 'workspace-status', label: 'Status' },
   { id: 'pr-status', label: 'PR' },
-  { id: 'repo', label: 'Repo' }
+  { id: 'repo', label: 'Project' }
 ] as const
 
 const PROPERTY_OPTIONS: { id: WorktreeCardProperty; label: string }[] = [
+  { id: 'issue', label: 'GitHub ticket' },
+  { id: 'linear-issue', label: 'Linear issue' },
+  { id: 'pr', label: 'PR/MR link' },
+  { id: 'comment', label: 'Notes' },
+  { id: 'ports', label: 'Ports' },
   // Why: toggles the inline "Agent activity" list rendered below each
   // workspace card body (see WorktreeCard -> WorktreeCardAgents). Off hides
   // the list; there is no alternate surface.
@@ -49,7 +54,7 @@ const SORT_OPTIONS = [
     description: 'Agents that need attention, then most recent activity.'
   },
   { id: 'recent', label: 'Recent', description: null },
-  { id: 'repo', label: 'Repo', description: null },
+  { id: 'repo', label: 'Project', description: null },
   {
     id: 'manual',
     label: 'Manual',

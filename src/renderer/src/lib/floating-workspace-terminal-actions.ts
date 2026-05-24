@@ -9,6 +9,18 @@ type FloatingWorkspaceTerminalStore = Pick<
   'activeGroupIdByWorktree' | 'createTab' | 'activateTab' | 'settings'
 >
 
+type FloatingWorkspaceShortcutEvent = Pick<
+  KeyboardEvent,
+  'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'shiftKey' | 'target'
+>
+
+const FLOATING_WORKSPACE_PANEL_SELECTOR = '[data-floating-terminal-panel]'
+const FLOATING_WORKSPACE_SHORTCUT_SURFACE_SELECTOR = '[data-floating-terminal-shortcut-surface]'
+
+function defaultIsMacPlatform(): boolean {
+  return typeof navigator !== 'undefined' && navigator.userAgent.includes('Mac')
+}
+
 export function isFloatingWorkspacePanelVisible(
   doc: Pick<Document, 'querySelector'> = document
 ): boolean {
@@ -19,7 +31,46 @@ export function isFloatingWorkspacePanelFocused(
   doc: Pick<Document, 'activeElement'> = document
 ): boolean {
   const active = doc.activeElement
-  return active instanceof HTMLElement && active.closest('[data-floating-terminal-panel]') !== null
+  return active instanceof HTMLElement && active.closest(FLOATING_WORKSPACE_PANEL_SELECTOR) !== null
+}
+
+export function isFloatingWorkspaceTerminalInputTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false
+  }
+  if (target.closest(FLOATING_WORKSPACE_PANEL_SELECTOR) === null) {
+    return false
+  }
+  return target.classList.contains('xterm-helper-textarea') || target.closest('.xterm') !== null
+}
+
+export function isFloatingWorkspacePanelShortcutTarget(
+  target: EventTarget | null,
+  panelRoot: HTMLElement | null = null
+): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false
+  }
+  return (
+    target === panelRoot ||
+    target.getAttribute('data-floating-terminal-panel') !== null ||
+    target.closest(FLOATING_WORKSPACE_SHORTCUT_SURFACE_SELECTOR) !== null
+  )
+}
+
+export function isFloatingWorkspacePanelShortcut(
+  event: FloatingWorkspaceShortcutEvent,
+  isMacPlatform = defaultIsMacPlatform(),
+  panelRoot: HTMLElement | null = null
+): boolean {
+  const mod = isMacPlatform ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey
+  if (!mod || event.altKey) {
+    return false
+  }
+
+  const key = event.key.toLowerCase()
+  const claimedChord = event.shiftKey ? key === 'b' || key === 'm' : key === 't' || key === 'w'
+  return claimedChord && isFloatingWorkspacePanelShortcutTarget(event.target, panelRoot)
 }
 
 export function shouldMinimizeFloatingWorkspacePanelOnCloseShortcut({

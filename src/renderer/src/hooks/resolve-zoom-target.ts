@@ -5,7 +5,15 @@ import type { WorkspaceVisibleTabType } from '../../../shared/types'
  * based on current view, tab type, and focused element.
  */
 export function resolveZoomTarget(args: {
-  activeView: 'terminal' | 'settings' | 'tasks' | 'activity' | 'automations' | 'space' | 'skills'
+  activeView:
+    | 'terminal'
+    | 'settings'
+    | 'tasks'
+    | 'activity'
+    | 'automations'
+    | 'space'
+    | 'skills'
+    | 'mobile'
   activeTabType: WorkspaceVisibleTabType
   activeElement: unknown
 }): 'terminal' | 'editor' | 'ui' {

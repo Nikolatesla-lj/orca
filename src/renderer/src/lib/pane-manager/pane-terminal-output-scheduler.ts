@@ -1,8 +1,12 @@
 import { e2eConfig } from '@/lib/e2e-config'
+import {
+  discardForegroundRenderSettle,
+  suppressTerminalCursorUntilOutputSettles,
+  writeForegroundTerminalChunk,
+  type ForegroundTerminalOutputTarget
+} from './pane-terminal-foreground-render-settle'
 
-type TerminalOutputTarget = {
-  write(data: string, callback?: () => void): void
-}
+type TerminalOutputTarget = ForegroundTerminalOutputTarget
 
 type TerminalOutputBeforeWrite = (data: string) => void
 
@@ -172,7 +176,7 @@ export function writeTerminalOutput(
       debugState.foregroundWriteCount++
     }
     options.beforeWrite?.(data)
-    terminal.write(data)
+    writeForegroundTerminalChunk(terminal, data)
     return
   }
 
@@ -247,6 +251,8 @@ export function waitForTerminalOutputParsed(terminal: TerminalOutputTarget): Pro
 export function discardTerminalOutput(terminal: TerminalOutputTarget): void {
   exposeDebugApi()
   queuedByTerminal.delete(terminal)
+  discardForegroundRenderSettle(terminal)
 }
 
 exposeDebugApi()
+export { suppressTerminalCursorUntilOutputSettles }

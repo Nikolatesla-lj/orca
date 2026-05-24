@@ -17,7 +17,9 @@ const {
   registerDeveloperPermissionHandlersMock,
   registerComputerUsePermissionHandlersMock,
   registerSettingsHandlersMock,
+  registerKeybindingHandlersMock,
   registerTelemetryHandlersMock,
+  registerDiagnosticsHandlersMock,
   registerShellHandlersMock,
   registerPetHandlersMock,
   registerSessionHandlersMock,
@@ -62,7 +64,9 @@ const {
   registerDeveloperPermissionHandlersMock: vi.fn(),
   registerComputerUsePermissionHandlersMock: vi.fn(),
   registerSettingsHandlersMock: vi.fn(),
+  registerKeybindingHandlersMock: vi.fn(),
   registerTelemetryHandlersMock: vi.fn(),
+  registerDiagnosticsHandlersMock: vi.fn(),
   registerShellHandlersMock: vi.fn(),
   registerPetHandlersMock: vi.fn(),
   registerSessionHandlersMock: vi.fn(),
@@ -174,8 +178,16 @@ vi.mock('./workspace-ports', () => ({
   registerWorkspacePortHandlers: registerWorkspacePortHandlersMock
 }))
 
+vi.mock('./keybindings', () => ({
+  registerKeybindingHandlers: registerKeybindingHandlersMock
+}))
+
 vi.mock('./telemetry', () => ({
   registerTelemetryHandlers: registerTelemetryHandlersMock
+}))
+
+vi.mock('./diagnostics', () => ({
+  registerDiagnosticsHandlers: registerDiagnosticsHandlersMock
 }))
 
 vi.mock('./shell', () => ({
@@ -282,7 +294,9 @@ describe('registerCoreHandlers', () => {
     registerDeveloperPermissionHandlersMock.mockReset()
     registerComputerUsePermissionHandlersMock.mockReset()
     registerSettingsHandlersMock.mockReset()
+    registerKeybindingHandlersMock.mockReset()
     registerTelemetryHandlersMock.mockReset()
+    registerDiagnosticsHandlersMock.mockReset()
     registerShellHandlersMock.mockReset()
     registerPetHandlersMock.mockReset()
     registerSessionHandlersMock.mockReset()

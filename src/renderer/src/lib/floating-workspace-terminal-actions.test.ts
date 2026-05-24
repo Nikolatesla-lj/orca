@@ -1,9 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../shared/constants'
 import type { TerminalTab } from '../../../shared/types'
 import {
   createFloatingWorkspaceTerminalTab,
   isFloatingWorkspacePanelFocused,
+  isFloatingWorkspacePanelShortcut,
+  isFloatingWorkspacePanelShortcutTarget,
+  isFloatingWorkspaceTerminalInputTarget,
   isFloatingWorkspacePanelVisible,
   shouldMinimizeFloatingWorkspacePanelOnCloseShortcut
 } from './floating-workspace-terminal-actions'
@@ -19,6 +22,50 @@ vi.mock('./focus-terminal-tab-surface', () => ({
   focusTerminalTabSurface: focusTerminalTabSurfaceMock
 }))
 
+function shortcutEvent(overrides: Partial<KeyboardEvent>): KeyboardEvent {
+  return {
+    altKey: false,
+    ctrlKey: false,
+    key: 't',
+    metaKey: false,
+    shiftKey: false,
+    ...overrides
+  } as KeyboardEvent
+}
+
+function shortcutSurfaceEvent(overrides: Partial<KeyboardEvent>): KeyboardEvent {
+  return shortcutEvent({
+    target: makeElement({
+      closestSelectors: ['[data-floating-terminal-shortcut-surface]']
+    }),
+    ...overrides
+  })
+}
+
+function installFakeHTMLElement(): void {
+  vi.stubGlobal('HTMLElement', class {})
+}
+
+function makeElement({
+  attributes = [],
+  classNames = [],
+  closestSelectors = []
+}: {
+  attributes?: string[]
+  classNames?: string[]
+  closestSelectors?: string[]
+}): HTMLElement {
+  const element = {
+    classList: {
+      contains: vi.fn((token: string) => classNames.includes(token))
+    },
+    getAttribute: vi.fn((attribute: string) => (attributes.includes(attribute) ? '' : null)),
+    closest: vi.fn((selector: string) => (closestSelectors.includes(selector) ? {} : null))
+  }
+  Object.setPrototypeOf(element, HTMLElement.prototype)
+  return element as unknown as HTMLElement
+}
+
 function makeTab(id: string): TerminalTab {
   return {
     id,
@@ -31,6 +78,10 @@ function makeTab(id: string): TerminalTab {
     createdAt: 0
   }
 }
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 describe('isFloatingWorkspacePanelVisible', () => {
   it('detects the visible floating workspace panel', () => {
@@ -53,17 +104,122 @@ describe('isFloatingWorkspacePanelVisible', () => {
 
 describe('isFloatingWorkspacePanelFocused', () => {
   it('detects focus inside the floating workspace panel', () => {
-    const activeElement = {
-      closest: vi.fn().mockReturnValue({})
-    }
-    vi.stubGlobal('HTMLElement', class {})
-
-    Object.setPrototypeOf(activeElement, HTMLElement.prototype)
+    installFakeHTMLElement()
+    const activeElement = makeElement({
+      closestSelectors: ['[data-floating-terminal-panel]']
+    })
 
     expect(isFloatingWorkspacePanelFocused({ activeElement } as never)).toBe(true)
     expect(activeElement.closest).toHaveBeenCalledWith('[data-floating-terminal-panel]')
+  })
+})
 
-    vi.unstubAllGlobals()
+describe('isFloatingWorkspaceTerminalInputTarget', () => {
+  it('detects the xterm helper textarea inside the floating panel', () => {
+    installFakeHTMLElement()
+    const target = makeElement({
+      classNames: ['xterm-helper-textarea'],
+      closestSelectors: ['[data-floating-terminal-panel]']
+    })
+
+    expect(isFloatingWorkspaceTerminalInputTarget(target)).toBe(true)
+  })
+
+  it('detects targets inside xterm DOM inside the floating panel', () => {
+    installFakeHTMLElement()
+    const target = makeElement({
+      closestSelectors: ['[data-floating-terminal-panel]', '.xterm']
+    })
+
+    expect(isFloatingWorkspaceTerminalInputTarget(target)).toBe(true)
+  })
+
+  it('ignores terminal input outside the floating panel', () => {
+    installFakeHTMLElement()
+    const target = makeElement({
+      classNames: ['xterm-helper-textarea']
+    })
+
+    expect(isFloatingWorkspaceTerminalInputTarget(target)).toBe(false)
+  })
+
+  it('ignores non-terminal targets inside the floating panel', () => {
+    installFakeHTMLElement()
+    const target = makeElement({
+      closestSelectors: ['[data-floating-terminal-panel]']
+    })
+
+    expect(isFloatingWorkspaceTerminalInputTarget(target)).toBe(false)
+  })
+})
+
+describe('isFloatingWorkspacePanelShortcut', () => {
+  beforeEach(() => {
+    installFakeHTMLElement()
+  })
+
+  it.each([
+    ['Cmd+T', true, { key: 't', metaKey: true }],
+    ['Ctrl+T', false, { key: 't', ctrlKey: true }],
+    ['Cmd+W', true, { key: 'w', metaKey: true }],
+    ['Ctrl+W', false, { key: 'w', ctrlKey: true }],
+    ['Cmd+Shift+B', true, { key: 'b', metaKey: true, shiftKey: true }],
+    ['Ctrl+Shift+B', false, { key: 'b', ctrlKey: true, shiftKey: true }],
+    ['Cmd+Shift+M', true, { key: 'm', metaKey: true, shiftKey: true }],
+    ['Ctrl+Shift+M', false, { key: 'm', ctrlKey: true, shiftKey: true }]
+  ])('claims %s', (_label, isMacPlatform, overrides) => {
+    expect(isFloatingWorkspacePanelShortcut(shortcutSurfaceEvent(overrides), isMacPlatform)).toBe(
+      true
+    )
+  })
+
+  it.each([
+    ['Cmd+B', true, { key: 'b', metaKey: true }],
+    ['Ctrl+B', false, { key: 'b', ctrlKey: true }]
+  ])('does not claim bare %s', (_label, isMacPlatform, overrides) => {
+    expect(isFloatingWorkspacePanelShortcut(shortcutSurfaceEvent(overrides), isMacPlatform)).toBe(
+      false
+    )
+  })
+
+  it('does not claim shortcuts with Alt or the wrong platform modifier', () => {
+    expect(
+      isFloatingWorkspacePanelShortcut(shortcutSurfaceEvent({ key: 't', metaKey: true }), false)
+    ).toBe(false)
+    expect(
+      isFloatingWorkspacePanelShortcut(shortcutSurfaceEvent({ key: 't', ctrlKey: true }), true)
+    ).toBe(false)
+    expect(
+      isFloatingWorkspacePanelShortcut(
+        shortcutSurfaceEvent({ key: 't', ctrlKey: true, altKey: true }),
+        false
+      )
+    ).toBe(false)
+  })
+
+  it('only claims shortcuts from the panel root or shortcut surface', () => {
+    const panelRoot = makeElement({
+      attributes: ['data-floating-terminal-panel'],
+      closestSelectors: ['[data-floating-terminal-panel]']
+    })
+    const panelContent = makeElement({
+      closestSelectors: ['[data-floating-terminal-panel]']
+    })
+
+    expect(isFloatingWorkspacePanelShortcutTarget(panelRoot, panelRoot)).toBe(true)
+    expect(
+      isFloatingWorkspacePanelShortcut(
+        shortcutEvent({ key: 't', ctrlKey: true, target: panelRoot }),
+        false
+      )
+    ).toBe(true)
+    expect(
+      isFloatingWorkspacePanelShortcut(
+        shortcutEvent({ key: 't', ctrlKey: true, target: panelContent }),
+        false,
+        panelRoot
+      )
+    ).toBe(false)
   })
 })
 
