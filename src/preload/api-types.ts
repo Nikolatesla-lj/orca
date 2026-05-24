@@ -637,6 +637,10 @@ export type ArchitectureApi = {
     projectPath: string
     modelName: string
   }) => Promise<{ prompt: string }>
+  prepareDeepModelPrompt: (args: {
+    projectPath: string
+    modelName?: string | null
+  }) => Promise<{ prompt: string }>
   prepareNodeFillPrompt: (args: {
     projectPath: string
     modelName?: string | null

@@ -1604,6 +1604,39 @@ export function useArchitectureModelController({
     writePendingModelNow
   ])
 
+  const startDeepModel = useCallback(async () => {
+    if (!projectPath) {
+      return
+    }
+    if (!aiRunSession.beginRun('build', 'Preparing Deep Build with AI prompt')) {
+      return
+    }
+    try {
+      await writePendingModelNow()
+      const result = await window.api.architecture.prepareDeepModelPrompt({
+        projectPath,
+        modelName: activeModelNameRef.current
+      })
+      launchArchitectureAgentPrompt(
+        result.prompt,
+        'Could not launch an Orca agent terminal for deep architecture modeling.'
+      )
+      setMessage('Deep Build with AI prompt sent')
+      aiRunSession.markRun('build', 'done', 'Deep Build with AI prompt sent')
+    } catch (aiError) {
+      const text = aiError instanceof Error ? aiError.message : String(aiError)
+      setError(text)
+      aiRunSession.markRun('build', 'failed', text)
+      toast.error(text)
+    }
+  }, [
+    activeModelNameRef,
+    aiRunSession,
+    launchArchitectureAgentPrompt,
+    projectPath,
+    writePendingModelNow
+  ])
+
   const fillNodeWithAi = useCallback(
     async (nodeId: string) => {
       if (!projectPath) {
@@ -2021,6 +2054,7 @@ export function useArchitectureModelController({
     toggleLock,
     openSourceLocation,
     startInitialModel,
+    startDeepModel,
     fillNodeWithAi,
     startAdvisorReview,
     writeMcpConfig,

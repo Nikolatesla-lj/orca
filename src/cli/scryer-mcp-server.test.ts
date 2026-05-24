@@ -32,7 +32,8 @@ describe('handleScryerMcpMessage', () => {
       id: 1,
       result: {
         capabilities: { tools: {} },
-        serverInfo: { name: 'orca-scryer' }
+        serverInfo: { name: 'orca-scryer' },
+        instructions: expect.stringContaining('## C4 Hierarchy')
       }
     })
 
@@ -45,7 +46,43 @@ describe('handleScryerMcpMessage', () => {
     ).resolves.toMatchObject({
       id: 2,
       result: {
-        tools: expect.arrayContaining([expect.objectContaining({ name: 'get_model' })])
+        tools: expect.arrayContaining([
+          expect.objectContaining({
+            name: 'set_model',
+            description: expect.stringContaining(
+              'Create or overwrite a model with complete data in one call'
+            )
+          }),
+          expect.objectContaining({
+            name: 'get_structure',
+            description: expect.stringContaining('annotated directory tree')
+          }),
+          expect.objectContaining({
+            name: 'get_task',
+            description: expect.stringContaining('Get the next implementation task')
+          }),
+          expect.objectContaining({
+            name: 'update_source_map',
+            inputSchema: expect.objectContaining({
+              properties: expect.objectContaining({
+                entries: expect.objectContaining({
+                  type: 'array'
+                })
+              }),
+              required: expect.arrayContaining(['entries'])
+            })
+          }),
+          expect.objectContaining({
+            name: 'set_flows',
+            description: expect.stringContaining('single flow object or an array'),
+            inputSchema: expect.objectContaining({
+              properties: expect.objectContaining({
+                data: expect.objectContaining({ type: 'string' })
+              }),
+              required: expect.arrayContaining(['data'])
+            })
+          })
+        ])
       }
     })
   })
@@ -97,7 +134,8 @@ describe('handleScryerMcpMessage', () => {
       id: 1,
       result: {
         capabilities: { tools: {} },
-        serverInfo: { name: 'orca-scryer' }
+        serverInfo: { name: 'orca-scryer' },
+        instructions: expect.stringContaining('## C4 Modeling Rules')
       }
     })
   })

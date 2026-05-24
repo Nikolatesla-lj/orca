@@ -24,6 +24,7 @@ import { writeArchitectureMcpConfig } from '../scryer/mcp-config'
 import { beginSync, cancelSync, finishSync } from '../scryer/sync'
 import {
   advisorPrompt,
+  deepModelPrompt,
   initialModelPrompt,
   nodeFillPrompt,
   serializeModelForPrompt
@@ -249,6 +250,20 @@ export function registerArchitectureHandlers(
     (_event, args: { projectPath: string; modelName: string }) => ({
       prompt: initialModelPrompt(args.modelName, args.projectPath)
     })
+  )
+
+  registrar.handle(
+    'architecture:prepareDeepModelPrompt',
+    async (_event, args: { projectPath: string; modelName?: string | null }) => {
+      const model = await deps.readModel(args.projectPath, args.modelName)
+      return {
+        prompt: deepModelPrompt({
+          modelName: deps.sanitizeProjectModelName(args.modelName),
+          cwd: args.projectPath,
+          modelJson: serializeModelForPrompt(model)
+        })
+      }
+    }
   )
 
   registrar.handle(

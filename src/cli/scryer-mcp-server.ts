@@ -1,5 +1,7 @@
+/* eslint-disable max-lines -- Why: this CLI bridge keeps the MCP protocol handlers, tool descriptions, and input schemas together so the public Scryer tool contract stays auditable. */
 import { callScryerTool } from '../main/scryer/mcp-tools'
 import type { ScryerToolName } from '../shared/scryer/model-types'
+import { MCP_INSTRUCTIONS } from '../shared/scryer/rules'
 
 type JsonRpcId = string | number | null
 
@@ -95,7 +97,151 @@ function detectInputMode(buffer: Buffer, currentMode: InputMode): InputMode {
 }
 
 function toolDescription(name: ScryerToolName): string {
-  return `Run the Orca Scryer architecture tool "${name}" for the configured project.`
+  const descriptions: Record<ScryerToolName, string> = {
+    list_models:
+      'List available architecture models for the configured project. Use this before selecting or inspecting a model.',
+    set_model:
+      'Create or overwrite a model with complete data in one call. Use for initial model creation or full rewrites. Pass the full model JSON with all nodes and edges; UI position data is handled automatically.',
+    get_model:
+      'Read the current architecture model. Returns compact JSON with UI-only fields stripped so agents can understand the diagram state.',
+    get_node:
+      'Read one node with its descendants, internal edges, external edges, source map, and group context. Use this before filling or implementing a scoped subtree.',
+    add_nodes:
+      'Add one or more nodes to a model. Hierarchy: person/system top-level, container under system, component under container, operation/process/model under component.',
+    set_node:
+      'Replace all descendants of an existing node in one call. Use this to detail a system with containers or a container with components without repeated add_node calls.',
+    update_nodes:
+      'Patch one or more existing nodes. Use for status, descriptions, technology labels, contracts, notes, and source map updates. Omitted fields stay unchanged.',
+    delete_nodes:
+      'Delete one or more nodes and their descendant nodes from the model. Related edges and source map entries are cleaned up.',
+    add_edges: 'Add one or more relationship edges between nodes.',
+    update_edges: 'Update one or more existing relationship edges.',
+    delete_edges: 'Delete one or more relationship edges from the model.',
+    update_source_map:
+      'Set source file locations for one or more nodes or flows. Pass entries: [{ node_id, locations: [{ pattern, line?, endLine?, command? }] }]. Empty locations clears a mapping.',
+    set_flows:
+      'Create or replace behavior flows that model user journeys, pipelines, or deployment sequences. data must be a JSON string containing a single flow object or an array of flow objects, not { flows: [...] }.',
+    delete_flow: 'Delete a behavior flow by ID.',
+    set_groups:
+      'Create or replace deployment or ownership groups. Use groups for containers that deploy together or belong to a shared runtime.',
+    delete_group: 'Delete a group by ID. Members are ungrouped, not deleted.',
+    set_implementing:
+      'Tell Orca Scryer whether an implementation or sync run is active. Active runs suppress drift detection noise.',
+    get_rules:
+      'Get the C4 modeling rules that govern how diagrams should be structured and how agents should model, implement, and verify work.',
+    validate_model:
+      'Validate a model against C4 rules. Returns warnings for invalid hierarchy, disconnected relationships, missing mention edges, and cross-container component edges.',
+    get_task:
+      'Get the next implementation task. Returns one logical work unit at a time, ordered by dependencies. Workflow: get_task -> build -> update_nodes implemented -> get_task again.',
+    get_changes:
+      'Show what changed in a model since the agent last read or wrote it. Returns a human-readable diff of nodes, edges, contracts, flows, and groups.',
+    get_structure:
+      'Get the structure of a project directory. Returns an annotated directory tree showing manifests, infrastructure configs, and environment templates.'
+  }
+  return descriptions[name]
+}
+
+function toolInputSchema(name: ScryerToolName): JsonRecord {
+  const stringSchema = { type: 'string' }
+  const sourceLocationSchema = {
+    type: 'object',
+    additionalProperties: false,
+    required: ['pattern'],
+    properties: {
+      pattern: {
+        type: 'string',
+        description: 'File glob or file path, for example src/api/**/*.ts'
+      },
+      line: { type: 'number' },
+      endLine: { type: 'number' },
+      command: {
+        type: 'string',
+        description: 'Optional command that verifies this node or flow, useful for flow test links'
+      }
+    }
+  }
+  const modelNameProperty = {
+    model: {
+      type: 'string',
+      description: 'Optional model name. Omit to use the project-local .scryer/model.scry.'
+    }
+  }
+
+  switch (name) {
+    case 'set_model':
+      return {
+        type: 'object',
+        additionalProperties: false,
+        required: ['data'],
+        properties: {
+          ...modelNameProperty,
+          data: {
+            type: 'string',
+            description:
+              'Full C4ModelData JSON string. Node fields must be inside data; contracts use data.contract: {expect, ask, never}.'
+          }
+        }
+      }
+    case 'set_node':
+      return {
+        type: 'object',
+        additionalProperties: false,
+        required: ['node_id', 'data'],
+        properties: {
+          ...modelNameProperty,
+          node_id: stringSchema,
+          data: {
+            type: 'string',
+            description:
+              'JSON string with {nodes, edges}. Every node must be a descendant of node_id and place name/kind/status/contract under data.'
+          }
+        }
+      }
+    case 'update_source_map':
+      return {
+        type: 'object',
+        additionalProperties: false,
+        required: ['entries'],
+        properties: {
+          ...modelNameProperty,
+          entries: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['node_id', 'locations'],
+              properties: {
+                node_id: stringSchema,
+                locations: {
+                  type: 'array',
+                  description: 'Source locations. Use [] only to clear the source map for node_id.',
+                  items: sourceLocationSchema
+                }
+              }
+            }
+          }
+        }
+      }
+    case 'set_flows':
+      return {
+        type: 'object',
+        additionalProperties: false,
+        required: ['data'],
+        properties: {
+          ...modelNameProperty,
+          data: {
+            type: 'string',
+            description:
+              'JSON string for one flow object or an array of flows. Flow shape: {id, name, description?, steps:[{id, description, branches?}]}.'
+          }
+        }
+      }
+    default:
+      return {
+        type: 'object',
+        additionalProperties: true
+      }
+  }
 }
 
 export async function handleScryerMcpMessage(
@@ -124,7 +270,8 @@ export async function handleScryerMcpMessage(
         serverInfo: {
           name: 'orca-scryer',
           version: '1.0.0'
-        }
+        },
+        instructions: MCP_INSTRUCTIONS
       })
     }
     case 'ping':
@@ -134,10 +281,7 @@ export async function handleScryerMcpMessage(
         tools: TOOL_NAMES.map((name) => ({
           name,
           description: toolDescription(name),
-          inputSchema: {
-            type: 'object',
-            additionalProperties: true
-          }
+          inputSchema: toolInputSchema(name)
         }))
       })
     case 'tools/call': {

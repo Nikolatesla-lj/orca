@@ -174,6 +174,7 @@ export default function ArchitecturePanel({
     toggleLock,
     openSourceLocation,
     startInitialModel,
+    startDeepModel,
     fillNodeWithAi,
     startAdvisorReview,
     writeMcpConfig,
@@ -673,6 +674,16 @@ export default function ArchitecturePanel({
           <RefreshCw className="size-3" />
           Reload
         </Button>
+        <Button
+          variant="outline"
+          size="xs"
+          onClick={() => void startDeepModel()}
+          disabled={!projectPath || editingLocked}
+          data-testid="architecture-deep-build-ai"
+        >
+          <Bot className="size-3" />
+          Deep Build
+        </Button>
         <ArchitectureThemeEditor
           open={themeOpen}
           theme={architectureTheme}
@@ -746,6 +757,21 @@ export default function ArchitecturePanel({
                       <span className="text-sm font-medium">Build with AI</span>
                       <span className="text-[11px] text-muted-foreground">
                         Scan the codebase and generate an architecture model
+                      </span>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="flex items-center gap-3 rounded border border-border px-3 py-2 text-left hover:bg-accent"
+                    onClick={() => void startDeepModel()}
+                    disabled={editingLocked}
+                    data-testid="architecture-deep-build-ai-empty"
+                  >
+                    <Bot className="size-4 text-violet-500" />
+                    <span className="grid gap-0.5">
+                      <span className="text-sm font-medium">Deep Build with AI</span>
+                      <span className="text-[11px] text-muted-foreground">
+                        Generate containers, components, flows, and contracts from code
                       </span>
                     </span>
                   </button>

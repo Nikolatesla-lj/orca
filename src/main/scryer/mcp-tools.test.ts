@@ -264,6 +264,272 @@ describe('callScryerTool', () => {
     expect(result.content).toMatch(/Component .* must have a container parent/)
   })
 
+  it('rejects top-level C4 node fields that would hide malformed agent output', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-malformed-node-'))
+    const result = await callScryerTool(projectPath, {
+      toolName: 'set_model',
+      arguments: {
+        data: JSON.stringify({
+          nodes: [
+            {
+              id: 'world-clock-app',
+              name: 'World Clock App',
+              kind: 'system',
+              data: {
+                name: 'world-clock-app',
+                description: '',
+                kind: 'system'
+              }
+            },
+            {
+              id: 'web-ui',
+              name: 'Web UI',
+              kind: 'container',
+              parent: 'world-clock-app',
+              status: 'implemented',
+              data: {
+                name: 'web-ui',
+                description: '',
+                kind: 'system'
+              }
+            }
+          ],
+          edges: []
+        })
+      }
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.content).toContain("Node 'world-clock-app' uses top-level 'name'")
+    expect(result.content).toContain("Node 'web-ui' uses top-level 'parent'")
+    expect(result.content).toContain("Node 'web-ui' uses top-level 'status'")
+  })
+
+  it('reports malformed persisted node semantics during validation', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-validate-malformed-'))
+    await mkdir(join(projectPath, '.scryer'), { recursive: true })
+    await writeFile(
+      getProjectModelPath(projectPath),
+      JSON.stringify(
+        {
+          nodes: [
+            {
+              id: 'web-ui',
+              kind: 'container',
+              name: 'Web UI',
+              parent: 'world-clock-app',
+              data: { name: 'web-ui', description: '', kind: 'system' }
+            }
+          ],
+          edges: []
+        },
+        null,
+        2
+      )
+    )
+
+    const result = await callScryerTool(projectPath, {
+      toolName: 'validate_model',
+      arguments: {}
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.content).toContain("Node 'web-ui' uses top-level 'kind'")
+    expect(result.content).toContain("Node 'web-ui' uses top-level 'parent'")
+  })
+
+  it('rejects non-array source map updates and keeps the stored source map unchanged', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-source-map-shape-'))
+    await callScryerTool(projectPath, {
+      toolName: 'set_model',
+      arguments: {
+        data: JSON.stringify({
+          nodes: [
+            {
+              id: 'system',
+              data: { name: 'Shop', description: 'Commerce system', kind: 'system' }
+            },
+            {
+              id: 'web',
+              parentId: 'system',
+              data: { name: 'Web', description: 'Web UI', kind: 'container' }
+            }
+          ],
+          edges: [],
+          sourceMap: {
+            web: [{ pattern: 'src/web/**' }]
+          }
+        })
+      }
+    })
+
+    const result = await callScryerTool(projectPath, {
+      toolName: 'update_source_map',
+      arguments: {
+        sourceMap: {
+          web: { patterns: ['src/web/**'] }
+        }
+      }
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.content).toContain('update_source_map requires entries')
+    const model = await readModel(projectPath)
+    expect(model.sourceMap?.web).toEqual([{ pattern: 'src/web/**' }])
+  })
+
+  it('migrates shorthand node contract fields into the official data.contract shape', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-contract-shape-'))
+    const result = await callScryerTool(projectPath, {
+      toolName: 'set_model',
+      arguments: {
+        data: JSON.stringify({
+          nodes: [
+            {
+              id: 'system',
+              data: {
+                name: 'Shop',
+                description: 'Commerce system',
+                kind: 'system',
+                expect: ['Owns checkout'],
+                never: ['Store card data']
+              }
+            }
+          ],
+          edges: []
+        })
+      }
+    })
+
+    expect(result.ok).toBe(true)
+    const rawStored = JSON.parse(await readFile(getProjectModelPath(projectPath), 'utf8'))
+    expect(rawStored.nodes[0].data.contract).toEqual({
+      expect: ['Owns checkout'],
+      ask: [],
+      never: ['Store card data']
+    })
+    expect(rawStored.nodes[0].data.expect).toBeUndefined()
+    expect(rawStored.nodes[0].data.never).toBeUndefined()
+  })
+
+  it('rejects invalid source map locations instead of silently clearing entries', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-source-map-invalid-'))
+    await callScryerTool(projectPath, {
+      toolName: 'set_model',
+      arguments: {
+        data: JSON.stringify({
+          nodes: [
+            {
+              id: 'system',
+              data: { name: 'Shop', description: 'Commerce system', kind: 'system' }
+            },
+            {
+              id: 'web',
+              parentId: 'system',
+              data: { name: 'Web', description: 'Web UI', kind: 'container' }
+            }
+          ],
+          edges: [],
+          sourceMap: {
+            web: [{ pattern: 'src/web/**' }]
+          }
+        })
+      }
+    })
+
+    const result = await callScryerTool(projectPath, {
+      toolName: 'update_source_map',
+      arguments: {
+        entries: [{ node_id: 'web', locations: [{ path: 'src/app.tsx' }] }]
+      }
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.content).toContain(
+      "source map entry 'web' location 1 requires a non-empty pattern"
+    )
+    const model = await readModel(projectPath)
+    expect(model.sourceMap?.web).toEqual([{ pattern: 'src/web/**' }])
+  })
+
+  it('rejects wrapped or malformed flow payloads and validates persisted flow shape', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-flow-shape-'))
+    await callScryerTool(projectPath, {
+      toolName: 'set_model',
+      arguments: {
+        data: JSON.stringify({
+          nodes: [
+            { id: 'system', data: { name: 'Shop', description: 'Commerce', kind: 'system' } }
+          ],
+          edges: []
+        })
+      }
+    })
+
+    const wrapped = await callScryerTool(projectPath, {
+      toolName: 'set_flows',
+      arguments: {
+        data: JSON.stringify({
+          flows: [
+            {
+              id: 'scenario-add',
+              name: 'Add Item',
+              steps: [{ id: 'step-1', description: 'User adds an item' }]
+            }
+          ]
+        })
+      }
+    })
+    expect(wrapped.ok).toBe(false)
+    expect(wrapped.content).toContain('set_flows data must be a single flow object or an array')
+
+    const missingStepId = await callScryerTool(projectPath, {
+      toolName: 'set_flows',
+      arguments: {
+        data: JSON.stringify([
+          {
+            id: 'scenario-add',
+            name: 'Add Item',
+            steps: [{ source: 'user', target: 'system', label: 'adds' }]
+          }
+        ])
+      }
+    })
+    expect(missingStepId.ok).toBe(false)
+    expect(missingStepId.content).toContain("Flow 'scenario-add' step at steps[0] requires id")
+
+    const valid = await callScryerTool(projectPath, {
+      toolName: 'set_flows',
+      arguments: {
+        data: JSON.stringify([
+          {
+            id: 'scenario-add',
+            name: 'Add Item',
+            steps: [{ id: 'step-1', description: 'User adds an item' }]
+          }
+        ])
+      }
+    })
+    expect(valid.ok).toBe(true)
+
+    const model = await readModel(projectPath)
+    model.flows = [
+      {
+        id: 'scenario-bad',
+        name: 'Bad Flow',
+        steps: [{ description: 'Missing id' } as never]
+      }
+    ]
+    await writeFile(getProjectModelPath(projectPath), JSON.stringify(model, null, 2))
+
+    const validation = await callScryerTool(projectPath, {
+      toolName: 'validate_model',
+      arguments: {}
+    })
+    expect(validation.ok).toBe(false)
+    expect(validation.content).toContain("Flow 'scenario-bad' step at steps[0] requires id")
+  })
+
   it('prioritizes deployment group scaffolds before individual container work', async () => {
     const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-group-task-'))
     await callScryerTool(projectPath, {
@@ -471,6 +737,10 @@ describe('callScryerTool', () => {
 
     expect(rules.ok).toBe(true)
     expect(rules.content).toContain('One edge per relationship')
+    expect(rules.content).toContain('Model for production, not for demos')
+    expect(rules.content).toContain(
+      'When adding components, populate them with all three code-level node kinds'
+    )
     expect(rules.content).toContain('No cross-container component edges')
     expect(rules.content).toContain('Implementation loop')
   })

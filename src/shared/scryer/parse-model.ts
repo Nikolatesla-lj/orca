@@ -93,8 +93,7 @@ function migrateContract(raw: unknown): Contract {
 
 function normalizeFlowStep(rawStep: unknown): FlowStep {
   const step = isRecord(rawStep) ? rawStep : {}
-  const id =
-    typeof step.id === 'string' && step.id.trim() ? step.id.trim() : globalThis.crypto.randomUUID()
+  const id = typeof step.id === 'string' && step.id.trim() ? step.id.trim() : ''
   const branches = Array.isArray(step.branches) ? step.branches.map(normalizeFlowBranch) : undefined
   return {
     ...(step as Partial<FlowStep>),
@@ -166,7 +165,12 @@ function normalizeNode(rawNode: unknown): C4Node {
   const node = isRecord(rawNode) ? rawNode : {}
   const rawData = isRecord(node.data) ? node.data : {}
   const kind = typeof rawData.kind === 'string' ? rawData.kind : 'system'
-  const rawContract = rawData.contract ?? rawData.guidelines
+  const rawContract =
+    rawData.contract ??
+    rawData.guidelines ??
+    (rawData.expect !== undefined || rawData.ask !== undefined || rawData.never !== undefined
+      ? { expect: rawData.expect, ask: rawData.ask, never: rawData.never }
+      : undefined)
   const contract = rawContract ? migrateContract(rawContract) : undefined
   const rawNotes = rawData.notes
   const notes =
@@ -191,6 +195,9 @@ function normalizeNode(rawNode: unknown): C4Node {
     notes,
     status: stripStatus ? undefined : status,
     guidelines: undefined,
+    expect: undefined,
+    ask: undefined,
+    never: undefined,
     references: undefined,
     ...(!hasPosition ? { _needsLayout: true } : {})
   }
@@ -361,8 +368,8 @@ export function parseModelData(raw: string): C4ModelData {
       : []
     return {
       ...(record as Partial<Flow>),
-      id: typeof record.id === 'string' ? record.id : globalThis.crypto.randomUUID(),
-      name: typeof record.name === 'string' ? record.name : 'Flow',
+      id: typeof record.id === 'string' ? record.id : '',
+      name: typeof record.name === 'string' ? record.name : '',
       steps: migrateFlowTransitions(steps, transitions),
       transitions: undefined
     }

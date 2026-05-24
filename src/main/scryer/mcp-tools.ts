@@ -7,6 +7,7 @@ import type {
   Contract,
   ContractItem,
   Flow,
+  FlowStep,
   Group,
   ModelProperty,
   ScryerToolCall,
@@ -72,19 +73,36 @@ function normalizeSources(value: unknown): C4Node['data']['sources'] | undefined
     .filter((source) => source.pattern)
 }
 
-function normalizeSourceLocations(value: unknown): SourceLocation[] | undefined {
+function normalizeSourceLocationsStrict(
+  value: unknown,
+  label: string
+): { locations?: SourceLocation[]; error?: string } {
   if (!Array.isArray(value)) {
-    return undefined
+    return { error: `${label} requires locations array` }
   }
-  return value
-    .filter(isRecord)
-    .map((source) => ({
-      pattern: String(source.pattern ?? ''),
+  const locations: SourceLocation[] = []
+  for (const [index, source] of value.entries()) {
+    const itemLabel = `${label} location ${index + 1}`
+    if (!isRecord(source) || typeof source.pattern !== 'string' || !source.pattern.trim()) {
+      return { error: `${itemLabel} requires a non-empty pattern` }
+    }
+    if (source.line !== undefined && typeof source.line !== 'number') {
+      return { error: `${itemLabel} line must be a number` }
+    }
+    if (source.endLine !== undefined && typeof source.endLine !== 'number') {
+      return { error: `${itemLabel} endLine must be a number` }
+    }
+    if (source.command !== undefined && typeof source.command !== 'string') {
+      return { error: `${itemLabel} command must be a string` }
+    }
+    locations.push({
+      pattern: source.pattern.trim(),
       ...(typeof source.line === 'number' ? { line: source.line } : {}),
       ...(typeof source.endLine === 'number' ? { endLine: source.endLine } : {}),
-      ...(typeof source.command === 'string' ? { command: source.command } : {})
-    }))
-    .filter((source) => source.pattern)
+      ...(typeof source.command === 'string' ? { command: source.command.trim() } : {})
+    })
+  }
+  return { locations }
 }
 
 function normalizeProperties(value: unknown): ModelProperty[] | undefined {
@@ -148,6 +166,97 @@ function validatePropertyLabels(properties: ModelProperty[], label: string): str
     }
   }
   return null
+}
+
+const TOP_LEVEL_NODE_DATA_FIELDS = [
+  'name',
+  'kind',
+  'description',
+  'technology',
+  'status',
+  'external',
+  'shape',
+  'contract',
+  'sources',
+  'notes',
+  'properties',
+  'parent',
+  'parent_id'
+] as const
+
+function validateNodeRuntimeShape(node: C4Node): string[] {
+  const errors: string[] = []
+  const record = node as C4Node & Record<string, unknown>
+  for (const field of TOP_LEVEL_NODE_DATA_FIELDS) {
+    if (record[field] === undefined) {
+      continue
+    }
+    const target = field === 'parent' || field === 'parent_id' ? 'parentId' : `data.${field}`
+    errors.push(`Node '${node.id}' uses top-level '${field}'. Use '${target}' instead.`)
+  }
+  if (!isRecord(node.data)) {
+    errors.push(`Node '${node.id}' requires data`)
+    return errors
+  }
+  if (typeof node.data.name !== 'string' || !node.data.name.trim()) {
+    errors.push(`Node '${node.id}' requires data.name`)
+  }
+  if (typeof node.data.description !== 'string') {
+    errors.push(`Node '${node.id}' requires data.description`)
+  }
+  if (!isKind(node.data.kind)) {
+    errors.push(`Node '${node.id}' has invalid kind '${String(node.data.kind)}'`)
+  }
+  return errors
+}
+
+function validateRawSetModelData(raw: string): string[] {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return []
+  }
+  const root = isRecord(parsed) ? parsed : {}
+  const errors: string[] = []
+  if (root.sourceMap !== undefined && isRecord(root.sourceMap)) {
+    for (const [nodeId, locations] of Object.entries(root.sourceMap)) {
+      if (!Array.isArray(locations)) {
+        errors.push(`sourceMap entry '${nodeId}' must be an array of source locations`)
+      }
+    }
+  }
+  if (!Array.isArray(root.nodes)) {
+    return errors
+  }
+  for (const rawNode of root.nodes) {
+    if (!isRecord(rawNode)) {
+      errors.push('Each node must be an object')
+      continue
+    }
+    const nodeId = typeof rawNode.id === 'string' ? rawNode.id : '<missing id>'
+    for (const field of TOP_LEVEL_NODE_DATA_FIELDS) {
+      if (rawNode[field] === undefined) {
+        continue
+      }
+      const target = field === 'parent' || field === 'parent_id' ? 'parentId' : `data.${field}`
+      errors.push(`Node '${nodeId}' uses top-level '${field}'. Use '${target}' instead.`)
+    }
+    if (!isRecord(rawNode.data)) {
+      errors.push(`Node '${nodeId}' requires data`)
+      continue
+    }
+    if (typeof rawNode.data.name !== 'string' || !rawNode.data.name.trim()) {
+      errors.push(`Node '${nodeId}' requires data.name`)
+    }
+    if (typeof rawNode.data.description !== 'string') {
+      errors.push(`Node '${nodeId}' requires data.description`)
+    }
+    if (!isKind(rawNode.data.kind)) {
+      errors.push(`Node '${nodeId}' has invalid kind '${String(rawNode.data.kind)}'`)
+    }
+  }
+  return errors
 }
 
 function validateParent(model: C4ModelData, node: C4Node): string | null {
@@ -227,6 +336,101 @@ function validateMentionEdges(model: C4ModelData): string[] {
   return errors
 }
 
+function validateFlowSteps(
+  flowId: string,
+  steps: unknown,
+  path: string,
+  seenIds: Set<string>
+): string[] {
+  if (!Array.isArray(steps)) {
+    return [`Flow '${flowId}' ${path} must be an array`]
+  }
+  const errors: string[] = []
+  for (const [index, rawStep] of steps.entries()) {
+    const stepPath = `${path}[${index}]`
+    if (!isRecord(rawStep)) {
+      errors.push(`Flow '${flowId}' step at ${stepPath} must be an object`)
+      continue
+    }
+    const stepId = asString(rawStep.id)?.trim() ?? ''
+    if (!stepId) {
+      errors.push(`Flow '${flowId}' step at ${stepPath} requires id`)
+    } else if (seenIds.has(stepId)) {
+      errors.push(`Duplicate step ID '${stepId}' in flow '${flowId}'`)
+    } else {
+      seenIds.add(stepId)
+    }
+    if (rawStep.description !== undefined && typeof rawStep.description !== 'string') {
+      errors.push(`Flow '${flowId}' step '${stepId || stepPath}' description must be a string`)
+    }
+    if (rawStep.label !== undefined && typeof rawStep.label !== 'string') {
+      errors.push(`Flow '${flowId}' step '${stepId || stepPath}' label must be a string`)
+    }
+    if (rawStep.branches === undefined) {
+      continue
+    }
+    if (!Array.isArray(rawStep.branches)) {
+      errors.push(`Flow '${flowId}' step '${stepId || stepPath}' branches must be an array`)
+      continue
+    }
+    for (const [branchIndex, rawBranch] of rawStep.branches.entries()) {
+      const branchPath = `${stepPath}.branches[${branchIndex}]`
+      if (!isRecord(rawBranch)) {
+        errors.push(`Flow '${flowId}' branch at ${branchPath} must be an object`)
+        continue
+      }
+      if (rawBranch.condition !== undefined && typeof rawBranch.condition !== 'string') {
+        errors.push(`Flow '${flowId}' branch at ${branchPath} condition must be a string`)
+      }
+      errors.push(...validateFlowSteps(flowId, rawBranch.steps, `${branchPath}.steps`, seenIds))
+    }
+  }
+  return errors
+}
+
+function validateFlowRuntimeShape(flow: unknown, index: number): string[] {
+  if (!isRecord(flow)) {
+    return [`Flow at index ${index} must be an object`]
+  }
+  const flowId = asString(flow.id)?.trim() ?? ''
+  const label = flowId || `index ${index}`
+  const errors: string[] = []
+  if ('flows' in flow) {
+    errors.push(
+      'set_flows data must be a single flow object or an array, not an object with a flows property'
+    )
+  }
+  if (!flowId) {
+    errors.push(`Flow at index ${index} requires id`)
+  }
+  if (typeof flow.name !== 'string' || !flow.name.trim()) {
+    errors.push(`Flow '${label}' requires name`)
+  }
+  errors.push(...validateFlowSteps(label, flow.steps, 'steps', new Set<string>()))
+  return errors
+}
+
+function migrateFlowStepLabels(steps: FlowStep[]): FlowStep[] {
+  return steps.map((step) => ({
+    ...step,
+    description:
+      step.description !== undefined && step.description !== '' ? step.description : step.label,
+    label: step.description !== undefined && step.description !== '' ? step.label : undefined,
+    branches: step.branches?.map((branch) => ({
+      ...branch,
+      steps: migrateFlowStepLabels(branch.steps)
+    }))
+  }))
+}
+
+function normalizeFlowForStorage(flow: Flow): Flow {
+  return {
+    ...flow,
+    steps: migrateFlowStepLabels(flow.steps),
+    transitions: undefined
+  }
+}
+
 function inheritedExpectItems(
   model: C4ModelData,
   node: C4Node,
@@ -249,8 +453,9 @@ function validateModelShape(model: C4ModelData): string[] {
   const errors: string[] = []
   const nodeIds = new Set(model.nodes.map((node) => node.id))
   for (const node of model.nodes) {
-    if (!isKind(node.data.kind)) {
-      errors.push(`Node '${node.id}' has invalid kind '${String(node.data.kind)}'`)
+    const runtimeErrors = validateNodeRuntimeShape(node)
+    errors.push(...runtimeErrors)
+    if (runtimeErrors.length > 0) {
       continue
     }
     const parentError = validateParent(model, node)
@@ -293,9 +498,29 @@ function validateModelShape(model: C4ModelData): string[] {
     if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) {
       errors.push(`Edge '${edge.id}' references a missing node`)
     }
+    if (typeof edge.data?.label !== 'string' || !edge.data.label.trim()) {
+      errors.push(`Edge '${edge.id}' requires data.label`)
+      continue
+    }
     if ((edge.data?.label ?? '').length > 30) {
       errors.push(`Edge label '${edge.data?.label}' exceeds 30 character limit`)
     }
+  }
+  if (isRecord(model.sourceMap)) {
+    for (const [nodeId, locations] of Object.entries(model.sourceMap)) {
+      if (!Array.isArray(locations)) {
+        errors.push(`sourceMap entry '${nodeId}' must be an array of source locations`)
+        continue
+      }
+      for (const location of locations) {
+        if (!isRecord(location) || typeof location.pattern !== 'string' || !location.pattern) {
+          errors.push(`sourceMap entry '${nodeId}' contains an invalid source location`)
+        }
+      }
+    }
+  }
+  for (const [index, flow] of (model.flows ?? []).entries()) {
+    errors.push(...validateFlowRuntimeShape(flow, index))
   }
   return errors
 }
@@ -507,6 +732,10 @@ async function setModel(
 ): Promise<ScryerToolResult> {
   if (typeof args.data !== 'string') {
     return fail('set_model requires a JSON string in arguments.data')
+  }
+  const inputErrors = validateRawSetModelData(args.data)
+  if (inputErrors.length > 0) {
+    return fail(inputErrors.join('\n'))
   }
   let model: C4ModelData
   try {
@@ -1047,12 +1276,19 @@ async function updateNodes(
       }
       node.data.properties = properties
     }
-    const locations = normalizeSourceLocations(update.source)
-    if (locations !== undefined) {
-      if (locations.length === 0) {
+    if (update.source !== undefined) {
+      const { locations, error } = normalizeSourceLocationsStrict(
+        update.source,
+        `source map entry '${node.id}'`
+      )
+      if (error) {
+        return fail(error)
+      }
+      const nextLocations = locations ?? []
+      if (nextLocations.length === 0) {
         delete sourceMap[node.id]
       } else {
-        sourceMap[node.id] = locations
+        sourceMap[node.id] = nextLocations
       }
     }
     updated.push(update.node_id)
@@ -1474,15 +1710,20 @@ export async function callScryerTool(
           if (!exists) {
             return fail(`Node or flow '${entry.node_id}' not found`)
           }
-          const locations = normalizeSourceLocations(entry.locations) ?? []
-          if (locations.length === 0) {
+          const { locations, error } = normalizeSourceLocationsStrict(
+            entry.locations,
+            `source map entry '${entry.node_id}'`
+          )
+          if (error) {
+            return fail(error)
+          }
+          const nextLocations = locations ?? []
+          if (nextLocations.length === 0) {
             delete sourceMap[entry.node_id]
           } else {
-            sourceMap[entry.node_id] = locations
+            sourceMap[entry.node_id] = nextLocations
           }
         }
-      } else if (isRecord(call.arguments.sourceMap)) {
-        Object.assign(sourceMap, call.arguments.sourceMap as C4ModelData['sourceMap'])
       } else {
         return fail('update_source_map requires entries')
       }
@@ -1494,13 +1735,26 @@ export async function callScryerTool(
       if (typeof call.arguments.data !== 'string') {
         return fail('set_flows requires data')
       }
-      let parsed: Flow | Flow[]
+      let parsed: unknown
       try {
-        parsed = JSON.parse(call.arguments.data) as Flow | Flow[]
+        parsed = JSON.parse(call.arguments.data) as unknown
       } catch (error) {
         return fail(`Invalid flow JSON: ${error instanceof Error ? error.message : String(error)}`)
       }
-      const flows = Array.isArray(parsed) ? parsed : [parsed]
+      if (isRecord(parsed) && Array.isArray(parsed.flows)) {
+        return fail(
+          'set_flows data must be a single flow object or an array, not an object with a flows property'
+        )
+      }
+      const rawFlows = Array.isArray(parsed) ? parsed : [parsed]
+      if (rawFlows.length === 0) {
+        return fail('Empty flow array')
+      }
+      const flowErrors = rawFlows.flatMap((flow, index) => validateFlowRuntimeShape(flow, index))
+      if (flowErrors.length > 0) {
+        return fail(flowErrors.join('\n'))
+      }
+      const flows = rawFlows.map((flow) => normalizeFlowForStorage(flow as Flow))
       const model = await readModel(projectPath)
       const next = [...(model.flows ?? [])]
       for (const flow of flows) {

@@ -1341,6 +1341,10 @@ const api = {
       projectPath: string
       modelName: string
     }): Promise<unknown> => ipcRenderer.invoke('architecture:prepareInitialModelPrompt', args),
+    prepareDeepModelPrompt: (args: {
+      projectPath: string
+      modelName?: string | null
+    }): Promise<unknown> => ipcRenderer.invoke('architecture:prepareDeepModelPrompt', args),
     prepareNodeFillPrompt: (args: {
       projectPath: string
       modelName?: string | null

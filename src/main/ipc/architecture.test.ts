@@ -189,6 +189,17 @@ describe('registerArchitectureHandlers', () => {
       prompt: expect.stringContaining('Build a C4 architecture model named "game-plan"')
     })
 
+    const deepPrompt = await handlers.get('architecture:prepareDeepModelPrompt')!(null, {
+      projectPath,
+      modelName: 'game-plan'
+    })
+    expect(deepPrompt).toMatchObject({
+      prompt: expect.stringContaining('Deep Architecture B')
+    })
+    expect(deepPrompt).toMatchObject({
+      prompt: expect.stringContaining('Flow extraction')
+    })
+
     const fillPrompt = await handlers.get('architecture:prepareNodeFillPrompt')!(null, {
       projectPath,
       modelName: 'game-plan',
