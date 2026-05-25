@@ -92,11 +92,12 @@ export type ErrorClass = z.infer<typeof errorClassSchema>
 export const repoMethodSchema = z.enum(['folder_picker', 'clone_url', 'drag_drop'])
 export type RepoMethod = z.infer<typeof repoMethodSchema>
 
-// Five Setup-step affordances the user can pick after `repo_added` fires (see
+// Setup-step affordances the user can pick after `repo_added` fires (see
 // AddRepoSetupStep). One enum because every value lives on the same screen and
-// the funnel question is "which one did they pick" — adding a sixth value
-// later is additive-safe per the schema-evolution doctrine below.
+// the funnel question is "which one did they pick" — adding values later is
+// additive-safe per the schema-evolution doctrine below.
 export const addRepoSetupStepActionSchema = z.enum([
+  'open_primary',
   'create_worktree',
   'configure',
   'skip',

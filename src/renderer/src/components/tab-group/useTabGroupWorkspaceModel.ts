@@ -2,7 +2,6 @@
    group-scoped activation, close, split, and tab-order rules together so the extracted
    controller cannot drift from the TabGroupPanel surface it coordinates. */
 import { useCallback, useMemo } from 'react'
-import { toast } from 'sonner'
 import { useShallow } from 'zustand/react/shallow'
 import type { OpenFile } from '@/store/slices/editor'
 import type {
@@ -14,9 +13,6 @@ import type {
 } from '../../../../shared/types'
 import { useAppStore } from '../../store'
 import { useAllWorktrees } from '../../store/selectors'
-import { createUntitledMarkdownFile } from '../../lib/create-untitled-markdown'
-import { getConnectionId } from '../../lib/connection-context'
-import { extractIpcErrorMessage } from '../../lib/ipc-error'
 import { destroyWorkspaceWebviews } from '../../store/slices/browser-webview-cleanup'
 import { requestEditorFileClose } from '../editor/editor-autosave'
 import { focusTerminalTabSurface } from '../../lib/focus-terminal-tab-surface'
@@ -48,7 +44,6 @@ export function useTabGroupWorkspaceModel({
   groupId: string
   worktreeId: string
 }) {
-  const allWorktrees = useAllWorktrees()
   const worktreeState = useAppStore(
     useShallow((state) => ({
       // Why: Zustand v5 expects selector snapshots to be referentially stable
@@ -77,6 +72,15 @@ export function useTabGroupWorkspaceModel({
   const setActiveTabType = useAppStore((state) => state.setActiveTabType)
   const createBrowserTab = useAppStore((state) => state.createBrowserTab)
   const createArchitectureTab = useAppStore((state) => state.createArchitectureTab)
+  const openNewBrowserTabInActiveWorkspace = useAppStore(
+    (state) => state.openNewBrowserTabInActiveWorkspace
+  )
+  const openNewMarkdownInActiveWorkspace = useAppStore(
+    (state) => state.openNewMarkdownInActiveWorkspace
+  )
+  const openNewTerminalTabInActiveWorkspace = useAppStore(
+    (state) => state.openNewTerminalTabInActiveWorkspace
+  )
   const closeFile = useAppStore((state) => state.closeFile)
   const pinFile = useAppStore((state) => state.pinFile)
   const closeBrowserTab = useAppStore((state) => state.closeBrowserTab)
@@ -88,7 +92,7 @@ export function useTabGroupWorkspaceModel({
   const createEmptySplitGroup = useAppStore((state) => state.createEmptySplitGroup)
   const setTabCustomTitle = useAppStore((state) => state.setTabCustomTitle)
   const setTabColor = useAppStore((state) => state.setTabColor)
-  const openFile = useAppStore((state) => state.openFile)
+  const allWorktrees = useAllWorktrees()
 
   const group = useMemo(
     () => worktreeState.groups.find((item) => item.id === groupId) ?? null,
@@ -598,24 +602,7 @@ export function useTabGroupWorkspaceModel({
       closeToRight,
       createSplitGroup,
       newBrowserTab: () => {
-        void (async () => {
-          const state = useAppStore.getState()
-          const defaultUrl = state.browserDefaultUrl ?? 'about:blank'
-          if (
-            await createWebRuntimeSessionBrowserTab({
-              worktreeId,
-              url: defaultUrl,
-              targetGroupId: groupId
-            })
-          ) {
-            return
-          }
-          createBrowserTab(worktreeId, defaultUrl, {
-            title: 'New Browser Tab',
-            focusAddressBar: true,
-            targetGroupId: groupId
-          })
-        })()
+        void openNewBrowserTabInActiveWorkspace(groupId)
       },
       newArchitectureTab: () => {
         const path = worktree?.path ?? null
@@ -656,40 +643,10 @@ export function useTabGroupWorkspaceModel({
       // assistive-tech activation because the "+" menu can be triggered from
       // an unfocused panel without first updating global group focus.
       newFileTab: async () => {
-        const path = worktree?.path
-        if (!path) {
-          return
-        }
-        try {
-          const connectionId = getConnectionId(worktreeId) ?? undefined
-          const settings = useAppStore.getState().settings
-          const fileInfo = await createUntitledMarkdownFile(
-            path,
-            worktreeId,
-            connectionId,
-            settings
-          )
-          openFile(fileInfo, { preview: false, targetGroupId: groupId })
-        } catch (err) {
-          toast.error(extractIpcErrorMessage(err, 'Failed to create untitled markdown file.'))
-        }
+        await openNewMarkdownInActiveWorkspace(groupId)
       },
       newTerminalTab: () => {
-        void (async () => {
-          if (
-            await createWebRuntimeSessionTerminal({
-              worktreeId,
-              targetGroupId: groupId,
-              activate: true
-            })
-          ) {
-            return
-          }
-          const terminal = createTab(worktreeId, groupId)
-          setActiveTab(terminal.id)
-          setActiveTabType('terminal')
-          focusTerminalTabSurface(terminal.id)
-        })()
+        void openNewTerminalTabInActiveWorkspace(groupId)
       },
       newTerminalWithShell: (shellOverride: string) => {
         void (async () => {

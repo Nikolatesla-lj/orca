@@ -50,7 +50,7 @@ const SORT_OPTIONS = [
   { id: 'name', label: 'Name', description: null },
   {
     id: 'smart',
-    label: 'Smart',
+    label: 'Agent Activity',
     description: 'Agents that need attention, then most recent activity.'
   },
   { id: 'recent', label: 'Recent', description: null },
