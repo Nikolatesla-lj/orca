@@ -14,7 +14,8 @@ import {
   Plus,
   Redo2,
   RefreshCw,
-  Undo2
+  Undo2,
+  X
 } from 'lucide-react'
 import type { ArchitectureWorkspace } from '../../../../shared/types'
 import { e2eConfig } from '../../lib/e2e-config'
@@ -31,6 +32,7 @@ import { FlowScriptView } from './FlowScriptView'
 import { GroupsDndProvider, GroupsMain } from './GroupsView'
 import { SyncBar } from './SyncBar'
 import {
+  type ArchitectureProjectModelEntry,
   type ArchitectureMode,
   useArchitectureModelController
 } from './useArchitectureModelController'
@@ -192,6 +194,7 @@ export default function ArchitecturePanel({
   const [blankWorkspaceBusy, setBlankWorkspaceBusy] = useState(false)
   const [blankWorkspaceError, setBlankWorkspaceError] = useState<string | null>(null)
   const [architectureSidePanel, setArchitectureSidePanel] = useState<ArchitectureSidePanel>('tree')
+  const [closedModelTabNames, setClosedModelTabNames] = useState<Set<string>>(() => new Set())
   const ignoredInspectorSelectionRef = useRef<{
     nodeId: string | null
     edgeId: string | null
@@ -267,6 +270,63 @@ export default function ArchitecturePanel({
     }
     return tabs
   }, [activeModelName, projectModels])
+  const visibleModelTabs = useMemo(
+    () =>
+      modelTabs.filter(
+        (entry) => entry.name === activeModelName || !closedModelTabNames.has(entry.name)
+      ),
+    [activeModelName, closedModelTabNames, modelTabs]
+  )
+
+  useEffect(() => {
+    setClosedModelTabNames((current) => {
+      if (current.size === 0) {
+        return current
+      }
+      const liveNames = new Set(modelTabs.map((entry) => entry.name))
+      let changed = false
+      const next = new Set<string>()
+      for (const name of current) {
+        if (liveNames.has(name) && name !== activeModelName) {
+          next.add(name)
+        } else {
+          changed = true
+        }
+      }
+      return changed ? next : current
+    })
+  }, [activeModelName, modelTabs])
+
+  const openModelTab = (
+    modelName: string,
+    scope: ArchitectureProjectModelEntry['scope'] = 'project'
+  ): void => {
+    setClosedModelTabNames((current) => {
+      if (!current.has(modelName)) {
+        return current
+      }
+      const next = new Set(current)
+      next.delete(modelName)
+      return next
+    })
+    void openProjectModel(modelName, scope)
+  }
+
+  const closeModelTab = (modelName: string): void => {
+    if (editingLocked || modelTabs.length <= 1) {
+      return
+    }
+    const fallback =
+      modelName === activeModelName
+        ? (visibleModelTabs.find((entry) => entry.name !== modelName) ??
+          modelTabs.find((entry) => entry.name !== modelName) ??
+          null)
+        : null
+    setClosedModelTabNames((current) => new Set(current).add(modelName))
+    if (fallback) {
+      openModelTab(fallback.name, fallback.scope)
+    }
+  }
 
   const resolveAvailableBlankModelName = (requestedName: string): string => {
     const existingNames = new Set([...projectModels.map((entry) => entry.name), activeModelName])
@@ -540,31 +600,51 @@ export default function ArchitecturePanel({
         aria-label="Architecture models"
         data-testid="architecture-model-tab-strip"
       >
-        {modelTabs.map((entry) => {
+        {visibleModelTabs.map((entry) => {
           const isActive = entry.name === activeModelName
           return (
-            <button
+            <div
               key={entry.name}
-              type="button"
               role="tab"
               aria-selected={isActive}
-              className={`inline-flex h-8 max-w-44 min-w-24 shrink-0 items-center gap-1.5 rounded-t-md border px-3 font-mono text-[11px] transition-colors ${
+              className={`group inline-flex h-8 max-w-44 min-w-24 shrink-0 items-center rounded-t-md border font-mono text-[11px] transition-colors ${
                 isActive
                   ? '-mb-px border-border border-b-background bg-background text-foreground shadow-sm'
                   : 'border-transparent text-muted-foreground hover:bg-background/70 hover:text-foreground'
               }`}
-              disabled={editingLocked}
-              onClick={() => {
-                if (!isActive) {
-                  void openProjectModel(entry.name, entry.scope)
-                }
-              }}
               data-testid="architecture-model-tab"
               title={entry.fileName}
             >
-              <FileText className="size-3.5 shrink-0" />
-              <span className="truncate">{entry.fileName}</span>
-            </button>
+              <button
+                type="button"
+                className="flex h-full min-w-0 flex-1 items-center gap-1.5 px-3 text-left disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={editingLocked}
+                onClick={() => {
+                  if (!isActive) {
+                    openModelTab(entry.name, entry.scope)
+                  }
+                }}
+              >
+                <FileText className="size-3.5 shrink-0" />
+                <span className="truncate">{entry.fileName}</span>
+              </button>
+              {modelTabs.length > 1 ? (
+                <button
+                  type="button"
+                  className="mr-1 inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus:opacity-100 group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-40"
+                  disabled={editingLocked}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    closeModelTab(entry.name)
+                  }}
+                  data-testid="architecture-model-tab-close"
+                  title={`Close ${entry.fileName}`}
+                  aria-label={`Close ${entry.fileName}`}
+                >
+                  <X className="size-3" />
+                </button>
+              ) : null}
+            </div>
           )
         })}
         <button
@@ -952,11 +1032,13 @@ export default function ArchitecturePanel({
         selectedNodeId={selectedNodeId}
         activeFlowId={activeFlowId}
         onSelectNode={(nodeId) => {
-          openInspectorSidePanel()
           setArchitectureMode('topology')
           navigateToNode(nodeId)
         }}
         onDrillNode={drillIntoNode}
+        onOpenFlows={() => {
+          setArchitectureMode('flows')
+        }}
         onSelectFlow={(flowId) => {
           setArchitectureMode('flows')
           setActiveFlowId(flowId)
@@ -1050,7 +1132,7 @@ export default function ArchitecturePanel({
           templates={templates}
           disabled={editingLocked}
           onOpenChange={setCommandOpen}
-          onOpenModel={openProjectModel}
+          onOpenModel={openModelTab}
           onDeleteModel={deleteProjectModelByName}
           onLoadTemplate={createModelFromTemplate}
         />

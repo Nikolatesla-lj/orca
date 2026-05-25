@@ -18,7 +18,10 @@ import type {
   Group,
   SourceLocation
 } from '../../../../shared/scryer/model-types'
-import { resolveSourceLocationTarget } from '../../../../shared/scryer/source-map-paths'
+import {
+  resolveSourceLocationTarget,
+  uniqueSourceRootCandidates
+} from '../../../../shared/scryer/source-map-paths'
 import type { ModelUpdater } from './ArchitectureCanvas'
 import type { SyncStatus } from './SyncBar'
 import {
@@ -1511,8 +1514,32 @@ export function useArchitectureModelController({
         return
       }
       try {
-        const files = await window.api.fs.listFiles({ rootPath: projectPath })
-        const target = resolveSourceLocationTarget({ projectPath, files, location })
+        const modelProjectPath = modelRef.current?.projectPath
+        const candidateProjectPaths = uniqueSourceRootCandidates([modelProjectPath, projectPath])
+        let target: ReturnType<typeof resolveSourceLocationTarget> | null = null
+        let lastError = ''
+        for (const rootPath of candidateProjectPaths) {
+          try {
+            const files = await window.api.fs.listFiles({ rootPath })
+            const candidate = resolveSourceLocationTarget({
+              projectPath: rootPath,
+              files,
+              location
+            })
+            if (!('error' in candidate)) {
+              target = candidate
+              break
+            }
+            lastError = candidate.error
+          } catch (candidateError) {
+            lastError =
+              candidateError instanceof Error ? candidateError.message : String(candidateError)
+          }
+        }
+        target ??= {
+          error:
+            lastError || `No file in this worktree matches source pattern '${location.pattern}'.`
+        }
         if ('error' in target) {
           setError(target.error)
           toast.error(target.error)

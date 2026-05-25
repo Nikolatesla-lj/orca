@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest'
 import type { C4Edge, C4Node } from '../../../../../shared/scryer/model-types'
 import { assignAllHandles } from './edge-routing'
 import { computeEdgeBundles } from './edge-bundling'
-import { autoLayoutVisibleNodes, decorateEdgesForRouting } from './architecture-layout'
+import {
+  autoLayoutVisibleNodes,
+  decorateEdgesForRouting,
+  shouldAutoLayoutVisibleNodes
+} from './architecture-layout'
 
 function node(id: string, x: number, y: number, kind: C4Node['data']['kind'] = 'system'): C4Node {
   return {
@@ -91,6 +95,34 @@ describe('architecture layout and edge routing', () => {
     expect(laidOut.find((candidate) => candidate.id === 'external')?.position).toEqual({
       x: 640,
       y: -220
+    })
+  })
+
+  it('detects imported models that need an initial layout', () => {
+    expect(shouldAutoLayoutVisibleNodes([node('a', 0, 0)])).toBe(false)
+    expect(shouldAutoLayoutVisibleNodes([node('a', 0, 0), node('b', 240, 0)])).toBe(false)
+    expect(shouldAutoLayoutVisibleNodes([node('a', 0, 0), node('b', 0, 0)])).toBe(true)
+    expect(
+      shouldAutoLayoutVisibleNodes([{ ...node('a', 0, 0), position: undefined }, node('b', 0, 0)])
+    ).toBe(true)
+  })
+
+  it('lays out missing-position nodes without moving existing pinned nodes', () => {
+    const pinned = node('pinned', 400, 200)
+    const missing = { ...node('missing', 0, 0), position: undefined }
+    const laidOut = autoLayoutVisibleNodes([pinned, missing], [edge('link', 'pinned', 'missing')], {
+      codeLevel: false,
+      fullRelayout: false
+    })
+
+    expect(laidOut.find((candidate) => candidate.id === 'pinned')?.position).toEqual({
+      x: 400,
+      y: 200
+    })
+    expect(laidOut.find((candidate) => candidate.id === 'missing')?.position).toBeDefined()
+    expect(laidOut.find((candidate) => candidate.id === 'missing')?.position).not.toEqual({
+      x: 0,
+      y: 0
     })
   })
 })

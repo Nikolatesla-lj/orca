@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- Why: this canvas still owns selection, drill-in, edge editing, and layout wiring until the remaining Scryer panel logic is split out. */
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Background,
   BackgroundVariant,
@@ -36,7 +36,11 @@ import {
 } from './c4-model'
 import { Button } from '../ui/button'
 import { edgeTypes, type ArchitectureFlowEdge } from './edges'
-import { autoLayoutVisibleNodes, decorateEdgesForRouting } from './layout/architecture-layout'
+import {
+  autoLayoutVisibleNodes,
+  decorateEdgesForRouting,
+  shouldAutoLayoutVisibleNodes
+} from './layout/architecture-layout'
 import { nodeTypes, type ArchitectureFlowNode } from './nodes'
 import { createArchitecturePerformanceRecorder } from './architecture-performance'
 
@@ -365,47 +369,70 @@ function ArchitectureCanvasInner({
     view.currentParentId
   ])
 
+  const applyVisibleAutoLayout = useCallback(
+    (message: string, fullRelayout: boolean) => {
+      if (syncing) {
+        return
+      }
+      const layoutNodes = performanceRecorder.measure('auto-layout', () =>
+        autoLayoutVisibleNodes(view.visibleNodes, view.visibleEdges, {
+          codeLevel: view.currentParentKind === 'component',
+          fullRelayout
+        })
+      )
+      const positions = new Map(
+        layoutNodes
+          .filter((node) => !node.data._reference && node.position)
+          .map((node) => [node.id, node.position!])
+      )
+      if (positions.size === 0) {
+        return
+      }
+      void onModelChange((current) => {
+        let changed = false
+        const nodes = current.nodes.map((node) => {
+          const position = positions.get(node.id)
+          if (!position) {
+            return node
+          }
+          if (node.position?.x === position.x && node.position.y === position.y) {
+            return node
+          }
+          changed = true
+          return { ...node, position }
+        })
+        return changed ? { ...current, nodes } : null
+      }, message)
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          void reactFlow.fitView({ padding: 0.2 })
+        })
+      })
+    },
+    [
+      onModelChange,
+      performanceRecorder,
+      reactFlow,
+      syncing,
+      view.currentParentKind,
+      view.visibleEdges,
+      view.visibleNodes
+    ]
+  )
+
+  useEffect(() => {
+    if (syncing || !shouldAutoLayoutVisibleNodes(view.visibleNodes)) {
+      return
+    }
+    applyVisibleAutoLayout('Saved initial auto layout', false)
+  }, [applyVisibleAutoLayout, syncing, view.visibleNodes])
+
   const autoLayout = useCallback(() => {
     if (syncing) {
       return
     }
-    const layoutNodes = performanceRecorder.measure('auto-layout', () =>
-      autoLayoutVisibleNodes(view.visibleNodes, view.visibleEdges, {
-        codeLevel: view.currentParentKind === 'component',
-        fullRelayout: true
-      })
-    )
-    const positions = new Map(
-      layoutNodes
-        .filter((node) => !node.data._reference && node.position)
-        .map((node) => [node.id, node.position!])
-    )
-    if (positions.size === 0) {
-      return
-    }
-    void onModelChange((current) => {
-      let changed = false
-      const nodes = current.nodes.map((node) => {
-        const position = positions.get(node.id)
-        if (!position) {
-          return node
-        }
-        if (node.position?.x === position.x && node.position.y === position.y) {
-          return node
-        }
-        changed = true
-        return { ...node, position }
-      })
-      return changed ? { ...current, nodes } : null
-    }, 'Saved auto layout')
-  }, [
-    onModelChange,
-    performanceRecorder,
-    syncing,
-    view.currentParentKind,
-    view.visibleEdges,
-    view.visibleNodes
-  ])
+    applyVisibleAutoLayout('Saved auto layout', true)
+  }, [applyVisibleAutoLayout, syncing])
 
   const navigateToRoot = useCallback(() => onExpandedPathChange([]), [onExpandedPathChange])
   const navigateToBreadcrumb = useCallback(

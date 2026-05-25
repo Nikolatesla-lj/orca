@@ -10,6 +10,11 @@ export type SourceLocationTarget =
     }
   | { error: string }
 
+export type SourceLocationTargetCandidate = {
+  projectPath: string
+  files: string[]
+}
+
 function normalizeSlashes(value: string): string {
   return value.replace(/\\/g, '/').replace(/\/+/g, '/')
 }
@@ -66,6 +71,22 @@ function joinWorktreePath(projectPath: string, relativePath: string): string {
   return `${projectPath.replace(/[\\/]+$/, '')}${separator}${relativePath.replace(/\//g, separator)}`
 }
 
+export function uniqueSourceRootCandidates(
+  projectPaths: readonly (string | null | undefined)[]
+): string[] {
+  const seen = new Set<string>()
+  const candidates: string[] = []
+  for (const projectPath of projectPaths) {
+    const trimmed = projectPath?.trim()
+    if (!trimmed || seen.has(trimmed)) {
+      continue
+    }
+    seen.add(trimmed)
+    candidates.push(trimmed)
+  }
+  return candidates
+}
+
 export function resolveSourceLocationTarget(args: {
   projectPath: string
   files: string[]
@@ -101,4 +122,23 @@ export function resolveSourceLocationTarget(args: {
     ...(args.location.endLine !== undefined ? { endLine: args.location.endLine } : {}),
     ...(args.location.command !== undefined ? { command: args.location.command } : {})
   }
+}
+
+export function resolveSourceLocationTargetFromCandidates(args: {
+  candidates: readonly SourceLocationTargetCandidate[]
+  location: SourceLocation
+}): SourceLocationTarget {
+  let lastError = `No source root is available for source pattern '${args.location.pattern}'.`
+  for (const candidate of args.candidates) {
+    const target = resolveSourceLocationTarget({
+      projectPath: candidate.projectPath,
+      files: candidate.files,
+      location: args.location
+    })
+    if (!('error' in target)) {
+      return target
+    }
+    lastError = target.error
+  }
+  return { error: lastError }
 }

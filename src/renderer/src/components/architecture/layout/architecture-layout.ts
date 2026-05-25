@@ -59,6 +59,34 @@ function isReference(node: C4Node): boolean {
   return !!node.data._reference
 }
 
+function hasUsablePosition(node: C4Node): boolean {
+  return (
+    node.position !== undefined &&
+    Number.isFinite(node.position.x) &&
+    Number.isFinite(node.position.y)
+  )
+}
+
+export function shouldAutoLayoutVisibleNodes(nodes: readonly C4Node[]): boolean {
+  const normalNodes = nodes.filter((node) => !isReference(node))
+  if (normalNodes.length <= 1) {
+    return false
+  }
+
+  const positions = new Set<string>()
+  for (const node of normalNodes) {
+    if (!hasUsablePosition(node)) {
+      return true
+    }
+    const key = `${node.position!.x}:${node.position!.y}`
+    if (positions.has(key)) {
+      return true
+    }
+    positions.add(key)
+  }
+  return false
+}
+
 function gridLayout(nodes: readonly C4Node[]): C4Node[] {
   const normalNodes = nodes.filter((node) => !isReference(node))
   const referenceNodes = nodes.filter(isReference)
@@ -134,7 +162,7 @@ function graphLayout(
     const { width, height } = nodeSize(node)
     const fallback = initialGrid[index]?.position ?? { x: index * GRID_X, y: 0 }
     const position = fullRelayout ? fallback : (node.position ?? fallback)
-    const pinned = !fullRelayout && !node.data._needsLayout
+    const pinned = !fullRelayout && !node.data._needsLayout && hasUsablePosition(node)
     return {
       id: node.id,
       x: position.x + width / 2,

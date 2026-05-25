@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { resolveSourceLocationTarget } from './source-map-paths'
+import {
+  resolveSourceLocationTarget,
+  resolveSourceLocationTargetFromCandidates,
+  uniqueSourceRootCandidates
+} from './source-map-paths'
 
 describe('resolveSourceLocationTarget', () => {
   it('resolves exact source-map files inside the current worktree with line metadata', () => {
@@ -46,5 +50,25 @@ describe('resolveSourceLocationTarget', () => {
         location: { pattern: 'app/**/*.ts' }
       })
     ).toEqual({ error: "No file in this worktree matches source pattern 'app/**/*.ts'." })
+  })
+
+  it('prefers the model project path before falling back to the architecture tab path', () => {
+    expect(
+      uniqueSourceRootCandidates(['/model-project', '/tab-project', '/model-project'])
+    ).toEqual(['/model-project', '/tab-project'])
+
+    const result = resolveSourceLocationTargetFromCandidates({
+      candidates: [
+        { projectPath: '/model-project', files: ['web/src/App.tsx'] },
+        { projectPath: '/tab-project', files: ['src/index.ts'] }
+      ],
+      location: { pattern: 'web/src/**/*.tsx', line: 3 }
+    })
+
+    expect(result).toEqual({
+      absolutePath: '/model-project/web/src/App.tsx',
+      relativePath: 'web/src/App.tsx',
+      line: 3
+    })
   })
 })

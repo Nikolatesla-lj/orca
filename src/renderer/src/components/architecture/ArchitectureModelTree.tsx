@@ -10,6 +10,7 @@ type ArchitectureModelTreeProps = {
   docked?: boolean
   onSelectNode: (nodeId: string) => void
   onDrillNode: (nodeId: string) => void
+  onOpenFlows?: () => void
   onSelectFlow: (flowId: string) => void
 }
 
@@ -20,6 +21,7 @@ export function ArchitectureModelTree({
   docked = false,
   onSelectNode,
   onDrillNode,
+  onOpenFlows,
   onSelectFlow
 }: ArchitectureModelTreeProps): React.JSX.Element {
   const childrenByParent = new Map<string, C4Node[]>()
@@ -68,10 +70,16 @@ export function ArchitectureModelTree({
         </section>
 
         <section className="grid gap-1 border-t border-border pt-2">
-          <div className="flex items-center gap-1.5 px-1 py-1 font-medium text-muted-foreground">
+          <button
+            type="button"
+            className="flex items-center gap-1.5 rounded px-1 py-1 text-left font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+            onClick={onOpenFlows}
+            data-testid="architecture-flow-tree-heading"
+            title="Open flows view"
+          >
             <GitBranch className="size-3.5" />
             Flow tree
-          </div>
+          </button>
           {(model.flows ?? []).map((flow) => (
             <button
               key={flow.id}
