@@ -1173,16 +1173,22 @@ export function connectPanePty(
       return
     }
     safeFit(pane)
-    const cols = pane.terminal.cols
-    const rows = pane.terminal.rows
+    const measuredCols = pane.terminal.cols
+    const measuredRows = pane.terminal.rows
+    const hasUsableViewport =
+      Number.isFinite(measuredCols) &&
+      Number.isFinite(measuredRows) &&
+      measuredCols > 0 &&
+      measuredRows > 0
+    const transportViewport = hasUsableViewport ? { cols: measuredCols, rows: measuredRows } : {}
 
     // Why: if fitAddon resolved to 0×0, the container likely has no layout
-    // dimensions (display:none, unmounted, or zero-size parent). Surface a
-    // diagnostic so the user sees something instead of a blank pane.
-    if (cols === 0 || rows === 0) {
+    // dimensions (display:none, unmounted, or zero-size parent). Do not pass
+    // invalid geometry into spawn/attach; transports already own safe defaults.
+    if (!hasUsableViewport) {
       deps.onPtyErrorRef?.current?.(
         pane.id,
-        `Terminal has zero dimensions (${cols}×${rows}). The pane container may not be visible.`
+        `Terminal has zero dimensions (${measuredCols}×${measuredRows}). The pane container may not be visible.`
       )
     }
 
@@ -1265,8 +1271,7 @@ export function connectPanePty(
 
       const spawnedRaw = transport.connect({
         url: '',
-        cols,
-        rows,
+        ...transportViewport,
         callbacks: {
           onData: dataCallback,
           onReplayData: replayDataCallback,
@@ -1860,8 +1865,8 @@ export function connectPanePty(
       // Why: when a mobile-fit override is active, skip sending desktop dims
       // to the PTY — the PTY is already at phone dimensions and must stay there.
       const reattachPtyId = transport.getPtyId()
-      if (!reattachPtyId || !getFitOverrideForPty(reattachPtyId)) {
-        transport.resize(cols, rows)
+      if (hasUsableViewport && (!reattachPtyId || !getFitOverrideForPty(reattachPtyId))) {
+        transport.resize(measuredCols, measuredRows)
       }
       // Why: POSIX only delivers SIGWINCH when terminal dimensions actually
       // change. Sending it explicitly guarantees restored TUIs repaint at
@@ -2039,8 +2044,7 @@ export function connectPanePty(
             let expiredReattachError = false
             const reattachPromise = transport.connect({
               url: '',
-              cols,
-              rows,
+              ...transportViewport,
               sessionId: pendingSessionId,
               callbacks: {
                 onData: dataCallback,
@@ -2173,8 +2177,7 @@ export function connectPanePty(
       let expiredReattachError = false
       const reattachPromise = transport.connect({
         url: '',
-        cols,
-        rows,
+        ...transportViewport,
         sessionId: deferredReattachSessionId,
         callbacks: {
           onData: dataCallback,
@@ -2254,8 +2257,7 @@ export function connectPanePty(
       try {
         transport.attach({
           existingPtyId: attachPtyId,
-          cols,
-          rows,
+          ...transportViewport,
           callbacks: {
             onData: dataCallback,
             onReplayData: replayDataCallback,
@@ -2304,8 +2306,7 @@ export function connectPanePty(
             deps.updateTabPtyId(deps.tabId, spawnedPtyId)
             transport.attach({
               existingPtyId: spawnedPtyId,
-              cols,
-              rows,
+              ...transportViewport,
               callbacks: {
                 onData: dataCallback,
                 onReplayData: replayDataCallback,
