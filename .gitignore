@@ -66,6 +66,7 @@ tmp/
 design-docs/
 .context/
 .atl/
+.superpowers/
 
 # Machine-local agent hook endpoint files may contain auth tokens.
 /agent-hooks/
@@ -74,12 +75,22 @@ design-docs/
 # Durable docs must live in one of the allow-listed locations below.
 docs/**
 !docs/
+!docs/architecture/
+!docs/architecture/**
 !docs/assets/
 !docs/assets/**
+!docs/contracts/
+!docs/contracts/**
+!docs/prd/
+!docs/prd/**
 !docs/readme/
 !docs/readme/**
 !docs/reference/
 !docs/reference/**
+!docs/tasks/
+!docs/tasks/**
+!docs/testing/
+!docs/testing/**
 !docs/STYLEGUIDE.md
 
 # Stably CLI (only docs/ are tracked)

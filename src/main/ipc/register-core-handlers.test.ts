@@ -396,7 +396,7 @@ describe('registerCoreHandlers', () => {
     expect(registerUpdaterHandlersMock).toHaveBeenCalled()
     expect(setTrustedBrowserRendererWebContentsIdMock).toHaveBeenCalledWith(null)
     expect(registerBrowserHandlersMock).toHaveBeenCalled()
-    expect(registerArchitectureHandlersMock).toHaveBeenCalled()
+    expect(registerArchitectureHandlersMock).toHaveBeenCalledWith(store)
     expect(registerFilesystemWatcherHandlersMock).toHaveBeenCalled()
     expect(registerSpeechHandlersMock).toHaveBeenCalledWith(store)
   })

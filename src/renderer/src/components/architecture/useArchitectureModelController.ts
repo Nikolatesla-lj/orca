@@ -6,18 +6,28 @@ import { launchAgentInNewTab } from '../../lib/launch-agent-in-new-tab'
 import { useAppStore } from '../../store'
 import type { AgentStatusEntry } from '../../../../shared/agent-status-types'
 import type { ArchitectureWorkspace } from '../../../../shared/types'
-import { parseModelData, serializeModelData } from '../../../../shared/scryer/parse-model'
+import {
+  parseModelData,
+  pruneDiagramRefsForDeletedTarget,
+  serializeModelData
+} from '../../../../shared/scryer/parse-model'
 import type {
   C4Edge,
   C4Kind,
   C4ModelData,
+  C4ModelDataV2,
   C4Node,
   C4NodeData,
+  Diagram,
+  DiagramRef,
+  DiagramRefTarget,
+  DiagramKind,
   DriftReport,
   Flow,
   Group,
   SourceLocation
 } from '../../../../shared/scryer/model-types'
+import { SCRY_SCHEMA_VERSION as CURRENT_SCRY_SCHEMA_VERSION } from '../../../../shared/scryer/model-types'
 import {
   resolveSourceLocationTarget,
   uniqueSourceRootCandidates
@@ -35,6 +45,25 @@ import {
   reconcileExpandedPath,
   updateEdgeDataInModel
 } from './c4-model'
+import { sortDiagramsForLibrary } from '../../../../shared/scryer/diagram-ids'
+import {
+  createDefaultDiagramSource,
+  createDiagram as createDiagramInModel,
+  createDiagramRef as createDiagramRefInModel,
+  createDiagramExternalReloadConflict,
+  deleteDiagram as deleteDiagramInModel,
+  deleteDiagramRefs as deleteDiagramRefsInModel,
+  DiagramControllerError,
+  renameDiagram as renameDiagramInModel,
+  shouldPromptForDiagramDraftSwitch,
+  upsertDiagramRefs as upsertDiagramRefsInModel,
+  updateDiagramSource as updateDiagramSourceInModel,
+  type ArchitectureNavigationTarget,
+  type CreateDiagramRefInput,
+  type DiagramExternalReloadConflict,
+  type DiagramDraftStateSnapshot,
+  type DiagramExternalReloadResolution
+} from './diagram-controller'
 import {
   sanitizeClientModelName,
   useArchitectureModelSession,
@@ -47,7 +76,33 @@ export type {
   ArchitectureTemplateEntry
 } from './useArchitectureModelSession'
 
-export type ArchitectureMode = 'topology' | 'flows' | 'groups'
+export type ArchitectureMode = 'topology' | 'flows' | 'groups' | 'diagram'
+
+export type DiagramDraftSwitchDialog = {
+  diagramId: string
+  target: ArchitectureNavigationTarget
+  error: string | null
+}
+
+export type DiagramSourceOpenLocation = {
+  relativePath: string
+  line?: number
+  endLine?: number
+}
+
+export type DiagramSourceTargetPickerState = {
+  projectPath: string
+  locations: DiagramSourceOpenLocation[]
+}
+
+type DiagramSourceTargetOpenResult =
+  | { ok: true; action: 'opened' | 'selection-required'; locations: DiagramSourceOpenLocation[] }
+  | {
+      ok: false
+      code: 'controller.invalid-source-target' | 'controller.source-open-failed'
+      reason: string
+      rejectedPattern: string
+    }
 
 type SyncSessionStatus = SyncStatus
 const EMPTY_PTY_IDS: string[] = []
@@ -202,6 +257,13 @@ function createFlowId(): string {
   return `flow-${globalThis.crypto.randomUUID()}`
 }
 
+function rootPathForSourceTarget(absolutePath: string, relativePath: string): string {
+  const normalizedRelative = relativePath.replace(/\//g, absolutePath.includes('\\') ? '\\' : '/')
+  return absolutePath.endsWith(normalizedRelative)
+    ? absolutePath.slice(0, -normalizedRelative.length).replace(/[\\/]+$/, '')
+    : absolutePath
+}
+
 function buildAncestorPath(model: C4ModelData, nodeId: string): string[] {
   const path: string[] = []
   let current = model.nodes.find((node) => node.id === nodeId)?.parentId ?? undefined
@@ -212,8 +274,9 @@ function buildAncestorPath(model: C4ModelData, nodeId: string): string[] {
   return path
 }
 
-export function createEmptyArchitectureModel(projectPath: string): C4ModelData {
+export function createEmptyArchitectureModel(projectPath: string): C4ModelDataV2 {
   return {
+    schemaVersion: CURRENT_SCRY_SCHEMA_VERSION,
     nodes: [],
     edges: [],
     startingLevel: 'system',
@@ -221,7 +284,9 @@ export function createEmptyArchitectureModel(projectPath: string): C4ModelData {
     projectPath,
     refPositions: {},
     groups: [],
-    flows: []
+    flows: [],
+    diagrams: [],
+    diagramRefs: []
   }
 }
 
@@ -258,6 +323,20 @@ function stringArraysEqual(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index])
 }
 
+function collectFlowStepIds(steps: Flow['steps']): Set<string> {
+  const ids = new Set<string>()
+  const visit = (nestedSteps: Flow['steps']): void => {
+    for (const step of nestedSteps) {
+      ids.add(step.id)
+      for (const branch of step.branches ?? []) {
+        visit(branch.steps)
+      }
+    }
+  }
+  visit(steps)
+  return ids
+}
+
 function isArchitecturePanelEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
     return false
@@ -267,6 +346,17 @@ function isArchitecturePanelEditableTarget(target: EventTarget | null): boolean 
     !!target.closest('[data-testid="architecture-panel"]') &&
     (tagName === 'input' || tagName === 'textarea' || target.isContentEditable)
   )
+}
+
+function toDiagramPersistError(error: unknown, operation: string): DiagramControllerError {
+  if (error instanceof DiagramControllerError) {
+    return error
+  }
+  const message = error instanceof Error ? error.message : String(error)
+  const code = message.toLowerCase().includes('changed on disk')
+    ? 'controller.revision-conflict'
+    : 'controller.persist-failed'
+  return new DiagramControllerError(code, message, { operation })
 }
 
 export function useArchitectureModelController({
@@ -303,6 +393,23 @@ export function useArchitectureModelController({
   >(() => {})
   const [architectureMode, setArchitectureMode] = useState<ArchitectureMode>('topology')
   const [activeFlowId, setActiveFlowId] = useState<string | null>(null)
+  const [activeDiagramId, setActiveDiagramId] = useState<string | null>(null)
+  const diagramDraftStateRef = useRef<DiagramDraftStateSnapshot | null>(null)
+  const externalDiagramReloadDiskModelRef = useRef<{
+    modelName: string
+    model: C4ModelData
+    revision: string
+  } | null>(null)
+  const [externalDiagramReloadConflict, setExternalDiagramReloadConflict] =
+    useState<DiagramExternalReloadConflict | null>(null)
+  const pendingDiagramNavigationRef = useRef<{
+    target: ArchitectureNavigationTarget
+    resolve: (allowed: boolean) => void
+  } | null>(null)
+  const [diagramDraftSwitchDialog, setDiagramDraftSwitchDialog] =
+    useState<DiagramDraftSwitchDialog | null>(null)
+  const [diagramSourceTargetPicker, setDiagramSourceTargetPicker] =
+    useState<DiagramSourceTargetPickerState | null>(null)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
@@ -353,6 +460,7 @@ export function useArchitectureModelController({
     refreshProjectModels,
     scheduleModelWrite,
     writePendingModelNow,
+    getActiveModelRevision,
     patchActiveNodeData
   } = modelSession
 
@@ -495,6 +603,10 @@ export function useArchitectureModelController({
         modelRef.current = emptyModel
         setModel(emptyModel)
         setError('Architecture tabs need a worktree path.')
+        externalDiagramReloadDiskModelRef.current = null
+        setExternalDiagramReloadConflict(null)
+        diagramDraftStateRef.current = null
+        setActiveDiagramId(null)
         return
       }
       const nextActiveModelName = sanitizeClientModelName(
@@ -517,6 +629,9 @@ export function useArchitectureModelController({
           }
           modelRef.current = emptyModel
           lastKnownModelFingerprintRef.current = emptyFingerprint
+          externalDiagramReloadDiskModelRef.current = null
+          setExternalDiagramReloadConflict(null)
+          diagramDraftStateRef.current = null
           selectedNodeIdRef.current = null
           selectedEdgeIdRef.current = null
           undoStackRef.current = []
@@ -526,6 +641,7 @@ export function useArchitectureModelController({
           setModel(emptyModel)
           setExpandedPath([])
           setActiveFlowId(null)
+          setActiveDiagramId(null)
           setSelectedNodeId(null)
           setSelectedEdgeId(null)
           setSelectedGroupId(null)
@@ -616,12 +732,20 @@ export function useArchitectureModelController({
         lastKnownModelFingerprintRef.current = loadedFingerprint
         acceptLoadedModelDocument(modelNameToLoad, loadedDocument.revision)
         modelRef.current = nextModel
+        externalDiagramReloadDiskModelRef.current = null
+        setExternalDiagramReloadConflict(null)
+        diagramDraftStateRef.current = null
         setModel(nextModel)
         setExpandedPath((current) => nextExpandedPath ?? reconcileExpandedPath(nextModel, current))
         setActiveFlowId((current) =>
           current && (nextModel.flows ?? []).some((flow) => flow.id === current)
             ? current
             : (nextModel.flows?.[0]?.id ?? null)
+        )
+        setActiveDiagramId((current) =>
+          current && (nextModel.diagrams ?? []).some((diagram) => diagram.id === current)
+            ? current
+            : null
         )
         const nextSelectedNodeId =
           nextExternalNodeId ??
@@ -668,6 +792,41 @@ export function useArchitectureModelController({
       refreshProjectModels
     ]
   )
+
+  const reloadActiveModel = useCallback(async () => {
+    const snapshot = diagramDraftStateRef.current
+    const modelNameToLoad = sanitizeClientModelName(activeModelNameRef.current)
+    if (!snapshot?.dirty) {
+      await loadModel(modelNameToLoad)
+      return
+    }
+    try {
+      setError('')
+      const loadedDocument = await readModelDocument(modelNameToLoad)
+      const diskDiagram =
+        loadedDocument.model.diagrams?.find((diagram) => diagram.id === snapshot.diagramId) ?? null
+      const conflict = createDiagramExternalReloadConflict({
+        modelName: modelNameToLoad,
+        snapshot,
+        diskDiagram,
+        baseRevision: getActiveModelRevision() ?? '',
+        diskRevision: loadedDocument.revision
+      })
+      if (!conflict) {
+        await loadModel(modelNameToLoad)
+        return
+      }
+      externalDiagramReloadDiskModelRef.current = {
+        modelName: modelNameToLoad,
+        model: loadedDocument.model,
+        revision: loadedDocument.revision
+      }
+      setExternalDiagramReloadConflict(conflict)
+      setMessage('Diagram source changed on disk')
+    } catch (reloadError) {
+      setError(reloadError instanceof Error ? reloadError.message : String(reloadError))
+    }
+  }, [activeModelNameRef, getActiveModelRevision, loadModel, readModelDocument])
 
   const loadFallbackModelAfterRemoval = useCallback(
     async (removedModelName: string, knownModels?: ArchitectureProjectModelEntry[]) => {
@@ -792,11 +951,11 @@ export function useArchitectureModelController({
   }, [loadModel])
 
   useEffect(() => {
-    activeModelReloadRef.current = () => void loadModel()
+    activeModelReloadRef.current = () => void reloadActiveModel()
     activeModelRemovedRef.current = (removedModelName, knownModels) => {
       void loadFallbackModelAfterRemoval(removedModelName, knownModels)
     }
-  }, [loadFallbackModelAfterRemoval, loadModel])
+  }, [loadFallbackModelAfterRemoval, reloadActiveModel])
 
   const createBlankProjectModel = useCallback(
     async (modelName: string, targetProjectPath?: string) => {
@@ -1204,7 +1363,26 @@ export function useArchitectureModelController({
       return
     }
     const nextModel = deleteNodesFromModel(model, [selectedNode.id])
-    await persist(nextModel, `Deleted ${selectedNode.data.name}`)
+    let diagramRefs = nextModel.diagramRefs ?? []
+    const remainingNodeIds = new Set(nextModel.nodes.map((node) => node.id))
+    const remainingEdgeIds = new Set(nextModel.edges.map((edge) => edge.id))
+    for (const node of model.nodes) {
+      if (!remainingNodeIds.has(node.id)) {
+        diagramRefs = pruneDiagramRefsForDeletedTarget(diagramRefs, {
+          type: 'node',
+          id: node.id
+        }).diagramRefs
+      }
+    }
+    for (const edge of model.edges) {
+      if (!remainingEdgeIds.has(edge.id)) {
+        diagramRefs = pruneDiagramRefsForDeletedTarget(diagramRefs, {
+          type: 'edge',
+          id: edge.id
+        }).diagramRefs
+      }
+    }
+    await persist({ ...nextModel, diagramRefs }, `Deleted ${selectedNode.data.name}`)
     setSelectedNodeId(nextModel.nodes[0]?.id ?? null)
     setSelectedEdgeId(null)
   }, [editingLocked, model, persist, selectedNode])
@@ -1214,7 +1392,11 @@ export function useArchitectureModelController({
       return
     }
     const nextModel = deleteEdgesFromModel(model, [selectedEdge.id])
-    await persist(nextModel, `Deleted ${selectedEdge.id}`)
+    const pruned = pruneDiagramRefsForDeletedTarget(nextModel.diagramRefs ?? [], {
+      type: 'edge',
+      id: selectedEdge.id
+    })
+    await persist({ ...nextModel, diagramRefs: pruned.diagramRefs }, `Deleted ${selectedEdge.id}`)
     setSelectedEdgeId(null)
   }, [editingLocked, model, persist, selectedEdge])
 
@@ -1243,7 +1425,29 @@ export function useArchitectureModelController({
       }
       const target = current.nodes.find((node) => node.id === nodeId)
       const nextModel = deleteNodesFromModel(current, [nodeId])
-      await persist(nextModel, target ? `Deleted ${target.data.name}` : 'Deleted node')
+      let diagramRefs = nextModel.diagramRefs ?? []
+      const remainingNodeIds = new Set(nextModel.nodes.map((node) => node.id))
+      const remainingEdgeIds = new Set(nextModel.edges.map((edge) => edge.id))
+      for (const node of current.nodes) {
+        if (!remainingNodeIds.has(node.id)) {
+          diagramRefs = pruneDiagramRefsForDeletedTarget(diagramRefs, {
+            type: 'node',
+            id: node.id
+          }).diagramRefs
+        }
+      }
+      for (const edge of current.edges) {
+        if (!remainingEdgeIds.has(edge.id)) {
+          diagramRefs = pruneDiagramRefsForDeletedTarget(diagramRefs, {
+            type: 'edge',
+            id: edge.id
+          }).diagramRefs
+        }
+      }
+      await persist(
+        { ...nextModel, diagramRefs },
+        target ? `Deleted ${target.data.name}` : 'Deleted node'
+      )
       setSelectedNodeId((selected) =>
         selected === nodeId ? (nextModel.nodes[0]?.id ?? null) : selected
       )
@@ -1325,6 +1529,7 @@ export function useArchitectureModelController({
       }
       await applyModelChange((current) => {
         const flows = current.flows ?? []
+        const previousFlow = flows.find((flow) => flow.id === updated.id)
         let found = false
         const nextFlows = flows.map((flow) => {
           if (flow.id !== updated.id) {
@@ -1336,7 +1541,21 @@ export function useArchitectureModelController({
         if (!found) {
           nextFlows.push(updated)
         }
-        return { ...current, flows: nextFlows }
+        let diagramRefs = current.diagramRefs ?? []
+        if (previousFlow) {
+          const nextStepIds = collectFlowStepIds(updated.steps)
+          for (const previousStepId of collectFlowStepIds(previousFlow.steps)) {
+            if (!nextStepIds.has(previousStepId)) {
+              diagramRefs = pruneDiagramRefsForDeletedTarget(diagramRefs, {
+                type: 'flowStep',
+                flowId: previousFlow.id,
+                stepId: previousStepId,
+                flow: previousFlow
+              }).diagramRefs
+            }
+          }
+        }
+        return { ...current, flows: nextFlows, diagramRefs }
       }, `Saved ${updated.name}`)
     },
     [applyModelChange, editingLocked]
@@ -1357,16 +1576,374 @@ export function useArchitectureModelController({
     const nextActive = nextFlows[Math.min(targetIndex, nextFlows.length - 1)]?.id ?? null
     const sourceMap = { ...current.sourceMap }
     delete sourceMap[targetId]
+    const pruned = pruneDiagramRefsForDeletedTarget(current.diagramRefs ?? [], {
+      type: 'flow',
+      id: targetId
+    })
     await persist(
       {
         ...current,
         flows: nextFlows,
-        sourceMap
+        sourceMap,
+        diagramRefs: pruned.diagramRefs
       },
       `Deleted ${flows[targetIndex].name}`
     )
     setActiveFlowId(nextActive)
   }, [activeFlowId, editingLocked, persist])
+
+  const persistDiagramModel = useCallback(
+    async (nextModel: C4ModelData, nextMessage: string, operation: string) => {
+      const previous = modelRef.current
+      try {
+        scheduleModelWrite(nextModel)
+        await writePendingModelNow()
+        if (
+          previous &&
+          fingerprintArchitectureModel(previous) !== fingerprintArchitectureModel(nextModel)
+        ) {
+          const history = pushArchitectureUndoSnapshot(undoStackRef.current, previous, {
+            batchStartedAt: historyBatchStartedAtRef.current,
+            now: Date.now()
+          })
+          undoStackRef.current = history.stack
+          historyBatchStartedAtRef.current = history.batchStartedAt
+          redoStackRef.current = []
+          setHistoryRevision((revision) => revision + 1)
+        }
+        modelRef.current = nextModel
+        setModel(nextModel)
+        lastKnownModelFingerprintRef.current = fingerprintArchitectureModel(nextModel)
+        setMessage(nextMessage)
+      } catch (mutationError) {
+        setError('')
+        throw toDiagramPersistError(mutationError, operation)
+      }
+    },
+    [scheduleModelWrite, writePendingModelNow]
+  )
+
+  const createDiagram = useCallback(
+    async (
+      options: { name?: string; kind?: DiagramKind; activate?: boolean } = {}
+    ): Promise<Diagram | null> => {
+      const current = modelRef.current
+      if (!current || editingLocked) {
+        return null
+      }
+      const name = options.name?.trim() || `Diagram ${(current.diagrams ?? []).length + 1}`
+      const kind = options.kind ?? 'flowchart'
+      const source = createDefaultDiagramSource(kind, name)
+      const result = createDiagramInModel(current, {
+        name,
+        kind,
+        notation: 'mermaid',
+        source
+      })
+      await persistDiagramModel(result.model, `Created ${name}`, 'create')
+      const diagram = result.model.diagrams?.find(
+        (entry) => entry.id === result.changedDiagramIds[0]
+      )
+      if (diagram && options.activate !== false) {
+        setActiveDiagramId(diagram.id)
+        setArchitectureMode('diagram')
+      }
+      return diagram ?? null
+    },
+    [editingLocked, persistDiagramModel]
+  )
+
+  const renameDiagram = useCallback(
+    async (diagramId: string, name: string): Promise<void> => {
+      const current = modelRef.current
+      if (!current || editingLocked) {
+        return
+      }
+      const result = renameDiagramInModel(current, diagramId, name)
+      await persistDiagramModel(result.model, `Renamed ${name.trim()}`, 'rename')
+    },
+    [editingLocked, persistDiagramModel]
+  )
+
+  const updateDiagramSource = useCallback(
+    async (diagramId: string, source: string): Promise<void> => {
+      const current = modelRef.current
+      if (!current || editingLocked) {
+        return
+      }
+      const result = updateDiagramSourceInModel(current, diagramId, source)
+      await persistDiagramModel(result.model, 'Saved diagram source', 'updateSource')
+      const saved = result.model.diagrams?.find((diagram) => diagram.id === diagramId)
+      if (saved) {
+        diagramDraftStateRef.current = {
+          diagramId,
+          persistedSource: saved.source,
+          draftSource: saved.source,
+          dirty: false
+        }
+        externalDiagramReloadDiskModelRef.current = null
+        setExternalDiagramReloadConflict((current) =>
+          current?.diagramId === diagramId ? null : current
+        )
+      }
+    },
+    [editingLocked, persistDiagramModel]
+  )
+
+  const deleteDiagram = useCallback(
+    async (diagramId: string): Promise<void> => {
+      const current = modelRef.current
+      if (!current || editingLocked) {
+        return
+      }
+      const sortedBeforeDelete = sortDiagramsForLibrary(current.diagrams ?? [])
+      const deletedIndex = sortedBeforeDelete.findIndex((diagram) => diagram.id === diagramId)
+      const result = deleteDiagramInModel(current, diagramId)
+      await persistDiagramModel(result.model, 'Deleted diagram', 'delete')
+      if (projectPath) {
+        try {
+          const cacheResult = await window.api.architecture.clearDiagramCache({
+            projectPath,
+            modelName: activeModelNameRef.current,
+            diagramId
+          })
+          if (!cacheResult.ok) {
+            const text = `${cacheResult.code}: ${cacheResult.message}`
+            setError(text)
+            toast.warning(text)
+          }
+        } catch (cacheError) {
+          const text = `cache.clear-failed: ${
+            cacheError instanceof Error ? cacheError.message : String(cacheError)
+          }`
+          setError(text)
+          toast.warning(text)
+        }
+      }
+      if (activeDiagramId === diagramId) {
+        const remaining = sortDiagramsForLibrary(result.model.diagrams ?? [])
+        const fallback = remaining[Math.min(Math.max(deletedIndex, 0), remaining.length - 1)]
+        diagramDraftStateRef.current = null
+        setActiveDiagramId(fallback?.id ?? null)
+        setArchitectureMode(fallback ? 'diagram' : 'topology')
+      }
+    },
+    [activeDiagramId, activeModelNameRef, editingLocked, persistDiagramModel, projectPath]
+  )
+
+  const createDiagramRef = useCallback(
+    async (input: CreateDiagramRefInput): Promise<void> => {
+      const current = modelRef.current
+      if (!current || editingLocked) {
+        return
+      }
+      const result = createDiagramRefInModel(current, input)
+      await persistDiagramModel(result.model, 'Linked diagram reference', 'createRef')
+    },
+    [editingLocked, persistDiagramModel]
+  )
+
+  const upsertDiagramRefs = useCallback(
+    async (refs: DiagramRef[]): Promise<void> => {
+      const current = modelRef.current
+      if (!current || editingLocked) {
+        return
+      }
+      const result = upsertDiagramRefsInModel(current, refs)
+      await persistDiagramModel(result.model, 'Saved diagram references', 'upsertRefs')
+    },
+    [editingLocked, persistDiagramModel]
+  )
+
+  const deleteDiagramRefs = useCallback(
+    async (refIds: string[]): Promise<void> => {
+      const current = modelRef.current
+      if (!current || editingLocked) {
+        return
+      }
+      const result = deleteDiagramRefsInModel(current, refIds)
+      await persistDiagramModel(result.model, 'Removed diagram reference', 'deleteRefs')
+    },
+    [editingLocked, persistDiagramModel]
+  )
+
+  const selectDiagram = useCallback((diagramId: string): void => {
+    const current = modelRef.current
+    if (!current?.diagrams?.some((diagram) => diagram.id === diagramId)) {
+      return
+    }
+    setArchitectureMode('diagram')
+    setActiveDiagramId(diagramId)
+    setSelectedEdgeId(null)
+  }, [])
+
+  const applyArchitectureNavigationTarget = useCallback(
+    (target: ArchitectureNavigationTarget): void => {
+      if (target.type === 'diagram') {
+        setExternalDiagramReloadConflict((current) =>
+          current?.diagramId === target.diagramId ? current : null
+        )
+        selectDiagram(target.diagramId)
+        return
+      }
+      externalDiagramReloadDiskModelRef.current = null
+      setExternalDiagramReloadConflict(null)
+      setActiveDiagramId(null)
+      if (target.type === 'flows') {
+        if (target.flowId !== undefined) {
+          setActiveFlowId(target.flowId)
+        }
+        setArchitectureMode('flows')
+        return
+      }
+      setArchitectureMode(target.type)
+    },
+    [selectDiagram]
+  )
+
+  const requestArchitectureNavigation = useCallback(
+    async (target: ArchitectureNavigationTarget): Promise<boolean> => {
+      const snapshot = diagramDraftStateRef.current
+      if (!snapshot || !shouldPromptForDiagramDraftSwitch(snapshot, target)) {
+        applyArchitectureNavigationTarget(target)
+        return true
+      }
+      if (pendingDiagramNavigationRef.current) {
+        pendingDiagramNavigationRef.current.resolve(false)
+      }
+      return new Promise<boolean>((resolve) => {
+        pendingDiagramNavigationRef.current = { target, resolve }
+        setDiagramDraftSwitchDialog({ diagramId: snapshot.diagramId, target, error: null })
+      })
+    },
+    [applyArchitectureNavigationTarget]
+  )
+
+  const resolveDiagramDraftSwitch = useCallback(
+    async (action: 'save' | 'discard' | 'cancel'): Promise<void> => {
+      const pending = pendingDiagramNavigationRef.current
+      const snapshot = diagramDraftStateRef.current
+      if (!pending || !snapshot) {
+        setDiagramDraftSwitchDialog(null)
+        return
+      }
+      if (action === 'cancel') {
+        pendingDiagramNavigationRef.current = null
+        setDiagramDraftSwitchDialog(null)
+        pending.resolve(false)
+        return
+      }
+      if (action === 'discard') {
+        diagramDraftStateRef.current = {
+          ...snapshot,
+          draftSource: snapshot.persistedSource,
+          dirty: false
+        }
+        externalDiagramReloadDiskModelRef.current = null
+        setExternalDiagramReloadConflict(null)
+        pendingDiagramNavigationRef.current = null
+        setDiagramDraftSwitchDialog(null)
+        applyArchitectureNavigationTarget(pending.target)
+        pending.resolve(true)
+        return
+      }
+      try {
+        await updateDiagramSource(snapshot.diagramId, snapshot.draftSource)
+        pendingDiagramNavigationRef.current = null
+        setDiagramDraftSwitchDialog(null)
+        applyArchitectureNavigationTarget(pending.target)
+        pending.resolve(true)
+      } catch (saveError) {
+        const nextError = saveError instanceof Error ? saveError.message : String(saveError)
+        setDiagramDraftSwitchDialog({
+          diagramId: snapshot.diagramId,
+          target: pending.target,
+          error: nextError
+        })
+      }
+    },
+    [applyArchitectureNavigationTarget, updateDiagramSource]
+  )
+
+  const setDiagramDraftState = useCallback((snapshot: DiagramDraftStateSnapshot): void => {
+    diagramDraftStateRef.current = snapshot
+  }, [])
+
+  const resolveExternalDiagramReload = useCallback(
+    async (diagramId: string, resolution: DiagramExternalReloadResolution): Promise<void> => {
+      const conflict = externalDiagramReloadConflict
+      if (!conflict || conflict.diagramId !== diagramId) {
+        return
+      }
+      const currentModelName = sanitizeClientModelName(activeModelNameRef.current)
+      if (conflict.modelName !== currentModelName) {
+        externalDiagramReloadDiskModelRef.current = null
+        setExternalDiagramReloadConflict(null)
+        setMessage('Ignored stale diagram reload conflict for another model')
+        return
+      }
+      if (resolution === 'compare-changes' || resolution === 'cancel') {
+        return
+      }
+      if (resolution === 'keep-draft') {
+        setMessage('Keeping local diagram draft')
+        return
+      }
+      if (resolution === 'discard-deleted' && conflict.diskState !== 'deleted') {
+        return
+      }
+      if (resolution === 'reload-from-disk' && conflict.diskState !== 'modified') {
+        return
+      }
+
+      const storedDisk = externalDiagramReloadDiskModelRef.current
+      const diskDocument =
+        storedDisk?.modelName === conflict.modelName
+          ? { model: storedDisk.model, revision: storedDisk.revision }
+          : await readModelDocument(conflict.modelName)
+      const previousSorted = sortDiagramsForLibrary(modelRef.current?.diagrams ?? [])
+      const previousIndex = previousSorted.findIndex((diagram) => diagram.id === conflict.diagramId)
+      const diskModel = diskDocument.model
+      const diskFingerprint = fingerprintArchitectureModel(diskModel)
+
+      acceptLoadedModelDocument(conflict.modelName, diskDocument.revision)
+      modelRef.current = diskModel
+      lastKnownModelFingerprintRef.current = diskFingerprint
+      setModel(diskModel)
+      externalDiagramReloadDiskModelRef.current = null
+      setExternalDiagramReloadConflict(null)
+
+      if (resolution === 'reload-from-disk') {
+        const diskDiagram =
+          diskModel.diagrams?.find((diagram) => diagram.id === conflict.diagramId) ?? null
+        diagramDraftStateRef.current = diskDiagram
+          ? {
+              diagramId: diskDiagram.id,
+              persistedSource: diskDiagram.source,
+              draftSource: diskDiagram.source,
+              dirty: false
+            }
+          : null
+        setActiveDiagramId(diskDiagram?.id ?? null)
+        setArchitectureMode(diskDiagram ? 'diagram' : 'topology')
+        setMessage('Reloaded diagram source from disk')
+        return
+      }
+
+      const remaining = sortDiagramsForLibrary(diskModel.diagrams ?? [])
+      const fallback = remaining[Math.min(Math.max(previousIndex, 0), remaining.length - 1)]
+      diagramDraftStateRef.current = null
+      setActiveDiagramId(fallback?.id ?? null)
+      setArchitectureMode(fallback ? 'diagram' : 'topology')
+      setMessage('Accepted diagram deletion from disk')
+    },
+    [
+      acceptLoadedModelDocument,
+      activeModelNameRef,
+      externalDiagramReloadConflict,
+      readModelDocument
+    ]
+  )
 
   const updateGroups = useCallback(
     (updater: (prev: Group[]) => Group[]) => {
@@ -1375,7 +1952,17 @@ export function useArchitectureModelController({
         return
       }
       const nextGroups = updater(current.groups ?? [])
-      void persist({ ...current, groups: nextGroups }, 'Saved architecture groups')
+      let diagramRefs = current.diagramRefs ?? []
+      const nextGroupIds = new Set(nextGroups.map((group) => group.id))
+      for (const group of current.groups ?? []) {
+        if (!nextGroupIds.has(group.id)) {
+          diagramRefs = pruneDiagramRefsForDeletedTarget(diagramRefs, {
+            type: 'group',
+            id: group.id
+          }).diagramRefs
+        }
+      }
+      void persist({ ...current, groups: nextGroups, diagramRefs }, 'Saved architecture groups')
       setSelectedGroupId((selected) =>
         selected && nextGroups.some((group) => group.id === selected) ? selected : null
       )
@@ -1472,7 +2059,11 @@ export function useArchitectureModelController({
             group.parentGroupId === selectedGroup.id
               ? { ...group, parentGroupId: selectedGroup.parentGroupId }
               : group
-          )
+          ),
+        diagramRefs: pruneDiagramRefsForDeletedTarget(current.diagramRefs ?? [], {
+          type: 'group',
+          id: selectedGroup.id
+        }).diagramRefs
       },
       `Deleted ${selectedGroup.name}`
     )
@@ -1507,6 +2098,40 @@ export function useArchitectureModelController({
       toast.error(text)
     }
   }, [implementing, projectPath, runDriftCheck])
+
+  const openResolvedSourceLocation = useCallback(
+    (rootPath: string, location: DiagramSourceOpenLocation): void => {
+      const absolutePath = `${rootPath.replace(/[\\/]+$/, '')}/${location.relativePath}`
+      openFile(
+        {
+          filePath: absolutePath,
+          relativePath: location.relativePath,
+          worktreeId: workspace.worktreeId,
+          language: detectLanguage(location.relativePath),
+          mode: 'edit'
+        },
+        {
+          preview: true,
+          targetGroupId: useAppStore.getState().activeGroupIdByWorktree?.[workspace.worktreeId],
+          recordReplacedPreview: true
+        }
+      )
+      if (location.line !== undefined) {
+        setPendingEditorReveal(null)
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            setPendingEditorReveal({
+              filePath: absolutePath,
+              line: location.line ?? 1,
+              column: 1,
+              matchLength: 0
+            })
+          })
+        })
+      }
+    },
+    [openFile, setPendingEditorReveal, workspace.worktreeId]
+  )
 
   const openSourceLocation = useCallback(
     async (location: SourceLocation) => {
@@ -1545,40 +2170,105 @@ export function useArchitectureModelController({
           toast.error(target.error)
           return
         }
-        openFile(
+        openResolvedSourceLocation(
+          rootPathForSourceTarget(target.absolutePath, target.relativePath),
           {
-            filePath: target.absolutePath,
             relativePath: target.relativePath,
-            worktreeId: workspace.worktreeId,
-            language: detectLanguage(target.relativePath),
-            mode: 'edit'
-          },
-          {
-            preview: true,
-            targetGroupId: useAppStore.getState().activeGroupIdByWorktree?.[workspace.worktreeId],
-            recordReplacedPreview: true
+            ...(target.line === undefined ? {} : { line: target.line }),
+            ...(target.endLine === undefined ? {} : { endLine: target.endLine })
           }
         )
-        if (target.line !== undefined) {
-          setPendingEditorReveal(null)
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              setPendingEditorReveal({
-                filePath: target.absolutePath,
-                line: target.line ?? 1,
-                column: 1,
-                matchLength: 0
-              })
-            })
-          })
-        }
       } catch (sourceError) {
         const text = sourceError instanceof Error ? sourceError.message : String(sourceError)
         setError(text)
         toast.error(text)
       }
     },
-    [openFile, projectPath, setPendingEditorReveal, workspace.worktreeId]
+    [openResolvedSourceLocation, projectPath]
+  )
+
+  const chooseDiagramSourceTarget = useCallback(
+    (location: DiagramSourceOpenLocation): void => {
+      if (!diagramSourceTargetPicker) {
+        return
+      }
+      openResolvedSourceLocation(diagramSourceTargetPicker.projectPath, location)
+      setDiagramSourceTargetPicker(null)
+    },
+    [diagramSourceTargetPicker, openResolvedSourceLocation]
+  )
+
+  const navigateDiagramRefTarget = useCallback(
+    async (target: DiagramRefTarget): Promise<void> => {
+      const current = modelRef.current ?? model
+      if (!current) {
+        return
+      }
+      switch (target.type) {
+        case 'node':
+          if (await requestArchitectureNavigation({ type: 'topology' })) {
+            navigateToNode(target.id)
+          }
+          return
+        case 'edge':
+          if (current.edges.some((edge) => edge.id === target.id)) {
+            const allowed = await requestArchitectureNavigation({ type: 'topology' })
+            if (allowed) {
+              setSelectedNodeId(null)
+              selectedEdgeIdRef.current = target.id
+              setSelectedEdgeId(target.id)
+            }
+          }
+          return
+        case 'group':
+          if ((current.groups ?? []).some((group) => group.id === target.id)) {
+            const allowed = await requestArchitectureNavigation({ type: 'groups' })
+            if (allowed) {
+              setSelectedGroupId(target.id)
+            }
+          }
+          return
+        case 'flow':
+          if ((current.flows ?? []).some((flow) => flow.id === target.id)) {
+            await requestArchitectureNavigation({ type: 'flows', flowId: target.id })
+          }
+          return
+        case 'flowStep':
+          if ((current.flows ?? []).some((flow) => flow.id === target.flowId)) {
+            await requestArchitectureNavigation({ type: 'flows', flowId: target.flowId })
+          }
+          return
+        case 'source': {
+          const sourceProjectPath = current.projectPath || projectPath
+          if (!sourceProjectPath) {
+            setError('No project path is available for source target navigation.')
+            return
+          }
+          const result = (await window.api.architecture.openDiagramSourceTarget({
+            projectPath: sourceProjectPath,
+            target
+          })) as DiagramSourceTargetOpenResult
+          if (!result.ok) {
+            const text = `${result.code}: ${result.reason}`
+            setError(text)
+            toast.error(text)
+            return
+          }
+          if (result.action === 'selection-required') {
+            setDiagramSourceTargetPicker({
+              projectPath: sourceProjectPath,
+              locations: result.locations
+            })
+            return
+          }
+          const [location] = result.locations
+          if (location) {
+            openResolvedSourceLocation(sourceProjectPath, location)
+          }
+        }
+      }
+    },
+    [model, navigateToNode, openResolvedSourceLocation, projectPath, requestArchitectureNavigation]
   )
 
   const launchArchitectureAgentPrompt = useCallback(
@@ -1988,6 +2678,10 @@ export function useArchitectureModelController({
   )
 
   const flows = model?.flows ?? []
+  const activeDiagram =
+    activeDiagramId && model?.diagrams
+      ? (model.diagrams.find((diagram) => diagram.id === activeDiagramId) ?? null)
+      : null
 
   return {
     projectPath,
@@ -2000,6 +2694,16 @@ export function useArchitectureModelController({
     activeFlow,
     activeFlowId,
     setActiveFlowId,
+    activeDiagram,
+    activeDiagramId,
+    setActiveDiagramId,
+    externalDiagramReloadConflict,
+    diagramDraftSwitchDialog,
+    diagramSourceTargetPicker,
+    requestArchitectureNavigation,
+    resolveDiagramDraftSwitch,
+    chooseDiagramSourceTarget,
+    cancelDiagramSourceTargetPicker: () => setDiagramSourceTargetPicker(null),
     selectedNode,
     selectedEdge,
     selectedGroup,
@@ -2039,6 +2743,7 @@ export function useArchitectureModelController({
     followExternalChanges,
     setFollowExternalChanges,
     loadModel,
+    reloadActiveModel,
     refreshProjectModels,
     writePendingModelNow,
     createBlankProjectModel,
@@ -2072,6 +2777,17 @@ export function useArchitectureModelController({
     createFlow,
     updateFlow,
     deleteActiveFlow,
+    createDiagram,
+    renameDiagram,
+    updateDiagramSource,
+    deleteDiagram,
+    createDiagramRef,
+    upsertDiagramRefs,
+    deleteDiagramRefs,
+    navigateDiagramRefTarget,
+    selectDiagram,
+    setDiagramDraftState,
+    resolveExternalDiagramReload,
     updateGroups,
     createGroupFromSelection,
     addSelectionToGroup,

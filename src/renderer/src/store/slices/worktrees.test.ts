@@ -117,6 +117,8 @@ function createTestStore() {
         gitBranchCompareRequestKeyByWorktree: {},
         activeFileIdByWorktree: {},
         activeBrowserTabIdByWorktree: {},
+        architectureTabsByWorktree: {},
+        activeArchitectureTabIdByWorktree: {},
         browserTabsByWorktree: {},
         recentlyClosedBrowserTabsByWorktree: {},
         activeTabTypeByWorktree: {},
@@ -126,6 +128,7 @@ function createTestStore() {
         activeTabId: null,
         activeFileId: null,
         activeBrowserTabId: null,
+        activeArchitectureTabId: null,
         activeTabType: 'terminal' as const,
         reconcileWorktreeTabModel: vi.fn(() => ({
           activeRenderableTabId: null,

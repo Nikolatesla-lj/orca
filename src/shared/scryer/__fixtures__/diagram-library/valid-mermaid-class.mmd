@@ -1,0 +1,14 @@
+classDiagram
+  class DiagramController {
+    +saveSource()
+    +requestNavigation()
+  }
+  class DiagramRenderer {
+    +renderDiagram()
+  }
+  class ModelStore {
+    +writeModel()
+  }
+  DiagramController --> DiagramRenderer
+  DiagramController --> ModelStore
+  DiagramRenderer <|-- MermaidAdapter

@@ -1,0 +1,128 @@
+{
+  "schemaVersion": 2,
+  "nodes": [
+    {
+      "id": "api",
+      "type": "c4",
+      "position": { "x": 10, "y": 20 },
+      "data": {
+        "name": "API",
+        "description": "Backend API",
+        "kind": "container"
+      }
+    }
+  ],
+  "edges": [],
+  "groups": [],
+  "flows": [
+    {
+      "id": "flow-1",
+      "name": "Checkout",
+      "steps": [
+        {
+          "id": "step-root",
+          "description": "Root step",
+          "branches": [
+            {
+              "condition": "if approved",
+              "steps": [
+                {
+                  "id": "step-nested",
+                  "description": "Nested step"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "diagrams": [
+    {
+      "id": "diagram-valid",
+      "name": "Valid Flow",
+      "kind": "flowchart",
+      "notation": "mermaid",
+      "source": "flowchart TD\n  A[Start]",
+      "updatedAt": "2026-05-26T00:00:00.000Z"
+    },
+    {
+      "id": "diagram-valid",
+      "name": "Duplicate Flow",
+      "kind": "flowchart",
+      "notation": "mermaid",
+      "source": "flowchart TD\n  B[Duplicate]"
+    },
+    {
+      "id": "diagram-invalid-updated-at",
+      "name": "Invalid Updated At",
+      "kind": "sequence",
+      "notation": "mermaid",
+      "source": "sequenceDiagram\n  A->>B: hello",
+      "updatedAt": "not-a-date"
+    }
+  ],
+  "diagramRefs": [
+    {
+      "id": "ref-valid-node",
+      "diagramId": "diagram-valid",
+      "target": { "type": "node", "id": "api" },
+      "role": "architecture-detail"
+    },
+    {
+      "id": "ref-valid-node",
+      "diagramId": "diagram-valid",
+      "target": { "type": "node", "id": "api" },
+      "role": "architecture-detail"
+    },
+    {
+      "id": "ref-missing-diagram",
+      "diagramId": "diagram-missing",
+      "target": { "type": "node", "id": "api" },
+      "role": "architecture-detail"
+    },
+    {
+      "id": "ref-missing-node",
+      "diagramId": "diagram-valid",
+      "target": { "type": "node", "id": "node-missing" },
+      "role": "architecture-detail"
+    },
+    {
+      "id": "ref-missing-step",
+      "diagramId": "diagram-valid",
+      "target": { "type": "flowStep", "flowId": "flow-1", "stepId": "step-missing" },
+      "role": "behavior-detail"
+    },
+    {
+      "id": "ref-invalid-range",
+      "diagramId": "diagram-valid",
+      "target": { "type": "flowStep", "flowId": "flow-1", "stepId": "step-nested" },
+      "role": "behavior-detail",
+      "sourceRange": { "startLine": 5, "endLine": 2 }
+    },
+    {
+      "id": "ref-absolute-source",
+      "diagramId": "diagram-valid",
+      "target": { "type": "source", "pattern": "/etc/passwd" },
+      "role": "evidence"
+    },
+    {
+      "id": "ref-traversal-source",
+      "diagramId": "diagram-valid",
+      "target": { "type": "source", "pattern": "../secret.ts" },
+      "role": "evidence"
+    },
+    {
+      "id": "ref-scheme-source",
+      "diagramId": "diagram-valid",
+      "target": { "type": "source", "pattern": "file:///tmp/secret.ts" },
+      "role": "evidence"
+    },
+    {
+      "id": "ref-glob-source",
+      "diagramId": "diagram-valid",
+      "target": { "type": "source", "pattern": "src/{api,db}.ts" },
+      "role": "evidence"
+    }
+  ]
+}

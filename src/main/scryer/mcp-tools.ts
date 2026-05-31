@@ -3,19 +3,50 @@ import type {
   C4Edge,
   C4Kind,
   C4ModelData,
+  C4ModelDataV2,
   C4Node,
   Contract,
   ContractItem,
+  Diagram,
+  DiagramDiagnostic,
+  DiagramKind,
+  DiagramNotation,
+  DiagramRef,
+  DiagramRefRole,
+  DiagramRefTarget,
+  DiagramSourceRange,
   Flow,
   FlowStep,
   Group,
+  ModelValidationWarning,
   ModelProperty,
   ScryerToolCall,
   ScryerToolResult,
   SourceLocation,
   Status
 } from '../../shared/scryer/model-types'
-import { parseModelData } from '../../shared/scryer/parse-model'
+import type {
+  CompactDiagramRefSummary,
+  CompactDiagramSummary,
+  DiagramChangeSummary,
+  DiagramValidationSummary,
+  ExistingToolDiagramContext
+} from '../../shared/scryer/diagram-tool-context'
+import type {
+  DiagramCacheClearRequest,
+  DiagramCacheClearResult,
+  DiagramCacheFailure
+} from '../../shared/scryer/diagram-cache'
+import { computeDiagramSourceHash } from '../../shared/scryer/diagram-cache'
+import {
+  deleteDiagram,
+  deleteDiagramRefs,
+  DiagramControllerError,
+  upsertDiagramRefs
+} from '../../shared/scryer/diagram-controller'
+import { detectMermaidDiagramKind } from '../../shared/scryer/diagram-kind'
+import { findFlowStep, parseModelData } from '../../shared/scryer/parse-model'
+import { validateWorkspaceRelativeSourcePattern } from '../../shared/scryer/source-targets'
 import {
   getProjectModelPath,
   readBaseline,
@@ -26,6 +57,48 @@ import {
 } from './model-store'
 import { projectStructure } from './structure'
 import { SCRYER_RULES, TASK_INSTRUCTIONS } from '../../shared/scryer/rules'
+import { clearDiagramCacheForMcp } from './diagram-cache-clear'
+
+export type SetDiagramsArgs = {
+  data: string
+  mode?: 'upsert' | 'replaceAll'
+}
+
+export type GetDiagramArgs = {
+  diagram_id: string
+  include_refs?: boolean
+}
+
+export type DeleteDiagramArgs = {
+  diagram_id: string
+}
+
+export type UpdateDiagramRefsArgs = {
+  data?: string
+  mode?: 'upsert' | 'replaceForDiagram' | 'delete'
+  diagram_id?: string
+  ref_ids?: string[]
+}
+
+export type ScryerDiagramToolReadContext = {
+  projectPath: string
+  modelName?: string | null
+  model: C4ModelDataV2
+}
+
+export type ScryerDiagramToolWriteContext = ScryerDiagramToolReadContext & {
+  writeModel: (
+    projectPath: string,
+    model: C4ModelDataV2,
+    modelName?: string | null
+  ) => Promise<void>
+}
+
+export type ScryerDiagramToolDeleteContext = ScryerDiagramToolWriteContext & {
+  clearDiagramCache: (
+    request: DiagramCacheClearRequest
+  ) => Promise<DiagramCacheClearResult | DiagramCacheFailure>
+}
 
 function ok(content: string, data?: unknown): ScryerToolResult {
   return { ok: true, content, data }
@@ -33,6 +106,17 @@ function ok(content: string, data?: unknown): ScryerToolResult {
 
 function fail(content: string, data?: unknown): ScryerToolResult {
   return { ok: false, content, data }
+}
+
+function diagramFail(
+  content: string,
+  code: DiagramDiagnostic['code'],
+  details?: unknown
+): ScryerToolResult {
+  return fail(content, {
+    code,
+    ...(details === undefined ? {} : { details })
+  })
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -47,6 +131,17 @@ function asStringArray(value: unknown): string[] | undefined {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === 'string')
     : undefined
+}
+
+function stripModelArg(args: Record<string, unknown>): {
+  modelName?: string | null
+  toolArgs: Record<string, unknown>
+} {
+  const { model, ...toolArgs } = args
+  return {
+    modelName: typeof model === 'string' && model.trim() ? model : null,
+    toolArgs
+  }
 }
 
 function normalizeContract(value: unknown): Contract | undefined {
@@ -183,6 +278,572 @@ const TOP_LEVEL_NODE_DATA_FIELDS = [
   'parent',
   'parent_id'
 ] as const
+
+const VALID_DIAGRAM_KINDS = new Set<DiagramKind>([
+  'flowchart',
+  'sequence',
+  'class',
+  'state',
+  'er',
+  'architecture',
+  'gitGraph',
+  'c4',
+  'gantt',
+  'journey',
+  'mindmap',
+  'timeline',
+  'requirement',
+  'quadrant',
+  'xy',
+  'block',
+  'packet',
+  'kanban',
+  'other'
+])
+
+const VALID_DIAGRAM_REF_ROLES = new Set<DiagramRefRole>([
+  'architecture-detail',
+  'behavior-detail',
+  'sequence-detail',
+  'state-detail',
+  'data-detail',
+  'class-detail',
+  'deployment-detail',
+  'evidence',
+  'other'
+])
+
+function isDiagramKind(value: unknown): value is DiagramKind {
+  return typeof value === 'string' && VALID_DIAGRAM_KINDS.has(value as DiagramKind)
+}
+
+function isDiagramNotation(value: unknown): value is DiagramNotation {
+  return value === 'mermaid'
+}
+
+function isValidExternalDiagramId(value: string): boolean {
+  return /^[A-Za-z0-9_-]{1,120}$/.test(value)
+}
+
+function parseDiagramToolJson(toolName: string, data: unknown): ScryerToolResult | unknown {
+  if (typeof data !== 'string') {
+    return diagramFail(`${toolName} requires data JSON string`, 'mcp.mode-argument-missing', {
+      toolName,
+      missing: 'data'
+    })
+  }
+  try {
+    return JSON.parse(data) as unknown
+  } catch (error) {
+    return diagramFail(`Invalid ${toolName} JSON`, 'mcp.invalid-json', {
+      toolName,
+      reason: error instanceof Error ? error.message : String(error)
+    })
+  }
+}
+
+function isToolResult(value: unknown): value is ScryerToolResult {
+  return isRecord(value) && typeof value.ok === 'boolean' && typeof value.content === 'string'
+}
+
+function normalizeMcpDiagram(raw: unknown): Diagram | ScryerToolResult {
+  if (!isRecord(raw)) {
+    return diagramFail('Diagram payload must be an object', 'mcp.validation-failed', {
+      validationCodes: ['parser.invalid-diagram']
+    })
+  }
+  const id = asString(raw.id)?.trim() ?? ''
+  if (!id) {
+    return diagramFail('MCP diagrams require explicit ids', 'mcp.validation-failed', {
+      validationCodes: ['parser.invalid-diagram'],
+      missing: 'id'
+    })
+  }
+  if (!isValidExternalDiagramId(id)) {
+    return diagramFail(`Diagram id '${id}' is invalid`, 'mcp.validation-failed', {
+      validationCodes: ['parser.invalid-diagram'],
+      diagramId: id
+    })
+  }
+  const name = asString(raw.name)?.trim() ?? ''
+  const source = asString(raw.source) ?? ''
+  if (!name || !source.trim() || !isDiagramKind(raw.kind) || !isDiagramNotation(raw.notation)) {
+    return diagramFail(`Diagram '${id}' is invalid`, 'mcp.validation-failed', {
+      validationCodes: ['parser.invalid-diagram'],
+      diagramId: id
+    })
+  }
+
+  const detected = detectMermaidDiagramKind(source)
+  if (detected.kind !== 'other' && detected.kind !== raw.kind) {
+    return diagramFail(
+      `Diagram '${id}' kind conflicts with its Mermaid source`,
+      'mcp.validation-failed',
+      {
+        validationCodes: ['renderer.kind-conflict'],
+        diagramId: id,
+        storedKind: raw.kind,
+        detectedKind: detected.kind,
+        directive: detected.directive
+      }
+    )
+  }
+
+  return {
+    id,
+    name,
+    kind: raw.kind,
+    notation: raw.notation,
+    source,
+    ...(typeof raw.description === 'string' ? { description: raw.description } : {}),
+    ...(Array.isArray(raw.tags)
+      ? { tags: raw.tags.filter((tag): tag is string => typeof tag === 'string') }
+      : {}),
+    ...(typeof raw.updatedAt === 'string' && raw.updatedAt.trim()
+      ? { updatedAt: raw.updatedAt }
+      : { updatedAt: new Date().toISOString() })
+  }
+}
+
+function normalizeMcpDiagrams(parsed: unknown): Diagram[] | ScryerToolResult {
+  const rawDiagrams = Array.isArray(parsed) ? parsed : [parsed]
+  if (rawDiagrams.length === 0) {
+    return diagramFail('set_diagrams requires at least one diagram', 'mcp.validation-failed', {
+      validationCodes: ['parser.invalid-diagram']
+    })
+  }
+  const diagrams: Diagram[] = []
+  const seen = new Set<string>()
+  for (const rawDiagram of rawDiagrams) {
+    const diagram = normalizeMcpDiagram(rawDiagram)
+    if (isToolResult(diagram)) {
+      return diagram
+    }
+    if (seen.has(diagram.id)) {
+      return diagramFail(`Duplicate diagram id '${diagram.id}'`, 'mcp.duplicate-id', {
+        duplicateIds: [diagram.id],
+        entity: 'diagram'
+      })
+    }
+    seen.add(diagram.id)
+    diagrams.push(diagram)
+  }
+  return diagrams
+}
+
+function normalizeMcpSourceRange(raw: unknown): DiagramSourceRange | ScryerToolResult | undefined {
+  if (raw === undefined) {
+    return undefined
+  }
+  if (!isRecord(raw) || typeof raw.startLine !== 'number' || raw.startLine < 1) {
+    return diagramFail('Diagram ref sourceRange is invalid', 'mcp.validation-failed', {
+      validationCodes: ['parser.invalid-source-range']
+    })
+  }
+  if (
+    raw.endLine !== undefined &&
+    (typeof raw.endLine !== 'number' || raw.endLine < raw.startLine)
+  ) {
+    return diagramFail('Diagram ref sourceRange endLine is invalid', 'mcp.validation-failed', {
+      validationCodes: ['parser.invalid-source-range']
+    })
+  }
+  return {
+    startLine: raw.startLine,
+    ...(typeof raw.startColumn === 'number' ? { startColumn: raw.startColumn } : {}),
+    ...(typeof raw.endLine === 'number' ? { endLine: raw.endLine } : {}),
+    ...(typeof raw.endColumn === 'number' ? { endColumn: raw.endColumn } : {})
+  }
+}
+
+function normalizeMcpRefTarget(raw: unknown): DiagramRefTarget | ScryerToolResult {
+  if (!isRecord(raw) || typeof raw.type !== 'string') {
+    return diagramFail('Diagram ref target is invalid', 'mcp.validation-failed', {
+      validationCodes: ['parser.invalid-diagram-ref']
+    })
+  }
+  switch (raw.type) {
+    case 'node':
+    case 'edge':
+    case 'group':
+    case 'flow':
+      if (typeof raw.id !== 'string' || !raw.id.trim()) {
+        return diagramFail('Diagram ref target id is required', 'mcp.validation-failed', {
+          validationCodes: ['parser.invalid-diagram-ref'],
+          targetType: raw.type
+        })
+      }
+      return { type: raw.type, id: raw.id.trim() }
+    case 'flowStep':
+      if (
+        typeof raw.flowId !== 'string' ||
+        !raw.flowId.trim() ||
+        typeof raw.stepId !== 'string' ||
+        !raw.stepId.trim()
+      ) {
+        return diagramFail('Diagram ref flowStep target is invalid', 'mcp.validation-failed', {
+          validationCodes: ['parser.invalid-diagram-ref']
+        })
+      }
+      return { type: 'flowStep', flowId: raw.flowId.trim(), stepId: raw.stepId.trim() }
+    case 'source': {
+      if (typeof raw.pattern !== 'string') {
+        return diagramFail(
+          'Diagram ref source target pattern is required',
+          'mcp.validation-failed',
+          {
+            validationCodes: ['parser.invalid-source-target']
+          }
+        )
+      }
+      const validation = validateWorkspaceRelativeSourcePattern(raw.pattern, 'parser')
+      if (!validation.ok) {
+        return diagramFail('Diagram ref source target is unsafe', 'mcp.validation-failed', {
+          validationCodes: ['parser.invalid-source-target'],
+          reason: validation.reason,
+          rejectedPattern: validation.rejectedPattern
+        })
+      }
+      return {
+        type: 'source',
+        pattern: validation.normalizedPattern,
+        ...(typeof raw.line === 'number' ? { line: raw.line } : {}),
+        ...(typeof raw.endLine === 'number' ? { endLine: raw.endLine } : {})
+      }
+    }
+    default:
+      return diagramFail('Diagram ref target type is invalid', 'mcp.validation-failed', {
+        validationCodes: ['parser.invalid-diagram-ref'],
+        targetType: raw.type
+      })
+  }
+}
+
+function normalizeMcpDiagramRef(raw: unknown): DiagramRef | ScryerToolResult {
+  if (!isRecord(raw)) {
+    return diagramFail('Diagram ref payload must be an object', 'mcp.validation-failed', {
+      validationCodes: ['parser.invalid-diagram-ref']
+    })
+  }
+  const id = asString(raw.id)?.trim() ?? ''
+  const diagramId = asString(raw.diagramId)?.trim() ?? ''
+  if (!id || !isValidExternalDiagramId(id)) {
+    return diagramFail('MCP diagramRefs require explicit valid ids', 'mcp.validation-failed', {
+      validationCodes: ['parser.invalid-diagram-ref'],
+      missing: id ? undefined : 'id'
+    })
+  }
+  if (!diagramId) {
+    return diagramFail('MCP diagramRefs require diagramId', 'mcp.validation-failed', {
+      validationCodes: ['parser.invalid-diagram-ref'],
+      missing: 'diagramId'
+    })
+  }
+  if (!VALID_DIAGRAM_REF_ROLES.has(raw.role as DiagramRefRole)) {
+    return diagramFail('Diagram ref role is invalid', 'mcp.validation-failed', {
+      validationCodes: ['parser.invalid-diagram-ref'],
+      refId: id
+    })
+  }
+  const target = normalizeMcpRefTarget(raw.target)
+  if (isToolResult(target)) {
+    return target
+  }
+  const sourceRange = normalizeMcpSourceRange(raw.sourceRange)
+  if (isToolResult(sourceRange)) {
+    return sourceRange
+  }
+  return {
+    id,
+    diagramId,
+    target,
+    role: raw.role as DiagramRefRole,
+    ...(typeof raw.elementKey === 'string' && raw.elementKey.trim()
+      ? { elementKey: raw.elementKey.trim() }
+      : {}),
+    ...(sourceRange ? { sourceRange } : {}),
+    ...(typeof raw.note === 'string' && raw.note.trim() ? { note: raw.note.trim() } : {})
+  }
+}
+
+function normalizeMcpDiagramRefs(parsed: unknown): DiagramRef[] | ScryerToolResult {
+  const rawRefs = Array.isArray(parsed) ? parsed : [parsed]
+  if (rawRefs.length === 0) {
+    return diagramFail('update_diagram_refs requires at least one ref', 'mcp.validation-failed', {
+      validationCodes: ['parser.invalid-diagram-ref']
+    })
+  }
+  const refs: DiagramRef[] = []
+  const seen = new Set<string>()
+  for (const rawRef of rawRefs) {
+    const ref = normalizeMcpDiagramRef(rawRef)
+    if (isToolResult(ref)) {
+      return ref
+    }
+    if (seen.has(ref.id)) {
+      return diagramFail(`Duplicate diagramRef id '${ref.id}'`, 'mcp.duplicate-id', {
+        duplicateIds: [ref.id],
+        entity: 'diagramRef'
+      })
+    }
+    seen.add(ref.id)
+    refs.push(ref)
+  }
+  return refs
+}
+
+function diagramControllerErrorToMcp(error: unknown): ScryerToolResult {
+  if (!(error instanceof DiagramControllerError)) {
+    return diagramFail(
+      error instanceof Error ? error.message : String(error),
+      'mcp.validation-failed'
+    )
+  }
+  switch (error.code) {
+    case 'controller.diagram-not-found':
+      return diagramFail(error.message, 'mcp.diagram-not-found', error.details)
+    case 'controller.ref-not-found':
+      return diagramFail(error.message, 'mcp.ref-not-found', error.details)
+    case 'controller.missing-target':
+      return diagramFail(error.message, 'mcp.target-not-found', error.details)
+    case 'controller.duplicate-id':
+      return diagramFail(error.message, 'mcp.duplicate-id', error.details)
+    case 'controller.invalid-source-target':
+      return diagramFail(error.message, 'mcp.validation-failed', {
+        validationCodes: ['parser.invalid-source-target'],
+        ...error.details
+      })
+    default:
+      return diagramFail(error.message, 'mcp.validation-failed', error.details)
+  }
+}
+
+export async function handleSetDiagrams(
+  args: SetDiagramsArgs,
+  context: ScryerDiagramToolWriteContext
+): Promise<ScryerToolResult> {
+  const parsed = parseDiagramToolJson('set_diagrams', args.data)
+  if (isToolResult(parsed)) {
+    return parsed
+  }
+  const diagrams = normalizeMcpDiagrams(parsed)
+  if (isToolResult(diagrams)) {
+    return diagrams
+  }
+
+  const mode = args.mode ?? 'upsert'
+  if (mode !== 'upsert' && mode !== 'replaceAll') {
+    return diagramFail('set_diagrams mode is invalid', 'mcp.validation-failed', {
+      validationCodes: ['mcp.invalid-mode'],
+      mode
+    })
+  }
+  const current = context.model
+  let nextDiagrams: Diagram[]
+  let refsDeleted: string[] = []
+  if (mode === 'replaceAll') {
+    const incomingIds = new Set(diagrams.map((diagram) => diagram.id))
+    const removedIds = new Set(
+      current.diagrams
+        .filter((diagram) => !incomingIds.has(diagram.id))
+        .map((diagram) => diagram.id)
+    )
+    refsDeleted = current.diagramRefs
+      .filter((ref) => removedIds.has(ref.diagramId))
+      .map((ref) => ref.id)
+    nextDiagrams = diagrams
+  } else {
+    const byId = new Map(current.diagrams.map((diagram) => [diagram.id, diagram]))
+    for (const diagram of diagrams) {
+      byId.set(diagram.id, diagram)
+    }
+    nextDiagrams = [...byId.values()]
+  }
+
+  const removedRefIds = new Set(refsDeleted)
+  const nextModel: C4ModelDataV2 = {
+    ...current,
+    diagrams: nextDiagrams,
+    diagramRefs: current.diagramRefs.filter((ref) => !removedRefIds.has(ref.id))
+  }
+  await context.writeModel(context.projectPath, nextModel, context.modelName)
+  return ok(`Set ${diagrams.length} diagram(s)`, {
+    diagramsChanged: diagrams.map((diagram) => diagram.id),
+    refsDeleted
+  })
+}
+
+export async function handleGetDiagram(
+  args: GetDiagramArgs,
+  context: ScryerDiagramToolReadContext
+): Promise<ScryerToolResult> {
+  const diagramId = args.diagram_id?.trim()
+  const diagram = context.model.diagrams.find((candidate) => candidate.id === diagramId)
+  if (!diagram) {
+    return diagramFail(`Diagram '${diagramId ?? ''}' not found`, 'mcp.diagram-not-found', {
+      diagramId
+    })
+  }
+  const refs =
+    args.include_refs === false
+      ? []
+      : context.model.diagramRefs.filter((ref) => ref.diagramId === diagram.id)
+  return ok(`Read diagram '${diagram.id}'`, { diagram, refs })
+}
+
+export async function handleUpdateDiagramRefs(
+  args: UpdateDiagramRefsArgs,
+  context: ScryerDiagramToolWriteContext
+): Promise<ScryerToolResult> {
+  const mode = args.mode ?? 'upsert'
+  if (mode === 'delete') {
+    if (args.data !== undefined) {
+      return diagramFail(
+        'update_diagram_refs delete mode does not accept data',
+        'mcp.validation-failed',
+        {
+          validationCodes: ['mcp.delete-data-forbidden']
+        }
+      )
+    }
+    if (!Array.isArray(args.ref_ids) || args.ref_ids.length === 0) {
+      return diagramFail(
+        'update_diagram_refs delete mode requires ref_ids',
+        'mcp.mode-argument-missing',
+        {
+          toolName: 'update_diagram_refs',
+          mode,
+          missing: 'ref_ids'
+        }
+      )
+    }
+    try {
+      const result = deleteDiagramRefs(context.model, args.ref_ids)
+      await context.writeModel(
+        context.projectPath,
+        result.model as C4ModelDataV2,
+        context.modelName
+      )
+      return ok(`Deleted ${args.ref_ids.length} diagram ref(s)`, {
+        refsChanged: [],
+        refsDeleted: result.deletedDiagramRefIds
+      })
+    } catch (error) {
+      return diagramControllerErrorToMcp(error)
+    }
+  }
+
+  if (mode !== 'upsert' && mode !== 'replaceForDiagram') {
+    return diagramFail('update_diagram_refs mode is invalid', 'mcp.validation-failed', {
+      validationCodes: ['mcp.invalid-mode'],
+      mode
+    })
+  }
+  const parsed = parseDiagramToolJson('update_diagram_refs', args.data)
+  if (isToolResult(parsed)) {
+    return parsed
+  }
+  const refs = normalizeMcpDiagramRefs(parsed)
+  if (isToolResult(refs)) {
+    return refs
+  }
+
+  try {
+    if (mode === 'replaceForDiagram') {
+      const diagramId = args.diagram_id?.trim()
+      if (!diagramId) {
+        return diagramFail(
+          'update_diagram_refs replaceForDiagram mode requires diagram_id',
+          'mcp.mode-argument-missing',
+          { toolName: 'update_diagram_refs', mode, missing: 'diagram_id' }
+        )
+      }
+      if (refs.some((ref) => ref.diagramId !== diagramId)) {
+        return diagramFail(
+          'replaceForDiagram refs must all match diagram_id',
+          'mcp.validation-failed',
+          { validationCodes: ['parser.invalid-diagram-ref'], diagramId }
+        )
+      }
+      if (!context.model.diagrams.some((diagram) => diagram.id === diagramId)) {
+        return diagramFail(`Diagram '${diagramId}' not found`, 'mcp.diagram-not-found', {
+          diagramId
+        })
+      }
+      const refsDeleted = context.model.diagramRefs
+        .filter((ref) => ref.diagramId === diagramId)
+        .map((ref) => ref.id)
+      const baseModel: C4ModelDataV2 = {
+        ...context.model,
+        diagramRefs: context.model.diagramRefs.filter((ref) => ref.diagramId !== diagramId)
+      }
+      const result = upsertDiagramRefs(baseModel, refs)
+      await context.writeModel(
+        context.projectPath,
+        result.model as C4ModelDataV2,
+        context.modelName
+      )
+      return ok(`Replaced refs for diagram '${diagramId}'`, {
+        refsChanged: refs.map((ref) => ref.id),
+        refsDeleted
+      })
+    }
+
+    const result = upsertDiagramRefs(context.model, refs)
+    await context.writeModel(context.projectPath, result.model as C4ModelDataV2, context.modelName)
+    return ok(`Updated ${refs.length} diagram ref(s)`, {
+      refsChanged: refs.map((ref) => ref.id),
+      refsDeleted: []
+    })
+  } catch (error) {
+    return diagramControllerErrorToMcp(error)
+  }
+}
+
+export async function handleDeleteDiagram(
+  args: DeleteDiagramArgs,
+  context: ScryerDiagramToolDeleteContext
+): Promise<ScryerToolResult> {
+  const diagramId = args.diagram_id?.trim()
+  if (!diagramId) {
+    return diagramFail('delete_diagram requires diagram_id', 'mcp.mode-argument-missing', {
+      toolName: 'delete_diagram',
+      missing: 'diagram_id'
+    })
+  }
+
+  try {
+    const result = deleteDiagram(context.model, diagramId)
+    await context.writeModel(context.projectPath, result.model as C4ModelDataV2, context.modelName)
+    const cacheResult = await context.clearDiagramCache({
+      projectPath: context.projectPath,
+      modelName: context.modelName,
+      diagramId
+    })
+    const warnings: DiagramDiagnostic[] =
+      cacheResult.ok === false
+        ? [
+            {
+              severity: 'warning',
+              code: cacheResult.code,
+              message: cacheResult.message
+            }
+          ]
+        : []
+    return ok(
+      warnings.length > 0
+        ? `Deleted diagram '${diagramId}' with cache cleanup warning`
+        : `Deleted diagram '${diagramId}'`,
+      {
+        diagramId,
+        refsDeleted: result.deletedDiagramRefIds,
+        ...(warnings.length > 0 ? { warnings } : {})
+      }
+    )
+  } catch (error) {
+    return diagramControllerErrorToMcp(error)
+  }
+}
 
 function validateNodeRuntimeShape(node: C4Node): string[] {
   const errors: string[] = []
@@ -539,6 +1200,102 @@ function stripNodeForAgent(node: C4Node): Omit<C4Node, 'position' | 'selected' |
   return rest
 }
 
+type CompactAgentDiagram = Omit<Diagram, 'source'> & {
+  sourceHash: `sha256:${string}`
+  sourceOmitted: true
+}
+
+function compactDiagramForAgent(diagram: Diagram): CompactAgentDiagram {
+  const { source: _source, ...rest } = diagram
+  return {
+    ...rest,
+    sourceHash: computeDiagramSourceHash(diagram.source),
+    sourceOmitted: true
+  }
+}
+
+function uniqueDiagramTargets(refs: DiagramRef[]): DiagramRefTarget[] {
+  const targets: DiagramRefTarget[] = []
+  const seen = new Set<string>()
+  for (const ref of refs) {
+    const key = JSON.stringify(sortForCompare(ref.target))
+    if (!seen.has(key)) {
+      seen.add(key)
+      targets.push(ref.target)
+    }
+  }
+  return targets
+}
+
+function compactDiagramRef(ref: DiagramRef): CompactDiagramRefSummary {
+  return {
+    id: ref.id,
+    diagramId: ref.diagramId,
+    target: ref.target,
+    role: ref.role,
+    ...(ref.elementKey ? { elementKey: ref.elementKey } : {}),
+    ...(ref.sourceRange ? { sourceRange: ref.sourceRange } : {}),
+    ...(ref.note ? { note: ref.note } : {})
+  }
+}
+
+export function buildCompactDiagramSummaries(
+  model: C4ModelData,
+  refs: DiagramRef[] = model.diagramRefs ?? []
+): CompactDiagramSummary[] {
+  return (model.diagrams ?? []).map((diagram) => {
+    const diagramRefs = refs.filter((ref) => ref.diagramId === diagram.id)
+    return {
+      id: diagram.id,
+      name: diagram.name,
+      kind: diagram.kind,
+      notation: diagram.notation,
+      ...(diagram.description ? { description: diagram.description } : {}),
+      ...(diagram.tags ? { tags: diagram.tags } : {}),
+      ...(diagram.updatedAt ? { updatedAt: diagram.updatedAt } : {}),
+      sourceHash: computeDiagramSourceHash(diagram.source),
+      sourceOmitted: true,
+      refCount: diagramRefs.length,
+      relatedTargets: uniqueDiagramTargets(diagramRefs)
+    }
+  })
+}
+
+export function buildExistingToolDiagramContext(
+  model: C4ModelData,
+  refs: DiagramRef[] = model.diagramRefs ?? []
+): ExistingToolDiagramContext {
+  const diagramIds = new Set(refs.map((ref) => ref.diagramId))
+  const scopedModel: C4ModelData = {
+    ...model,
+    diagrams:
+      refs === model.diagramRefs
+        ? (model.diagrams ?? [])
+        : (model.diagrams ?? []).filter((diagram) => diagramIds.has(diagram.id)),
+    diagramRefs: refs
+  }
+  return {
+    diagramSummaries: buildCompactDiagramSummaries(scopedModel, refs),
+    diagramRefs: refs.map(compactDiagramRef)
+  }
+}
+
+function withCompactDiagramContext(model: C4ModelData): Omit<
+  C4ModelData,
+  'diagrams' | 'diagramRefs'
+> & {
+  diagrams: CompactAgentDiagram[]
+  diagramRefs: CompactDiagramRefSummary[]
+  diagramContext: ExistingToolDiagramContext
+} {
+  return {
+    ...model,
+    diagrams: (model.diagrams ?? []).map(compactDiagramForAgent),
+    diagramRefs: (model.diagramRefs ?? []).map(compactDiagramRef),
+    diagramContext: buildExistingToolDiagramContext(model)
+  }
+}
+
 function nextNodeId(model: C4ModelData): string {
   let max = 0
   for (const node of model.nodes) {
@@ -695,6 +1452,35 @@ function findNextName(
     return nextReady.data.name
   }
   return blockedNodes[0]?.data.name ?? null
+}
+
+function formatDiagramTarget(target: DiagramRefTarget): string {
+  switch (target.type) {
+    case 'node':
+    case 'edge':
+    case 'group':
+    case 'flow':
+      return `${target.type}:${target.id}`
+    case 'flowStep':
+      return `flowStep:${target.flowId}/${target.stepId}`
+    case 'source':
+      return `source:${target.pattern}`
+  }
+}
+
+function formatLinkedDiagramContext(model: C4ModelData, nodeId: string): string[] {
+  const context = getScopedDiagramContext(model, nodeId)
+  if (context.diagramSummaries.length === 0) {
+    return []
+  }
+  return [
+    '',
+    'Linked diagrams:',
+    ...context.diagramSummaries.map(
+      (diagram) =>
+        `  - ${diagram.name} [${diagram.id}] (${diagram.kind}) sourceHash ${diagram.sourceHash}; source omitted. Use \`get_diagram\` before editing omitted diagram source. Targets: ${diagram.relatedTargets.map(formatDiagramTarget).join(', ')}`
+    )
+  ]
 }
 
 function collectDescendantIds(model: C4ModelData, nodeId: string): Set<string> {
@@ -940,7 +1726,8 @@ async function getTask(
       '',
       ...memberContainers.flatMap((node) => [
         `- **${node.data.name}** [${node.id}]${node.data.technology ? ` — ${node.data.technology}` : ''}`,
-        node.data.description ? `  ${node.data.description}` : ''
+        node.data.description ? `  ${node.data.description}` : '',
+        ...formatLinkedDiagramContext(model, node.id)
       ]),
       !contractIsEmpty(group.contract)
         ? `\n${group.name} — Group Contract (MUST follow):\n${formatContractBlock(group.contract!)}`
@@ -1121,6 +1908,7 @@ async function getTask(
         ...(node.data.sources ?? []).map((source) => `  - ${source.pattern} — ${source.comment}`)
       )
     }
+    lines.push(...formatLinkedDiagramContext(model, node.id))
 
     const dependencies = model.edges
       .map((edge) => {
@@ -1548,6 +2336,57 @@ function getScopedNode(model: C4ModelData, nodeId: string): unknown {
   }
 }
 
+function diagramRefTargetInNodeScope(
+  ref: DiagramRef,
+  scope: {
+    subtreeIds: Set<string>
+    internalEdgeIds: Set<string>
+    groupIds: Set<string>
+    sourcePatterns: Set<string>
+  }
+): boolean {
+  switch (ref.target.type) {
+    case 'node':
+      return scope.subtreeIds.has(ref.target.id)
+    case 'edge':
+      return scope.internalEdgeIds.has(ref.target.id)
+    case 'group':
+      return scope.groupIds.has(ref.target.id)
+    case 'source':
+      return scope.sourcePatterns.has(ref.target.pattern)
+    default:
+      return false
+  }
+}
+
+function getScopedDiagramContext(model: C4ModelData, nodeId: string): ExistingToolDiagramContext {
+  const subtreeIds = collectDescendantIds(model, nodeId)
+  const internalEdgeIds = new Set(
+    model.edges
+      .filter((edge) => subtreeIds.has(edge.source) && subtreeIds.has(edge.target))
+      .map((edge) => edge.id)
+  )
+  const groupIds = new Set(
+    (model.groups ?? [])
+      .filter((group) => group.memberIds.every((memberId) => subtreeIds.has(memberId)))
+      .map((group) => group.id)
+  )
+  const sourcePatterns = new Set(
+    Object.entries(model.sourceMap ?? {})
+      .filter(([id]) => subtreeIds.has(id))
+      .flatMap(([, locations]) => locations.map((location) => location.pattern))
+  )
+  const refs = (model.diagramRefs ?? []).filter((ref) =>
+    diagramRefTargetInNodeScope(ref, {
+      subtreeIds,
+      internalEdgeIds,
+      groupIds,
+      sourcePatterns
+    })
+  )
+  return buildExistingToolDiagramContext(model, refs)
+}
+
 function sortForCompare(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(sortForCompare)
@@ -1627,11 +2466,166 @@ function computeDiff(baseline: C4ModelData, current: C4ModelData): string {
   return lines.length > 0 ? lines.join('\n') : 'No model changes since baseline.'
 }
 
+function changedFields<T extends Record<string, unknown>>(before: T, after: T): string[] {
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)])
+  return [...keys]
+    .filter((key) => stringifyComparable(before[key]) !== stringifyComparable(after[key]))
+    .sort()
+}
+
+function computeDiagramChanges(
+  baseline: C4ModelData,
+  current: C4ModelData
+): DiagramChangeSummary[] {
+  const baselineById = new Map((baseline.diagrams ?? []).map((diagram) => [diagram.id, diagram]))
+  const currentById = new Map((current.diagrams ?? []).map((diagram) => [diagram.id, diagram]))
+  const changes: DiagramChangeSummary[] = []
+  for (const [id, diagram] of currentById) {
+    const before = baselineById.get(id)
+    if (!before) {
+      changes.push({ id, name: diagram.name, change: 'added' })
+      continue
+    }
+    if (stringifyComparable(before) !== stringifyComparable(diagram)) {
+      changes.push({
+        id,
+        name: diagram.name,
+        change: 'modified',
+        changedFields: changedFields(
+          before as unknown as Record<string, unknown>,
+          diagram as unknown as Record<string, unknown>
+        )
+      })
+    }
+  }
+  for (const [id, diagram] of baselineById) {
+    if (!currentById.has(id)) {
+      changes.push({ id, name: diagram.name, change: 'removed' })
+    }
+  }
+  return changes
+}
+
+function computeDiagramRefChanges(
+  baseline: C4ModelData,
+  current: C4ModelData
+): DiagramChangeSummary[] {
+  const baselineById = new Map((baseline.diagramRefs ?? []).map((ref) => [ref.id, ref]))
+  const currentById = new Map((current.diagramRefs ?? []).map((ref) => [ref.id, ref]))
+  const changes: DiagramChangeSummary[] = []
+  for (const [id, ref] of currentById) {
+    const before = baselineById.get(id)
+    if (!before) {
+      changes.push({ id, name: ref.diagramId, change: 'added' })
+      continue
+    }
+    if (stringifyComparable(before) !== stringifyComparable(ref)) {
+      changes.push({
+        id,
+        name: ref.diagramId,
+        change: 'modified',
+        changedFields: changedFields(
+          before as unknown as Record<string, unknown>,
+          ref as unknown as Record<string, unknown>
+        )
+      })
+    }
+  }
+  for (const [id, ref] of baselineById) {
+    if (!currentById.has(id)) {
+      changes.push({ id, name: ref.diagramId, change: 'removed' })
+    }
+  }
+  return changes
+}
+
+function diagramTargetExists(model: C4ModelData, target: DiagramRefTarget): boolean {
+  switch (target.type) {
+    case 'node':
+      return model.nodes.some((node) => node.id === target.id)
+    case 'edge':
+      return model.edges.some((edge) => edge.id === target.id)
+    case 'group':
+      return (model.groups ?? []).some((group) => group.id === target.id)
+    case 'flow':
+      return (model.flows ?? []).some((flow) => flow.id === target.id)
+    case 'flowStep': {
+      const flow = (model.flows ?? []).find((candidate) => candidate.id === target.flowId)
+      return flow ? Boolean(findFlowStep(flow, target.stepId)) : false
+    }
+    case 'source':
+      return validateWorkspaceRelativeSourcePattern(target.pattern, 'parser').ok
+  }
+}
+
+function validateDiagramRefs(model: C4ModelData): DiagramValidationSummary {
+  const diagramIds = new Set((model.diagrams ?? []).map((diagram) => diagram.id))
+  const danglingRefIds: string[] = []
+  const warnings: ModelValidationWarning[] = []
+  for (const ref of model.diagramRefs ?? []) {
+    if (!diagramIds.has(ref.diagramId) || !diagramTargetExists(model, ref.target)) {
+      danglingRefIds.push(ref.id)
+      warnings.push({
+        kind: 'diagram-validation',
+        path: `diagramRefs.${ref.id}`,
+        reference: ref.diagramId,
+        message: `Diagram ref '${ref.id}' points to a missing diagram or target.`,
+        code: diagramIds.has(ref.diagramId) ? 'parser.missing-target' : 'parser.missing-diagram',
+        diagramRefId: ref.id,
+        diagramId: ref.diagramId,
+        target: ref.target
+      })
+    }
+  }
+  return {
+    warnings,
+    danglingRefIds,
+    invalidDiagramIds: []
+  }
+}
+
 export async function callScryerTool(
   projectPath: string,
   call: ScryerToolCall
 ): Promise<ScryerToolResult> {
+  const { modelName, toolArgs } = stripModelArg(call.arguments)
   switch (call.toolName) {
+    case 'set_diagrams': {
+      const model = await readModel(projectPath, modelName)
+      return handleSetDiagrams(toolArgs as SetDiagramsArgs, {
+        projectPath,
+        modelName,
+        model: model as C4ModelDataV2,
+        writeModel
+      })
+    }
+    case 'get_diagram': {
+      const model = await readModel(projectPath, modelName)
+      return handleGetDiagram(toolArgs as GetDiagramArgs, {
+        projectPath,
+        modelName,
+        model: model as C4ModelDataV2
+      })
+    }
+    case 'update_diagram_refs': {
+      const model = await readModel(projectPath, modelName)
+      return handleUpdateDiagramRefs(toolArgs as UpdateDiagramRefsArgs, {
+        projectPath,
+        modelName,
+        model: model as C4ModelDataV2,
+        writeModel
+      })
+    }
+    case 'delete_diagram': {
+      const model = await readModel(projectPath, modelName)
+      return handleDeleteDiagram(toolArgs as DeleteDiagramArgs, {
+        projectPath,
+        modelName,
+        model: model as C4ModelDataV2,
+        writeModel,
+        clearDiagramCache: clearDiagramCacheForMcp
+      })
+    }
     case 'list_models': {
       await readModel(projectPath)
       return ok(`* ${getProjectModelPath(projectPath)} (project)`)
@@ -1641,7 +2635,8 @@ export async function callScryerTool(
     case 'get_model': {
       const model = stripPositions(await readModel(projectPath))
       await writeBaseline(projectPath, model)
-      return ok(JSON.stringify(model, null, 2), model)
+      const data = withCompactDiagramContext(model)
+      return ok(JSON.stringify(data, null, 2), data)
     }
     case 'get_node': {
       const model = await readModel(projectPath)
@@ -1651,7 +2646,11 @@ export async function callScryerTool(
         return fail(`Node '${nodeId}' not found`)
       }
       await writeBaseline(projectPath, model)
-      return ok(JSON.stringify(scoped, null, 2), scoped)
+      const data = {
+        ...(scoped as Record<string, unknown>),
+        diagramContext: getScopedDiagramContext(model, nodeId)
+      }
+      return ok(JSON.stringify(data, null, 2), data)
     }
     case 'add_nodes':
       return addNodes(projectPath, call.arguments)
@@ -1842,7 +2841,10 @@ export async function callScryerTool(
     case 'validate_model': {
       const model = await readModel(projectPath)
       const errors = [...validateModelShape(model), ...validateMentionEdges(model)]
-      return errors.length === 0 ? ok('Model is valid') : fail(errors.join('\n'))
+      const diagramValidation = validateDiagramRefs(model)
+      const allErrors = [...errors, ...diagramValidation.warnings.map((warning) => warning.message)]
+      const data = { diagramValidation }
+      return allErrors.length === 0 ? ok('Model is valid', data) : fail(allErrors.join('\n'), data)
     }
     case 'get_task':
       return getTask(projectPath, call.arguments)
@@ -1852,7 +2854,12 @@ export async function callScryerTool(
         return fail('No baseline found. Call get_model first to establish a reference point.')
       }
       const model = await readModel(projectPath)
-      return ok(computeDiff(baseline, model), { baseline, current: model })
+      return ok(computeDiff(baseline, model), {
+        baseline: withCompactDiagramContext(baseline),
+        current: withCompactDiagramContext(model),
+        diagrams: computeDiagramChanges(baseline, model),
+        diagramRefs: computeDiagramRefChanges(baseline, model)
+      })
     }
     case 'get_structure': {
       const path = String(call.arguments.path ?? projectPath)

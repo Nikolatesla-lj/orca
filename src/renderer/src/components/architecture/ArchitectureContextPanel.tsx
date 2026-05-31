@@ -14,6 +14,7 @@ import type {
   Status
 } from '../../../../shared/scryer/model-types'
 import { Button } from '../ui/button'
+import { DiagramReferenceControls, type DiagramReferenceActions } from './DiagramReferenceControls'
 import { GroupsPalette } from './GroupsView'
 import { getNodeContextForModel } from './c4-model'
 import {
@@ -66,6 +67,7 @@ type ArchitectureContextPanelProps = {
   onUpdateGroup: (patch: Partial<Group>) => void | Promise<void>
   onDeleteGroup: () => void | Promise<void>
   onRemoveGroupMember: (nodeId: string) => void | Promise<void>
+  diagramReferenceActions?: DiagramReferenceActions
   docked?: boolean
   groupsPaletteMode?: boolean
   nodeDiff?: C4Node['data']
@@ -101,6 +103,7 @@ export function ArchitectureContextPanel({
   onUpdateGroup,
   onDeleteGroup,
   onRemoveGroupMember,
+  diagramReferenceActions,
   docked = false,
   groupsPaletteMode = false,
   nodeDiff,
@@ -170,6 +173,7 @@ export function ArchitectureContextPanel({
             onUpdateGroup={onUpdateGroup}
             onDeleteGroup={onDeleteGroup}
             onRemoveGroupMember={onRemoveGroupMember}
+            diagramReferenceActions={diagramReferenceActions}
           />
         ) : selectedNode && model ? (
           <NodeEditor
@@ -187,6 +191,7 @@ export function ArchitectureContextPanel({
             onTargetNodeChange={onTargetNodeChange}
             onAddEdge={onAddEdge}
             onDeleteNode={onDeleteNode}
+            diagramReferenceActions={diagramReferenceActions}
             nodeDiff={nodeDiff}
             onDismissNodeDiff={onDismissNodeDiff}
           />
@@ -197,6 +202,7 @@ export function ArchitectureContextPanel({
             syncing={syncing}
             onUpdateEdge={onUpdateEdge}
             onDeleteEdge={onDeleteEdge}
+            diagramReferenceActions={diagramReferenceActions}
           />
         ) : (
           <div className="rounded border border-border p-3 text-xs text-muted-foreground">
@@ -303,7 +309,8 @@ function GroupEditor({
   syncing,
   onUpdateGroup,
   onDeleteGroup,
-  onRemoveGroupMember
+  onRemoveGroupMember,
+  diagramReferenceActions
 }: {
   group: Group
   model: C4ModelData
@@ -311,6 +318,7 @@ function GroupEditor({
   onUpdateGroup: (patch: Partial<Group>) => void | Promise<void>
   onDeleteGroup: () => void | Promise<void>
   onRemoveGroupMember: (nodeId: string) => void | Promise<void>
+  diagramReferenceActions?: DiagramReferenceActions
 }): React.JSX.Element {
   const memberNodes = group.memberIds
     .map((memberId) => model.nodes.find((node) => node.id === memberId))
@@ -348,6 +356,14 @@ function GroupEditor({
         contract={group.contract}
         syncing={syncing}
         onChange={(contract) => void onUpdateGroup({ contract })}
+      />
+
+      <DiagramReferenceControls
+        model={model}
+        target={{ type: 'group', id: group.id }}
+        label={group.name || group.id}
+        syncing={syncing}
+        actions={diagramReferenceActions}
       />
 
       <section className="grid gap-2 border-t border-border pt-3">
@@ -398,13 +414,15 @@ function EdgeEditor({
   model,
   syncing,
   onUpdateEdge,
-  onDeleteEdge
+  onDeleteEdge,
+  diagramReferenceActions
 }: {
   edge: C4Edge
   model: C4ModelData
   syncing: boolean
   onUpdateEdge: (patch: { label?: string; method?: string }) => void | Promise<void>
   onDeleteEdge: () => void | Promise<void>
+  diagramReferenceActions?: DiagramReferenceActions
 }): React.JSX.Element {
   const source = model.nodes.find((node) => node.id === edge.source)
   const target = model.nodes.find((node) => node.id === edge.target)
@@ -439,6 +457,13 @@ function EdgeEditor({
           disabled={syncing}
         />
       </label>
+      <DiagramReferenceControls
+        model={model}
+        target={{ type: 'edge', id: edge.id }}
+        label={label || edge.id}
+        syncing={syncing}
+        actions={diagramReferenceActions}
+      />
       <Button
         variant="outline"
         size="sm"
@@ -468,6 +493,7 @@ function NodeEditor({
   onTargetNodeChange,
   onAddEdge,
   onDeleteNode,
+  diagramReferenceActions,
   nodeDiff,
   onDismissNodeDiff
 }: {
@@ -485,6 +511,7 @@ function NodeEditor({
   onTargetNodeChange: (nodeId: string) => void
   onAddEdge: (sourceNodeId: string, targetNodeId: string) => void | Promise<void>
   onDeleteNode: () => void | Promise<void>
+  diagramReferenceActions?: DiagramReferenceActions
   nodeDiff?: C4Node['data']
   onDismissNodeDiff?: (nodeId: string) => void
 }): React.JSX.Element {
@@ -870,6 +897,14 @@ function NodeEditor({
           </div>
         ) : null}
       </section>
+
+      <DiagramReferenceControls
+        model={model}
+        target={{ type: 'node', id: node.id }}
+        label={node.data.name || node.id}
+        syncing={syncing}
+        actions={diagramReferenceActions}
+      />
 
       <section className="grid gap-3 border-t border-border pt-3">
         <PanelTitle title="Source Map" />

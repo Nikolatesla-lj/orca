@@ -27,6 +27,23 @@ describe('checkDrift', () => {
     model.sourceMap = {
       api: [{ pattern: 'src/**/*.ts', line: 1 }]
     }
+    model.diagrams = [
+      {
+        id: 'diagram-api',
+        name: 'API Sequence',
+        kind: 'sequence',
+        notation: 'mermaid',
+        source: 'sequenceDiagram\n  participant API'
+      }
+    ]
+    model.diagramRefs = [
+      {
+        id: 'ref-api-source',
+        diagramId: 'diagram-api',
+        target: { type: 'source', pattern: 'src/api.ts', line: 1, endLine: 20 },
+        role: 'evidence'
+      }
+    ]
     await writeModel(projectPath, model)
     await markSynced(projectPath)
 
@@ -39,6 +56,17 @@ describe('checkDrift', () => {
 
     expect(syncMtime.getTime()).toBeLessThanOrEqual(Date.now())
     expect(report.nodes).toEqual([{ nodeId: 'api', nodeName: 'API', patterns: ['src/**/*.ts'] }])
+    expect(report.diagramRefs).toEqual([
+      expect.objectContaining({
+        refId: 'ref-api-source',
+        diagramId: 'diagram-api',
+        diagramName: 'API Sequence',
+        patterns: ['src/api.ts'],
+        target: { type: 'source', pattern: 'src/api.ts', line: 1, endLine: 20 },
+        sourceOmitted: true,
+        sourceHash: expect.stringMatching(/^sha256:[0-9a-f]{64}$/)
+      })
+    ])
     expect(report.structureChanged).toBe(true)
   })
 })

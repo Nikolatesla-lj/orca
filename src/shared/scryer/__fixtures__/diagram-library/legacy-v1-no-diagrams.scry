@@ -1,0 +1,61 @@
+{
+  "nodes": [
+    {
+      "id": "api",
+      "type": "c4",
+      "position": { "x": 10, "y": 20 },
+      "data": {
+        "name": "API",
+        "description": "Backend API",
+        "kind": "container",
+        "status": "implemented"
+      }
+    },
+    {
+      "id": "db",
+      "type": "c4",
+      "position": { "x": 220, "y": 20 },
+      "data": {
+        "name": "Database",
+        "description": "Stores records",
+        "kind": "container",
+        "shape": "cylinder"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-api-db",
+      "source": "api",
+      "target": "db",
+      "data": { "label": "reads" }
+    }
+  ],
+  "startingLevel": "container",
+  "sourceMap": {
+    "api": [{ "pattern": "src/api.ts", "line": 1 }]
+  },
+  "projectPath": "/tmp/orca-legacy",
+  "refPositions": {
+    "api": { "x": 12, "y": 34 }
+  },
+  "groups": [
+    {
+      "id": "backend",
+      "name": "Backend",
+      "memberIds": ["api", "db"]
+    }
+  ],
+  "flows": [
+    {
+      "id": "flow-signup",
+      "name": "Signup",
+      "steps": [
+        {
+          "id": "step-request",
+          "description": "User submits signup"
+        }
+      ]
+    }
+  ]
+}

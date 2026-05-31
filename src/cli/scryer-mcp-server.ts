@@ -46,7 +46,11 @@ const TOOL_NAMES: ScryerToolName[] = [
   'validate_model',
   'get_task',
   'get_changes',
-  'get_structure'
+  'get_structure',
+  'set_diagrams',
+  'get_diagram',
+  'delete_diagram',
+  'update_diagram_refs'
 ]
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -136,7 +140,15 @@ function toolDescription(name: ScryerToolName): string {
     get_changes:
       'Show what changed in a model since the agent last read or wrote it. Returns a human-readable diff of nodes, edges, contracts, flows, and groups.',
     get_structure:
-      'Get the structure of a project directory. Returns an annotated directory tree showing manifests, infrastructure configs, and environment templates.'
+      'Get the structure of a project directory. Returns an annotated directory tree showing manifests, infrastructure configs, and environment templates.',
+    set_diagrams:
+      'Create or replace one or more top-level Mermaid diagrams in the selected Scryer model.',
+    get_diagram:
+      'Read one diagram with its full source and optionally its diagramRefs. Use this before editing omitted diagram source.',
+    delete_diagram:
+      'Delete one diagram, its diagramRefs, and its derived diagram cache for the selected Scryer model.',
+    update_diagram_refs:
+      'Create, replace, or delete diagramRefs linking diagrams to C4, flow, or source targets.'
   }
   return descriptions[name]
 }
@@ -168,6 +180,57 @@ function toolInputSchema(name: ScryerToolName): JsonRecord {
   }
 
   switch (name) {
+    case 'set_diagrams':
+      return {
+        type: 'object',
+        additionalProperties: false,
+        required: ['data'],
+        properties: {
+          ...modelNameProperty,
+          data: {
+            type: 'string',
+            description: 'JSON string containing Diagram or Diagram[]'
+          },
+          mode: { type: 'string', enum: ['upsert', 'replaceAll'] }
+        }
+      }
+    case 'get_diagram':
+      return {
+        type: 'object',
+        additionalProperties: false,
+        required: ['diagram_id'],
+        properties: {
+          ...modelNameProperty,
+          diagram_id: stringSchema,
+          include_refs: { type: 'boolean' }
+        }
+      }
+    case 'delete_diagram':
+      return {
+        type: 'object',
+        additionalProperties: false,
+        required: ['diagram_id'],
+        properties: {
+          ...modelNameProperty,
+          diagram_id: stringSchema
+        }
+      }
+    case 'update_diagram_refs':
+      return {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ...modelNameProperty,
+          data: {
+            type: 'string',
+            description:
+              'JSON string containing DiagramRef or DiagramRef[]; forbidden when mode is delete'
+          },
+          mode: { type: 'string', enum: ['upsert', 'replaceForDiagram', 'delete'] },
+          diagram_id: stringSchema,
+          ref_ids: { type: 'array', items: stringSchema }
+        }
+      }
     case 'set_model':
       return {
         type: 'object',

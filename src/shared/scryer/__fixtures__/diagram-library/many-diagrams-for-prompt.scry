@@ -1,0 +1,235 @@
+{
+  "schemaVersion": 2,
+  "nodes": [
+    {
+      "id": "system-web",
+      "type": "c4",
+      "position": { "x": 0, "y": 0 },
+      "data": {
+        "kind": "system",
+        "name": "Web Platform",
+        "description": "Customer-facing web platform"
+      }
+    }
+  ],
+  "edges": [],
+  "startingLevel": "system",
+  "sourceMap": {},
+  "refPositions": {},
+  "groups": [],
+  "flows": [
+    {
+      "id": "flow-checkout",
+      "name": "Checkout",
+      "description": "Customer checkout flow",
+      "steps": [
+        { "id": "step-cart", "description": "Customer reviews cart" }
+      ]
+    }
+  ],
+  "diagrams": [
+    {
+      "id": "diagram-01-auth-overview",
+      "name": "Auth Overview",
+      "kind": "flowchart",
+      "notation": "mermaid",
+      "description": "Login and token refresh overview",
+      "tags": ["auth", "security"],
+      "source": "flowchart TD\n  user[User] --> login[Login]\n  login --> token[Token Service]"
+    },
+    {
+      "id": "diagram-02-payment-sequence",
+      "name": "Payment Sequence",
+      "kind": "sequence",
+      "notation": "mermaid",
+      "description": "Payment authorization with provider callbacks",
+      "tags": ["payment", "provider"],
+      "source": "sequenceDiagram\n  participant User\n  participant API\n  participant Provider\n  User->>API: Pay\n  API->>Provider: Authorize"
+    },
+    {
+      "id": "diagram-03-inventory-state",
+      "name": "Inventory State",
+      "kind": "state",
+      "notation": "mermaid",
+      "description": "Stock reservation states",
+      "tags": ["inventory"],
+      "source": "stateDiagram-v2\n  [*] --> Available\n  Available --> Reserved\n  Reserved --> Sold"
+    },
+    {
+      "id": "diagram-04-catalog-class",
+      "name": "Catalog Class",
+      "kind": "class",
+      "notation": "mermaid",
+      "description": "Catalog domain classes",
+      "tags": ["catalog"],
+      "source": "classDiagram\n  class Product\n  class Category\n  Product --> Category"
+    },
+    {
+      "id": "diagram-05-order-er",
+      "name": "Order ER",
+      "kind": "er",
+      "notation": "mermaid",
+      "description": "Order database relationships",
+      "tags": ["orders", "database"],
+      "source": "erDiagram\n  ORDER ||--|{ ORDER_ITEM : contains\n  ORDER_ITEM }|--|| PRODUCT : references"
+    },
+    {
+      "id": "diagram-06-deploy-architecture",
+      "name": "Deploy Architecture",
+      "kind": "architecture",
+      "notation": "mermaid",
+      "description": "Runtime deployment services",
+      "tags": ["deploy"],
+      "source": "architecture-beta\n  service api(server)[API]\n  service db(database)[Database]\n  api:R --> L:db"
+    },
+    {
+      "id": "diagram-07-release-gitgraph",
+      "name": "Release GitGraph",
+      "kind": "gitGraph",
+      "notation": "mermaid",
+      "description": "Release branch policy",
+      "tags": ["release"],
+      "source": "gitGraph\n  commit id:\"main\"\n  branch release\n  checkout release\n  commit id:\"rc\""
+    },
+    {
+      "id": "diagram-08-onboarding-gantt",
+      "name": "Onboarding Gantt",
+      "kind": "gantt",
+      "notation": "mermaid",
+      "description": "New customer onboarding schedule",
+      "tags": ["onboarding"],
+      "source": "gantt\n  title Onboarding\n  section Setup\n  Invite users :a1, 2026-05-01, 3d"
+    },
+    {
+      "id": "diagram-09-support-journey",
+      "name": "Support Journey",
+      "kind": "journey",
+      "notation": "mermaid",
+      "description": "Support request journey",
+      "tags": ["support"],
+      "source": "journey\n  title Support\n  section Request\n    Open ticket: 5: Customer\n    Resolve ticket: 4: Agent"
+    },
+    {
+      "id": "diagram-10-product-mindmap",
+      "name": "Product Mindmap",
+      "kind": "mindmap",
+      "notation": "mermaid",
+      "description": "Product planning branches",
+      "tags": ["product"],
+      "source": "mindmap\n  root((Product))\n    Checkout\n    Search\n    Support"
+    },
+    {
+      "id": "diagram-11-roadmap-timeline",
+      "name": "Roadmap Timeline",
+      "kind": "timeline",
+      "notation": "mermaid",
+      "description": "Roadmap milestones",
+      "tags": ["roadmap"],
+      "source": "timeline\n  title Roadmap\n  Q1 : Planning\n  Q2 : Launch"
+    },
+    {
+      "id": "diagram-12-risk-requirements",
+      "name": "Risk Requirements",
+      "kind": "requirement",
+      "notation": "mermaid",
+      "description": "Compliance requirements",
+      "tags": ["risk"],
+      "source": "requirementDiagram\n  requirement auth_req {\n    id: 1\n    text: Token refresh is audited\n    risk: high\n    verifymethod: test\n  }"
+    },
+    {
+      "id": "diagram-13-market-quadrant",
+      "name": "Market Quadrant",
+      "kind": "quadrant",
+      "notation": "mermaid",
+      "description": "Product positioning",
+      "tags": ["market"],
+      "source": "quadrantChart\n  title Positioning\n  x-axis Low --> High\n  y-axis Low --> High\n  Product: [0.7, 0.8]"
+    },
+    {
+      "id": "diagram-14-traffic-xy",
+      "name": "Traffic XY",
+      "kind": "xy",
+      "notation": "mermaid",
+      "description": "Traffic growth",
+      "tags": ["metrics"],
+      "source": "xychart-beta\n  title \"Traffic\"\n  x-axis [Jan, Feb, Mar]\n  y-axis \"Visits\" 0 --> 100\n  line [20, 45, 80]"
+    },
+    {
+      "id": "diagram-15-message-block",
+      "name": "Message Block",
+      "kind": "block",
+      "notation": "mermaid",
+      "description": "Message processing blocks",
+      "tags": ["events"],
+      "source": "block-beta\n  columns 2\n  Queue Processor\n  Store Notify"
+    },
+    {
+      "id": "diagram-16-network-packet",
+      "name": "Network Packet",
+      "kind": "packet",
+      "notation": "mermaid",
+      "description": "Packet payload layout",
+      "tags": ["network"],
+      "source": "packet-beta\n  0-7: \"Version\"\n  8-15: \"Type\"\n  16-31: \"Length\""
+    },
+    {
+      "id": "diagram-17-team-kanban",
+      "name": "Team Kanban",
+      "kind": "kanban",
+      "notation": "mermaid",
+      "description": "Team work board",
+      "tags": ["team"],
+      "source": "kanban\n  Todo\n    Task A\n  Doing\n    Task B\n  Done\n    Task C"
+    },
+    {
+      "id": "diagram-18-c4-context",
+      "name": "C4 Context",
+      "kind": "c4",
+      "notation": "mermaid",
+      "description": "Context diagram for platform",
+      "tags": ["c4"],
+      "source": "C4Context\n  Person(user, \"User\")\n  System(system, \"Platform\")\n  Rel(user, system, \"Uses\")"
+    },
+    {
+      "id": "diagram-19-refund-flow",
+      "name": "Refund Flow",
+      "kind": "flowchart",
+      "notation": "mermaid",
+      "description": "Refund handling flow",
+      "tags": ["payment", "refund"],
+      "source": "flowchart TD\n  request[Refund request] --> review[Review]\n  review --> provider[Provider refund]"
+    },
+    {
+      "id": "diagram-20-search-flow",
+      "name": "Search Flow",
+      "kind": "flowchart",
+      "notation": "mermaid",
+      "description": "Search indexing flow",
+      "tags": ["search"],
+      "source": "flowchart TD\n  catalog[Catalog] --> index[Index]\n  query[Query] --> results[Results]"
+    },
+    {
+      "id": "diagram-21-notification-flow",
+      "name": "Notification Flow",
+      "kind": "flowchart",
+      "notation": "mermaid",
+      "description": "Notification delivery flow",
+      "tags": ["notification"],
+      "source": "flowchart TD\n  event[Event] --> worker[Worker]\n  worker --> email[Email]"
+    }
+  ],
+  "diagramRefs": [
+    {
+      "id": "ref-auth-overview-node",
+      "diagramId": "diagram-01-auth-overview",
+      "target": { "type": "node", "id": "system-web" },
+      "role": "architecture-detail"
+    },
+    {
+      "id": "ref-payment-flow",
+      "diagramId": "diagram-02-payment-sequence",
+      "target": { "type": "flow", "id": "flow-checkout" },
+      "role": "sequence-detail"
+    }
+  ]
+}

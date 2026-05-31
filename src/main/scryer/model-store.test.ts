@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, stat, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { describe, expect, it } from 'vitest'
+import type { C4ModelDataV2 } from '../../shared/scryer/model-types'
 import {
   createGlobalModel,
   getProjectModelPath,
@@ -21,17 +22,24 @@ import {
   writeModelDocument
 } from './model-store'
 
+function fixturePath(name: string): string {
+  return join(__dirname, '..', '..', 'shared', 'scryer', '__fixtures__', 'diagram-library', name)
+}
+
 describe('project-local Scryer model store', () => {
   it('creates and round-trips .scryer/model.scry with a real project path', async () => {
     const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-model-'))
     const model = await readModel(projectPath)
 
     expect(model).toMatchObject({
+      schemaVersion: 2,
       nodes: [],
       edges: [],
       startingLevel: 'system',
       sourceMap: {},
-      projectPath
+      projectPath,
+      diagrams: [],
+      diagramRefs: []
     })
     expect(await readFile(getProjectModelPath(projectPath), 'utf8')).toContain('"nodes"')
 
@@ -49,6 +57,29 @@ describe('project-local Scryer model store', () => {
     await writeModel(projectPath, model)
 
     expect((await readModel(projectPath)).nodes[0].data.name).toBe('Web App')
+  })
+
+  it('reads legacy .scry without rewriting and writes v2 fields only on explicit save', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-legacy-diagrams-'))
+    await mkdir(join(projectPath, '.scryer'), { recursive: true })
+    const fixture = await readFile(fixturePath('legacy-v1-no-diagrams.scry'), 'utf8')
+    await writeFile(getProjectModelPath(projectPath), fixture)
+
+    const document = await readModelDocument(projectPath)
+    const afterRead = await readFile(getProjectModelPath(projectPath), 'utf8')
+
+    expect((document.model as C4ModelDataV2).schemaVersion).toBe(2)
+    expect((document.model as C4ModelDataV2).diagrams).toEqual([])
+    expect((document.model as C4ModelDataV2).diagramRefs).toEqual([])
+    expect(afterRead).toBe(fixture)
+
+    await writeModelDocument(projectPath, document.model)
+    const saved = JSON.parse(await readFile(getProjectModelPath(projectPath), 'utf8'))
+
+    expect(saved.schemaVersion).toBe(2)
+    expect(saved.diagrams).toEqual([])
+    expect(saved.diagramRefs).toEqual([])
+    expect(saved.validationWarnings).toBeUndefined()
   })
 
   it('writes baseline and sync timestamp files used by drift checks', async () => {

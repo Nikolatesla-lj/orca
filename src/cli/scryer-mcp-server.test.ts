@@ -4,6 +4,7 @@ import { tmpdir } from 'os'
 import { PassThrough, Writable } from 'stream'
 import { afterEach, describe, expect, it } from 'vitest'
 import { handleScryerMcpMessage, runScryerMcpServer } from './scryer-mcp-server'
+import { readModel } from '../main/scryer/model-store'
 
 describe('handleScryerMcpMessage', () => {
   const tempDirs: string[] = []
@@ -87,6 +88,27 @@ describe('handleScryerMcpMessage', () => {
     })
   })
 
+  it('exposes diagram tools through tools/list with closed input schemas', async () => {
+    const projectPath = await createProject()
+    const response = await handleScryerMcpMessage(projectPath, {
+      jsonrpc: '2.0',
+      id: 'diagram-tools',
+      method: 'tools/list'
+    })
+
+    expect(response).toMatchObject({ id: 'diagram-tools' })
+    const tools = (response as { result: { tools: { name: string; inputSchema: unknown }[] } })
+      .result.tools
+    for (const name of ['set_diagrams', 'get_diagram', 'delete_diagram', 'update_diagram_refs']) {
+      const tool = tools.find((candidate) => candidate.name === name)
+      expect(tool).toBeDefined()
+      expect(tool?.inputSchema).toMatchObject({
+        type: 'object',
+        additionalProperties: false
+      })
+    }
+  })
+
   it('calls the Scryer tool bridge through MCP tools/call', async () => {
     const projectPath = await createProject()
 
@@ -103,6 +125,41 @@ describe('handleScryerMcpMessage', () => {
         content: [expect.objectContaining({ type: 'text' })],
         isError: false
       }
+    })
+  })
+
+  it('calls diagram write tools through the external MCP tools/call bridge', async () => {
+    const projectPath = await createProject()
+    const source = 'flowchart TD\n  api[API]'
+
+    await expect(
+      handleScryerMcpMessage(projectPath, {
+        jsonrpc: '2.0',
+        id: 'diagram-call',
+        method: 'tools/call',
+        params: {
+          name: 'set_diagrams',
+          arguments: {
+            data: JSON.stringify({
+              id: 'diagram-cli',
+              name: 'CLI Diagram',
+              kind: 'flowchart',
+              notation: 'mermaid',
+              source
+            })
+          }
+        }
+      })
+    ).resolves.toMatchObject({
+      id: 'diagram-call',
+      result: {
+        content: [expect.objectContaining({ type: 'text' })],
+        isError: false
+      }
+    })
+
+    await expect(readModel(projectPath)).resolves.toMatchObject({
+      diagrams: [expect.objectContaining({ id: 'diagram-cli', source })]
     })
   })
 

@@ -1,31 +1,12 @@
 import React, { useEffect, useId, useRef, useState } from 'react'
-import mermaid from 'mermaid'
 import DOMPurify from 'dompurify'
 import { getMermaidConfig } from './mermaid-config'
+import { renderMermaidSvg } from '../architecture/mermaid-render-queue'
 
 type MermaidBlockProps = {
   content: string
   isDark: boolean
   htmlLabels?: boolean
-}
-
-// Why: mermaid.render() manipulates global DOM state (element IDs, internal
-// parser state). Running multiple renders concurrently causes race conditions
-// where one render can clobber another's temporary DOM node. Serializing all
-// render calls through a single promise chain avoids this.
-//
-// The queue is replaced with a fresh promise after each render completes so
-// that old .then() closures (which capture containerRef, content, and id)
-// become unreachable and can be GC'd. Without this, the chain grows with
-// every MermaidBlock mount/unmount cycle for the lifetime of the renderer.
-let renderQueue: Promise<void> = Promise.resolve()
-
-function enqueueRender(fn: () => Promise<void>): void {
-  renderQueue = renderQueue.then(fn, fn).then(() => {
-    // Why: collapse the chain back to a single resolved promise so previous
-    // closures do not remain reachable through a growing .then() chain.
-    renderQueue = Promise.resolve()
-  })
 }
 
 /**
@@ -51,8 +32,11 @@ export default function MermaidBlock({
         // MermaidBlock cannot overwrite htmlLabels/theme between initialize()
         // and render(), which would make markdown preview fall back to the
         // broken foreignObject label path again.
-        mermaid.initialize(getMermaidConfig(isDark, htmlLabels))
-        const { svg } = await mermaid.render(`mermaid-${id}`, content)
+        const svg = await renderMermaidSvg(
+          `mermaid-${id}`,
+          content,
+          getMermaidConfig(isDark, htmlLabels)
+        )
         if (!cancelled && containerRef.current) {
           // Why: although mermaid uses DOMPurify internally, we add an explicit
           // sanitization pass as defense-in-depth against XSS in case upstream
@@ -72,9 +56,9 @@ export default function MermaidBlock({
       }
     }
 
-    // Serialize render calls through a module-level queue to avoid race
-    // conditions from concurrent mermaid.render() invocations.
-    enqueueRender(render)
+    // Serialize render calls through the shared queue to avoid race conditions
+    // from concurrent mermaid.render() invocations.
+    void render()
     return () => {
       cancelled = true
     }

@@ -41,11 +41,131 @@ export type SourceLocation = {
   command?: string
 }
 
-export type ModelValidationWarning = {
-  kind: 'missing-mention'
-  path: string
-  reference: string
+export const SCRY_SCHEMA_VERSION = 2
+
+export type DiagramNotation = 'mermaid'
+
+export type DiagramKind =
+  | 'flowchart'
+  | 'sequence'
+  | 'class'
+  | 'state'
+  | 'er'
+  | 'architecture'
+  | 'gitGraph'
+  | 'c4'
+  | 'gantt'
+  | 'journey'
+  | 'mindmap'
+  | 'timeline'
+  | 'requirement'
+  | 'quadrant'
+  | 'xy'
+  | 'block'
+  | 'packet'
+  | 'kanban'
+  | 'other'
+
+export type DiagramSourceRange = {
+  startLine: number
+  startColumn?: number
+  endLine?: number
+  endColumn?: number
+}
+
+export type Diagram = {
+  id: string
+  name: string
+  kind: DiagramKind
+  notation: DiagramNotation
+  source: string
+  description?: string
+  tags?: string[]
+  updatedAt?: string
+}
+
+export type DiagramRefTarget =
+  | { type: 'node'; id: string }
+  | { type: 'edge'; id: string }
+  | { type: 'group'; id: string }
+  | { type: 'flow'; id: string }
+  | { type: 'flowStep'; flowId: string; stepId: string }
+  | { type: 'source'; pattern: string; line?: number; endLine?: number }
+
+export type DiagramRefRole =
+  | 'architecture-detail'
+  | 'behavior-detail'
+  | 'sequence-detail'
+  | 'state-detail'
+  | 'data-detail'
+  | 'class-detail'
+  | 'deployment-detail'
+  | 'evidence'
+  | 'other'
+
+export type DiagramRef = {
+  id: string
+  diagramId: string
+  target: DiagramRefTarget
+  role: DiagramRefRole
+  elementKey?: string
+  sourceRange?: DiagramSourceRange
+  note?: string
+}
+
+export type DiagramErrorCode =
+  | `parser.${string}`
+  | `renderer.${string}`
+  | `controller.${string}`
+  | `cache.${string}`
+  | `mcp.${string}`
+  | `bridge.${string}`
+  | `standalone.${string}`
+
+export type DiagramDiagnostic = {
+  severity: 'error' | 'warning'
+  code: DiagramErrorCode
   message: string
+  line?: number
+  column?: number
+  endLine?: number
+  endColumn?: number
+}
+
+export type DiagramRenderedElement = {
+  elementKey: string
+  label?: string
+  kind?: string
+  sourceRange?: DiagramSourceRange
+  svgSelector?: string
+}
+
+export type DiagramRenderResult =
+  | {
+      ok: true
+      svg: string
+      elements: DiagramRenderedElement[]
+      diagnostics: DiagramDiagnostic[]
+      sourceHash: `sha256:${string}`
+      rendererVersion: string
+    }
+  | {
+      ok: false
+      diagnostics: DiagramDiagnostic[]
+      sourceHash: `sha256:${string}`
+      rendererVersion: string
+    }
+
+export type ModelValidationWarning = {
+  kind: 'missing-mention' | 'diagram-validation'
+  path: string
+  reference?: string
+  message: string
+  code?: DiagramErrorCode
+  diagramId?: string
+  diagramRefId?: string
+  target?: DiagramRefTarget
+  details?: Record<string, unknown>
 }
 
 export type ModelProperty = {
@@ -149,6 +269,16 @@ export type C4ModelData = {
   groups?: Group[]
   flows?: Flow[]
   validationWarnings?: ModelValidationWarning[]
+  schemaVersion?: typeof SCRY_SCHEMA_VERSION
+  diagrams?: Diagram[]
+  diagramRefs?: DiagramRef[]
+  [key: string]: unknown
+}
+
+export type C4ModelDataV2 = C4ModelData & {
+  schemaVersion: typeof SCRY_SCHEMA_VERSION
+  diagrams: Diagram[]
+  diagramRefs: DiagramRef[]
 }
 
 export type DriftedNode = {
@@ -162,35 +292,18 @@ export type DriftReport = {
   structureChanged: boolean
 }
 
-export type ScryerToolName =
-  | 'list_models'
-  | 'set_model'
-  | 'get_model'
-  | 'get_node'
-  | 'add_nodes'
-  | 'set_node'
-  | 'update_nodes'
-  | 'delete_nodes'
-  | 'add_edges'
-  | 'update_edges'
-  | 'delete_edges'
-  | 'update_source_map'
-  | 'set_flows'
-  | 'delete_flow'
-  | 'set_groups'
-  | 'delete_group'
-  | 'set_implementing'
-  | 'get_rules'
-  | 'validate_model'
-  | 'get_task'
-  | 'get_changes'
-  | 'get_structure'
-
-export type ScryerToolCall = {
-  toolName: ScryerToolName
-  arguments: Record<string, unknown>
+export type DriftedDiagramRef = {
+  refId: string
+  diagramId: string
+  diagramName: string
+  target: DiagramRefTarget
+  patterns: string[]
+  sourceHash: `sha256:${string}`
+  sourceOmitted: true
 }
 
-export type ScryerToolResult =
-  | { ok: true; content: string; data?: unknown }
-  | { ok: false; content: string; data?: unknown }
+export type DriftReportV2 = DriftReport & {
+  diagramRefs: DriftedDiagramRef[]
+}
+
+export type { ScryerToolCall, ScryerToolName, ScryerToolResult } from './tool-types'

@@ -1,12 +1,550 @@
 /* eslint-disable max-lines -- Why: this file exercises the migrated Scryer MCP bridge end-to-end, including task ordering, model mutation, rules, and structure semantics in one fixture-heavy suite. */
 import { mkdir, mkdtemp, readFile, writeFile } from 'fs/promises'
+import { existsSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { describe, expect, it } from 'vitest'
+import type { C4ModelDataV2 } from '../../shared/scryer/model-types'
 import { getProjectModelPath, readModel } from './model-store'
-import { callScryerTool } from './mcp-tools'
+import {
+  callScryerTool,
+  handleDeleteDiagram,
+  handleGetDiagram,
+  handleSetDiagrams
+} from './mcp-tools'
+
+function diagramFixturePath(name: string): string {
+  return join(__dirname, '..', '..', 'shared', 'scryer', '__fixtures__', 'diagram-library', name)
+}
+
+async function createDiagramFixtureProject(name = 'valid-diagrams-and-refs.scry'): Promise<string> {
+  const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-diagram-tools-'))
+  await mkdir(join(projectPath, '.scryer'), { recursive: true })
+  await writeFile(
+    getProjectModelPath(projectPath),
+    await readFile(diagramFixturePath(name), 'utf8'),
+    'utf8'
+  )
+  return projectPath
+}
 
 describe('callScryerTool', () => {
+  it('sets diagrams through MCP and reads the written diagram from a real .scry file', async () => {
+    const projectPath = await createDiagramFixtureProject()
+    const source = 'sequenceDiagram\n  participant API\n  API->>DB: fetch'
+
+    const setResult = await callScryerTool(projectPath, {
+      toolName: 'set_diagrams',
+      arguments: {
+        data: JSON.stringify({
+          id: 'diagram-mcp-sequence',
+          name: 'MCP Sequence',
+          kind: 'sequence',
+          notation: 'mermaid',
+          source
+        })
+      }
+    })
+
+    expect(setResult).toMatchObject({
+      ok: true,
+      data: { diagramsChanged: ['diagram-mcp-sequence'], refsDeleted: [] }
+    })
+    await expect(readModel(projectPath)).resolves.toMatchObject({
+      diagrams: expect.arrayContaining([
+        expect.objectContaining({ id: 'diagram-mcp-sequence', source })
+      ])
+    })
+
+    const getResult = await callScryerTool(projectPath, {
+      toolName: 'get_diagram',
+      arguments: { diagram_id: 'diagram-mcp-sequence' }
+    })
+
+    expect(getResult).toMatchObject({
+      ok: true,
+      data: {
+        diagram: expect.objectContaining({ id: 'diagram-mcp-sequence', source }),
+        refs: []
+      }
+    })
+
+    const replaceAll = await callScryerTool(projectPath, {
+      toolName: 'set_diagrams',
+      arguments: {
+        mode: 'replaceAll',
+        data: JSON.stringify({
+          id: 'diagram-only',
+          name: 'Only Diagram',
+          kind: 'flowchart',
+          notation: 'mermaid',
+          source: 'flowchart TD\n  only[Only]'
+        })
+      }
+    })
+    expect(replaceAll).toMatchObject({
+      ok: true,
+      data: {
+        diagramsChanged: ['diagram-only'],
+        refsDeleted: expect.arrayContaining(['ref-api-flow', 'ref-api-element', 'ref-source'])
+      }
+    })
+    await expect(readModel(projectPath)).resolves.toMatchObject({
+      diagrams: [expect.objectContaining({ id: 'diagram-only' })],
+      diagramRefs: []
+    })
+  })
+
+  it('updates diagram refs by mode and deletes diagrams with real cache cleanup', async () => {
+    const projectPath = await createDiagramFixtureProject()
+
+    const upsert = await callScryerTool(projectPath, {
+      toolName: 'update_diagram_refs',
+      arguments: {
+        data: JSON.stringify({
+          id: 'ref-mcp-source',
+          diagramId: 'diagram-sequence',
+          target: { type: 'source', pattern: './src\\api.ts', line: 2, endLine: 4 },
+          role: 'evidence'
+        })
+      }
+    })
+    expect(upsert).toMatchObject({
+      ok: true,
+      data: { refsChanged: ['ref-mcp-source'], refsDeleted: [] }
+    })
+    await expect(readModel(projectPath)).resolves.toMatchObject({
+      diagramRefs: expect.arrayContaining([
+        expect.objectContaining({
+          id: 'ref-mcp-source',
+          target: { type: 'source', pattern: 'src/api.ts', line: 2, endLine: 4 }
+        })
+      ])
+    })
+
+    const replace = await callScryerTool(projectPath, {
+      toolName: 'update_diagram_refs',
+      arguments: {
+        mode: 'replaceForDiagram',
+        diagram_id: 'diagram-sequence',
+        data: JSON.stringify({
+          id: 'ref-mcp-node',
+          diagramId: 'diagram-sequence',
+          target: { type: 'node', id: 'api' },
+          role: 'architecture-detail'
+        })
+      }
+    })
+    expect(replace).toMatchObject({
+      ok: true,
+      data: {
+        refsChanged: ['ref-mcp-node'],
+        refsDeleted: expect.arrayContaining(['ref-source', 'ref-mcp-source'])
+      }
+    })
+
+    const deleteRef = await callScryerTool(projectPath, {
+      toolName: 'update_diagram_refs',
+      arguments: { mode: 'delete', ref_ids: ['ref-mcp-node'] }
+    })
+    expect(deleteRef).toMatchObject({
+      ok: true,
+      data: { refsChanged: [], refsDeleted: ['ref-mcp-node'] }
+    })
+
+    const cacheDir = join(projectPath, '.scryer', 'cache', 'diagrams', 'model', 'diagram-api-flow')
+    await mkdir(cacheDir, { recursive: true })
+    await writeFile(join(cacheDir, 'stale.svg'), '<svg></svg>')
+    expect(existsSync(cacheDir)).toBe(true)
+
+    const deleted = await callScryerTool(projectPath, {
+      toolName: 'delete_diagram',
+      arguments: { diagram_id: 'diagram-api-flow' }
+    })
+    expect(deleted).toMatchObject({
+      ok: true,
+      data: {
+        diagramId: 'diagram-api-flow',
+        refsDeleted: expect.arrayContaining(['ref-api-flow', 'ref-api-element'])
+      }
+    })
+    expect(existsSync(cacheDir)).toBe(false)
+    const model = await readModel(projectPath)
+    expect((model.diagrams ?? []).map((diagram) => diagram.id)).not.toContain('diagram-api-flow')
+    expect((model.diagramRefs ?? []).some((ref) => ref.diagramId === 'diagram-api-flow')).toBe(
+      false
+    )
+  })
+
+  it('adds compact diagram context to existing MCP tools without returning full sources by default', async () => {
+    const projectPath = await createDiagramFixtureProject()
+
+    const modelResult = await callScryerTool(projectPath, {
+      toolName: 'get_model',
+      arguments: {}
+    })
+    expect(modelResult.ok).toBe(true)
+    expect(modelResult.content).not.toContain('flowchart TD')
+    const modelData = modelResult.data as {
+      diagrams: { id: string; source?: string }[]
+      diagramContext: {
+        diagramSummaries: { id: string; sourceHash: string; sourceOmitted: boolean }[]
+        diagramRefs: { id: string; diagramId: string }[]
+      }
+    }
+    expect(modelData.diagrams[0]).not.toHaveProperty('source')
+    expect(modelData.diagramContext.diagramSummaries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'diagram-api-flow',
+          sourceOmitted: true,
+          sourceHash: expect.stringMatching(/^sha256:[0-9a-f]{64}$/)
+        })
+      ])
+    )
+    expect(modelData.diagramContext.diagramRefs).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: 'ref-api-flow' })])
+    )
+
+    const nodeResult = await callScryerTool(projectPath, {
+      toolName: 'get_node',
+      arguments: { node_id: 'api' }
+    })
+    expect(nodeResult.ok).toBe(true)
+    const nodeData = nodeResult.data as {
+      diagramContext: { diagramRefs: { id: string }[] }
+    }
+    expect(nodeData.diagramContext.diagramRefs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'ref-api-flow' }),
+        expect.objectContaining({ id: 'ref-source' })
+      ])
+    )
+    expect(nodeData.diagramContext.diagramRefs).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: 'ref-api-element' })])
+    )
+
+    const validation = await callScryerTool(projectPath, {
+      toolName: 'validate_model',
+      arguments: {}
+    })
+    expect(validation).toMatchObject({
+      data: {
+        diagramValidation: {
+          danglingRefIds: [],
+          invalidDiagramIds: []
+        }
+      }
+    })
+
+    const edited = await readModel(projectPath)
+    edited.diagrams = (edited.diagrams ?? []).map((diagram) =>
+      diagram.id === 'diagram-api-flow' ? { ...diagram, name: 'API Flow Edited' } : diagram
+    )
+    await writeFile(getProjectModelPath(projectPath), JSON.stringify(edited, null, 2))
+
+    const changes = await callScryerTool(projectPath, {
+      toolName: 'get_changes',
+      arguments: {}
+    })
+    expect(changes).toMatchObject({
+      ok: true,
+      data: {
+        diagrams: [expect.objectContaining({ id: 'diagram-api-flow', change: 'modified' })]
+      }
+    })
+  })
+
+  it('includes diagram-to-code guidance in the real get_task prompt assembly', async () => {
+    const projectPath = await createDiagramFixtureProject()
+    const model = await readModel(projectPath)
+    model.nodes = [
+      {
+        id: 'system',
+        type: 'c4',
+        data: { name: 'Shop', description: 'Commerce system', kind: 'system' }
+      },
+      {
+        id: 'api',
+        parentId: 'system',
+        type: 'c4',
+        data: {
+          name: 'API',
+          description: 'HTTP API',
+          kind: 'container',
+          status: 'proposed'
+        }
+      }
+    ]
+    model.edges = []
+    model.groups = []
+    model.diagrams = [
+      {
+        id: 'diagram-api-build',
+        name: 'API Build',
+        kind: 'sequence',
+        notation: 'mermaid',
+        source: 'sequenceDiagram\n  participant API\n  API->>DB: query'
+      }
+    ]
+    model.diagramRefs = [
+      {
+        id: 'ref-api-build',
+        diagramId: 'diagram-api-build',
+        target: { type: 'node', id: 'api' },
+        role: 'sequence-detail'
+      }
+    ]
+    await import('./model-store').then(({ writeModel }) => writeModel(projectPath, model))
+
+    const task = await callScryerTool(projectPath, {
+      toolName: 'get_task',
+      arguments: {}
+    })
+
+    expect(task.ok).toBe(true)
+    expect(task.content).toContain('Linked diagrams')
+    expect(task.content).toContain('diagram-api-build')
+    expect(task.content).toContain('Use `get_diagram` before editing omitted diagram source')
+    expect(task.content).toContain(
+      'Unlinked diagrams are not enough to change code without resolving a C4, flow, or source target'
+    )
+  })
+
+  it('rejects invalid diagram MCP payloads with structured codes and leaves .scry unchanged', async () => {
+    const projectPath = await createDiagramFixtureProject()
+    const before = await readFile(getProjectModelPath(projectPath), 'utf8')
+
+    const kindConflict = await callScryerTool(projectPath, {
+      toolName: 'set_diagrams',
+      arguments: {
+        data: JSON.stringify({
+          id: 'diagram-conflict',
+          name: 'Conflict',
+          kind: 'flowchart',
+          notation: 'mermaid',
+          source: 'sequenceDiagram\n  A->>B: hello'
+        })
+      }
+    })
+    expect(kindConflict).toMatchObject({
+      ok: false,
+      data: {
+        code: 'mcp.validation-failed',
+        details: { validationCodes: ['renderer.kind-conflict'] }
+      }
+    })
+
+    const duplicateId = await callScryerTool(projectPath, {
+      toolName: 'set_diagrams',
+      arguments: {
+        data: JSON.stringify([
+          {
+            id: 'diagram-dupe',
+            name: 'One',
+            kind: 'flowchart',
+            notation: 'mermaid',
+            source: 'flowchart TD\n  a[A]'
+          },
+          {
+            id: 'diagram-dupe',
+            name: 'Two',
+            kind: 'flowchart',
+            notation: 'mermaid',
+            source: 'flowchart TD\n  b[B]'
+          }
+        ])
+      }
+    })
+    expect(duplicateId).toMatchObject({ ok: false, data: { code: 'mcp.duplicate-id' } })
+
+    const missingId = await callScryerTool(projectPath, {
+      toolName: 'set_diagrams',
+      arguments: {
+        data: JSON.stringify({
+          name: 'Missing id',
+          kind: 'flowchart',
+          notation: 'mermaid',
+          source: 'flowchart TD\n  a[A]'
+        })
+      }
+    })
+    expect(missingId).toMatchObject({
+      ok: false,
+      data: { code: 'mcp.validation-failed' }
+    })
+
+    expect(await readFile(getProjectModelPath(projectPath), 'utf8')).toBe(before)
+  })
+
+  it('rejects invalid diagram ref MCP modes and unsafe targets with structured codes', async () => {
+    const projectPath = await createDiagramFixtureProject()
+    const before = await readFile(getProjectModelPath(projectPath), 'utf8')
+
+    const unsafeSource = await callScryerTool(projectPath, {
+      toolName: 'update_diagram_refs',
+      arguments: {
+        data: JSON.stringify({
+          id: 'ref-unsafe',
+          diagramId: 'diagram-sequence',
+          target: { type: 'source', pattern: '../secret.ts' },
+          role: 'evidence'
+        })
+      }
+    })
+    expect(unsafeSource).toMatchObject({
+      ok: false,
+      data: {
+        code: 'mcp.validation-failed',
+        details: { validationCodes: ['parser.invalid-source-target'] }
+      }
+    })
+
+    const missingTarget = await callScryerTool(projectPath, {
+      toolName: 'update_diagram_refs',
+      arguments: {
+        data: JSON.stringify({
+          id: 'ref-missing-node',
+          diagramId: 'diagram-sequence',
+          target: { type: 'node', id: 'missing-node' },
+          role: 'architecture-detail'
+        })
+      }
+    })
+    expect(missingTarget).toMatchObject({ ok: false, data: { code: 'mcp.target-not-found' } })
+
+    const missingRefIds = await callScryerTool(projectPath, {
+      toolName: 'update_diagram_refs',
+      arguments: { mode: 'delete' }
+    })
+    expect(missingRefIds).toMatchObject({
+      ok: false,
+      data: { code: 'mcp.mode-argument-missing' }
+    })
+
+    const dataInDeleteMode = await callScryerTool(projectPath, {
+      toolName: 'update_diagram_refs',
+      arguments: {
+        mode: 'delete',
+        data: JSON.stringify({ id: 'ref-source' }),
+        ref_ids: ['ref-source']
+      }
+    })
+    expect(dataInDeleteMode).toMatchObject({
+      ok: false,
+      data: { code: 'mcp.validation-failed' }
+    })
+
+    expect(await readFile(getProjectModelPath(projectPath), 'utf8')).toBe(before)
+  })
+
+  it('uses dispatcher-selected model names and does not let handlers parse model from args', async () => {
+    const projectPath = await createDiagramFixtureProject()
+    const source = 'flowchart TD\n  a[Alt]'
+
+    const setAlt = await callScryerTool(projectPath, {
+      toolName: 'set_diagrams',
+      arguments: {
+        model: 'Alt Model',
+        data: JSON.stringify({
+          id: 'diagram-alt',
+          name: 'Alt',
+          kind: 'flowchart',
+          notation: 'mermaid',
+          source
+        })
+      }
+    })
+    expect(setAlt.ok).toBe(true)
+
+    await expect(readModel(projectPath, 'Alt Model')).resolves.toMatchObject({
+      diagrams: [expect.objectContaining({ id: 'diagram-alt' })]
+    })
+    await expect(readModel(projectPath)).resolves.toMatchObject({
+      diagrams: expect.not.arrayContaining([expect.objectContaining({ id: 'diagram-alt' })])
+    })
+
+    const getAlt = await callScryerTool(projectPath, {
+      toolName: 'get_diagram',
+      arguments: { model: 'Alt Model', diagram_id: 'diagram-alt' }
+    })
+    expect(getAlt).toMatchObject({
+      ok: true,
+      data: { diagram: expect.objectContaining({ id: 'diagram-alt', source }) }
+    })
+
+    const capturedModelNames: (string | null | undefined)[] = []
+    const contextModel = (await readModel(projectPath)) as C4ModelDataV2
+    await handleSetDiagrams(
+      {
+        model: 'ignored-by-handler',
+        data: JSON.stringify({
+          id: 'diagram-context-model',
+          name: 'Context model',
+          kind: 'flowchart',
+          notation: 'mermaid',
+          source: 'flowchart TD\n  c[Context]'
+        })
+      } as never,
+      {
+        projectPath,
+        modelName: 'Context Model',
+        model: contextModel,
+        writeModel: async (_projectPath, _model, modelName) => {
+          capturedModelNames.push(modelName)
+        }
+      }
+    )
+    expect(capturedModelNames).toEqual(['Context Model'])
+  })
+
+  it('splits diagram MCP contexts and reports cache cleanup warnings without rollback', async () => {
+    const projectPath = await createDiagramFixtureProject()
+    const model = (await readModel(projectPath)) as C4ModelDataV2
+
+    const readOnlyResult = await handleGetDiagram(
+      { diagram_id: 'diagram-api-flow' },
+      {
+        projectPath,
+        modelName: null,
+        model
+      }
+    )
+    expect(readOnlyResult).toMatchObject({
+      ok: true,
+      data: { diagram: expect.objectContaining({ id: 'diagram-api-flow' }) }
+    })
+
+    const deleteResult = await handleDeleteDiagram(
+      { diagram_id: 'diagram-api-flow' },
+      {
+        projectPath,
+        modelName: null,
+        model,
+        writeModel: async (nextProjectPath, nextModel, modelName) => {
+          await import('./model-store').then(({ writeModel }) =>
+            writeModel(nextProjectPath, nextModel, modelName)
+          )
+        },
+        clearDiagramCache: async () => ({
+          ok: false,
+          code: 'cache.clear-failed',
+          message: 'Injected cache clear failure'
+        })
+      }
+    )
+    expect(deleteResult).toMatchObject({
+      ok: true,
+      data: {
+        diagramId: 'diagram-api-flow',
+        warnings: [expect.objectContaining({ code: 'cache.clear-failed' })]
+      }
+    })
+    await expect(readModel(projectPath)).resolves.toMatchObject({
+      diagrams: expect.not.arrayContaining([expect.objectContaining({ id: 'diagram-api-flow' })])
+    })
+  })
+
   it('sets a model, strips layout-only positions, validates hierarchy, and returns tasks', async () => {
     const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-'))
     const result = await callScryerTool(projectPath, {

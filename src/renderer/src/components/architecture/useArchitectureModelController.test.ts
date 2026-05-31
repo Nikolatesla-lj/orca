@@ -10,6 +10,7 @@ import {
 describe('architecture model controller helpers', () => {
   it('creates a complete empty Scryer model for the current project', () => {
     expect(createEmptyArchitectureModel('/repo')).toEqual({
+      schemaVersion: 2,
       nodes: [],
       edges: [],
       startingLevel: 'system',
@@ -17,7 +18,9 @@ describe('architecture model controller helpers', () => {
       projectPath: '/repo',
       refPositions: {},
       groups: [],
-      flows: []
+      flows: [],
+      diagrams: [],
+      diagramRefs: []
     })
   })
 
@@ -51,6 +54,32 @@ describe('architecture model controller helpers', () => {
     } as C4ModelData
 
     expect(fingerprintArchitectureModel(model)).toBe(fingerprintArchitectureModel(reordered))
+  })
+
+  it('includes diagrams and diagramRefs in the model fingerprint used by undo/redo', () => {
+    const model = createEmptyArchitectureModel('/repo')
+    const withDiagram: C4ModelData = {
+      ...model,
+      diagrams: [
+        {
+          id: 'diagram-api',
+          name: 'API',
+          kind: 'flowchart',
+          notation: 'mermaid',
+          source: 'flowchart TD\n  A[API]'
+        }
+      ],
+      diagramRefs: [
+        {
+          id: 'ref-api',
+          diagramId: 'diagram-api',
+          target: { type: 'node', id: 'api' },
+          role: 'architecture-detail'
+        }
+      ]
+    }
+
+    expect(fingerprintArchitectureModel(model)).not.toBe(fingerprintArchitectureModel(withDiagram))
   })
 
   it('detects the launched sync agent reporting done on its tab', () => {

@@ -1,0 +1,7 @@
+architecture-beta
+  group api(cloud)[API Layer]
+  service gateway(internet)[Gateway] in api
+  service service(server)[Application Service] in api
+  service db(database)[Primary Database]
+  gateway:R --> L:service
+  service:R --> L:db

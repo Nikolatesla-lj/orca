@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Why: Architecture IPC registration tests cover model, prompt, MCP, watcher, and cache channels in one registrar contract. */
 import { mkdir, mkdtemp, readFile, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import { join } from 'path'
@@ -17,6 +18,22 @@ import {
   shouldNotifyModelFile,
   type ArchitectureIpcRegistrar
 } from './architecture'
+import type { Store } from '../persistence'
+
+function storeFor(projectPath: string): Store {
+  return {
+    getRepos: () => [
+      {
+        id: 'repo-1',
+        path: projectPath,
+        displayName: 'repo',
+        badgeColor: '#000',
+        addedAt: 0
+      }
+    ],
+    getSettings: () => ({})
+  } as Store
+}
 
 describe('registerArchitectureHandlers', () => {
   beforeEach(() => {
@@ -277,6 +294,74 @@ describe('registerArchitectureHandlers', () => {
     }
   })
 
+  it('bridges diagram cache read, write, and clear through authorized IPC channels', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-cache-'))
+    const cacheKey = `sha256:${'a'.repeat(64)}` as const
+    handlers.clear()
+    registerArchitectureHandlers(storeFor(projectPath))
+
+    await expect(
+      handlers.get('architecture:writeDiagramCache')!(null, {
+        projectPath,
+        diagramId: 'diagram-cache-safe',
+        cacheKey,
+        outputProfile: 'review',
+        svg: '<svg><text>ipc</text></svg>'
+      })
+    ).resolves.toEqual({ ok: true })
+
+    await expect(
+      handlers.get('architecture:readDiagramCache')!(null, {
+        projectPath,
+        diagramId: 'diagram-cache-safe',
+        cacheKey,
+        outputProfile: 'review'
+      })
+    ).resolves.toEqual({
+      ok: true,
+      hit: true,
+      outputProfile: 'review',
+      svg: '<svg><text>ipc</text></svg>'
+    })
+
+    await expect(
+      handlers.get('architecture:clearDiagramCache')!(null, {
+        projectPath,
+        diagramId: 'diagram-cache-safe'
+      })
+    ).resolves.toEqual({ ok: true })
+  })
+
+  it('bridges diagram source target opening through the authorized project path', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-source-target-'))
+    await mkdir(join(projectPath, 'src'), { recursive: true })
+    await writeFile(join(projectPath, 'src', 'api.ts'), 'export const api = 1\n', 'utf8')
+    handlers.clear()
+    registerArchitectureHandlers(storeFor(projectPath))
+
+    await expect(
+      handlers.get('architecture:openDiagramSourceTarget')!(null, {
+        projectPath,
+        target: { type: 'source', pattern: 'src/api.ts', line: 4, endLine: 5 }
+      })
+    ).resolves.toEqual({
+      ok: true,
+      action: 'opened',
+      locations: [{ relativePath: 'src/api.ts', line: 4, endLine: 5 }]
+    })
+
+    await expect(
+      handlers.get('architecture:openDiagramSourceTarget')!(null, {
+        projectPath,
+        target: { type: 'source', pattern: '../outside.ts' }
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      code: 'controller.invalid-source-target',
+      reason: 'parent-traversal'
+    })
+  })
+
   it('can register against an injected IPC registrar for isolated tests', async () => {
     const injectedHandlers = new Map<string, (_event: unknown, args: unknown) => unknown>()
     const registrar: ArchitectureIpcRegistrar = {
@@ -287,7 +372,7 @@ describe('registerArchitectureHandlers', () => {
     const handleSpy = vi.spyOn(registrar, 'handle')
     const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-injected-'))
 
-    registerArchitectureHandlers(registrar)
+    registerArchitectureHandlers(undefined, registrar)
 
     expect(handleSpy).toHaveBeenCalledWith('architecture:readModel', expect.any(Function))
     expect(

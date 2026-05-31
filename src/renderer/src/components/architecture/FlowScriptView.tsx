@@ -3,6 +3,7 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import { FileText, GitBranch, GripVertical, Plus, Trash2 } from 'lucide-react'
 import type {
   C4Node,
+  C4ModelData,
   Flow,
   FlowBranch,
   FlowStep,
@@ -10,6 +11,7 @@ import type {
   Status
 } from '../../../../shared/scryer/model-types'
 import { Button } from '../ui/button'
+import { DiagramReferenceControls, type DiagramReferenceActions } from './DiagramReferenceControls'
 import { DescriptionText } from './nodes/DescriptionText'
 import { MentionTextarea, type MentionItem } from './nodes/MentionTextarea'
 
@@ -20,6 +22,7 @@ type MentionNodeInfo = {
 
 export type FlowScriptViewProps = {
   flow: Flow
+  model: C4ModelData
   allNodes: C4Node[]
   sourceMap: Record<string, SourceLocation[]>
   onUpdate: (updated: Flow) => void | Promise<void>
@@ -28,6 +31,7 @@ export type FlowScriptViewProps = {
   onSwitchToTopology?: () => void
   onOpenSourceLocation?: (location: SourceLocation) => void | Promise<void>
   onUpdateSourceMap?: (flowId: string, locations: SourceLocation[]) => void | Promise<void>
+  diagramReferenceActions?: DiagramReferenceActions
 }
 
 type StepEditorProps = {
@@ -44,6 +48,8 @@ type StepEditorProps = {
   onAddStepToBranch: (stepId: string, branchIndex: number) => void
   onDeleteBranch: (stepId: string, branchIndex: number) => void
   onAddBranchArm: (stepId: string) => void
+  model: C4ModelData
+  diagramReferenceActions?: DiagramReferenceActions
   editingStepId: string | null
   setEditingStepId: (id: string | null) => void
   stepIdToLabel: Map<string, string>
@@ -249,6 +255,8 @@ function StepEditor({
   onAddStepToBranch,
   onDeleteBranch,
   onAddBranchArm,
+  model,
+  diagramReferenceActions,
   editingStepId,
   setEditingStepId,
   stepIdToLabel,
@@ -420,6 +428,8 @@ function StepEditor({
                     onAddStepToBranch={onAddStepToBranch}
                     onDeleteBranch={onDeleteBranch}
                     onAddBranchArm={onAddBranchArm}
+                    model={model}
+                    diagramReferenceActions={diagramReferenceActions}
                     editingStepId={editingStepId}
                     setEditingStepId={setEditingStepId}
                     stepIdToLabel={stepIdToLabel}
@@ -455,12 +465,22 @@ function StepEditor({
           </button>
         </div>
       ) : null}
+      <div className="ml-10 mt-1.5">
+        <DiagramReferenceControls
+          model={model}
+          target={{ type: 'flowStep', flowId: flow.id, stepId: step.id }}
+          label={labels.get(step.id) ?? step.id}
+          syncing={false}
+          actions={diagramReferenceActions}
+        />
+      </div>
     </div>
   )
 }
 
 export function FlowScriptView({
   flow,
+  model,
   allNodes,
   sourceMap,
   onUpdate,
@@ -468,7 +488,8 @@ export function FlowScriptView({
   onNavigateToNode,
   onSwitchToTopology,
   onOpenSourceLocation,
-  onUpdateSourceMap
+  onUpdateSourceMap,
+  diagramReferenceActions
 }: FlowScriptViewProps): React.JSX.Element {
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const labels = useMemo(() => computeNumbering(flow.steps, '', 1), [flow.steps])
@@ -788,6 +809,15 @@ export function FlowScriptView({
                 </div>
               ) : null}
             </div>
+            <div className="mt-3">
+              <DiagramReferenceControls
+                model={model}
+                target={{ type: 'flow', id: flow.id }}
+                label={flow.name || flow.id}
+                syncing={false}
+                actions={diagramReferenceActions}
+              />
+            </div>
           </div>
 
           {flow.steps.length === 0 ? (
@@ -828,6 +858,8 @@ export function FlowScriptView({
                   onAddStepToBranch={onAddStepToBranch}
                   onDeleteBranch={onDeleteBranch}
                   onAddBranchArm={onAddBranchArm}
+                  model={model}
+                  diagramReferenceActions={diagramReferenceActions}
                   editingStepId={editingStepId}
                   setEditingStepId={setEditingStepId}
                   stepIdToLabel={stepIdToLabel}

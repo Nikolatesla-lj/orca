@@ -1,5 +1,4 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -30,7 +29,7 @@ function stashWebBuild(): () => void {
     }
   }
 
-  const tempDir = mkdtempSync(join(tmpdir(), 'orca-dev-web-stash-'))
+  const tempDir = mkdtempSync(resolve('out/.orca-dev-web-stash-'))
   const stashedPath = join(tempDir, 'web')
   renameSync(outWebPath, stashedPath)
   return () => {
@@ -58,7 +57,9 @@ describe('run-electron-vite-dev web client prepare', () => {
 
   it('skips the initial web client build when no bundle exists', async () => {
     const restoreWebBuild = stashWebBuild()
-    const tempDir = mkdtempSync(join(tmpdir(), 'orca-dev-wrapper-'))
+    const tempRoot = resolve('.tmp')
+    mkdirSync(tempRoot, { recursive: true })
+    const tempDir = mkdtempSync(join(tempRoot, 'orca-dev-wrapper-'))
     const pidFile = join(tempDir, 'grandchild.pid')
     const envFile = join(tempDir, 'env.json')
     const viteFile = join(tempDir, 'vite.txt')
@@ -113,7 +114,9 @@ describe('run-electron-vite-dev web client prepare', () => {
 
   it('builds the missing web client bundle when explicitly requested', async () => {
     const restoreWebBuild = stashWebBuild()
-    const tempDir = mkdtempSync(join(tmpdir(), 'orca-dev-wrapper-'))
+    const tempRoot = resolve('.tmp')
+    mkdirSync(tempRoot, { recursive: true })
+    const tempDir = mkdtempSync(join(tempRoot, 'orca-dev-wrapper-'))
     const pidFile = join(tempDir, 'grandchild.pid')
     const envFile = join(tempDir, 'env.json')
     const viteFile = join(tempDir, 'vite.txt')

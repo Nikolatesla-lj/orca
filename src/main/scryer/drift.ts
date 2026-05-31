@@ -1,6 +1,7 @@
 import { readdir, stat } from 'fs/promises'
 import { join, relative, sep } from 'path'
-import type { C4ModelData, DriftReport } from '../../shared/scryer/model-types'
+import type { C4ModelData, DriftReport, DriftReportV2 } from '../../shared/scryer/model-types'
+import { computeDiagramSourceHash } from '../../shared/scryer/diagram-cache'
 import { getModelBaselineMtime, readModel } from './model-store'
 
 const SKIP_DIRS = new Set([
@@ -105,6 +106,46 @@ async function checkSourceDrift(
   return drifted
 }
 
+async function checkDiagramRefDrift(
+  model: C4ModelData,
+  baseline: Date,
+  projectPath: string,
+  files: string[]
+): Promise<DriftReportV2['diagramRefs']> {
+  const drifted: DriftReportV2['diagramRefs'] = []
+  const diagramById = new Map((model.diagrams ?? []).map((diagram) => [diagram.id, diagram]))
+  for (const ref of model.diagramRefs ?? []) {
+    if (ref.target.type !== 'source') {
+      continue
+    }
+    const diagram = diagramById.get(ref.diagramId)
+    if (!diagram) {
+      continue
+    }
+    const matcher = globToRegex(ref.target.pattern)
+    const patterns: string[] = []
+    for (const file of files) {
+      const rel = relative(projectPath, file).split(sep).join('/')
+      if (matcher.test(rel) && (await stat(file)).mtime > baseline) {
+        patterns.push(ref.target.pattern)
+        break
+      }
+    }
+    if (patterns.length > 0) {
+      drifted.push({
+        refId: ref.id,
+        diagramId: ref.diagramId,
+        diagramName: diagram.name,
+        target: ref.target,
+        patterns,
+        sourceHash: computeDiagramSourceHash(diagram.source),
+        sourceOmitted: true
+      })
+    }
+  }
+  return drifted
+}
+
 async function checkStructureDrift(files: string[], baseline: Date): Promise<boolean> {
   for (const file of files) {
     const fileStat = await stat(file)
@@ -116,7 +157,7 @@ async function checkStructureDrift(files: string[], baseline: Date): Promise<boo
   return false
 }
 
-export async function checkDrift(projectPath: string): Promise<DriftReport> {
+export async function checkDrift(projectPath: string): Promise<DriftReportV2> {
   const [model, baseline, files] = await Promise.all([
     readModel(projectPath),
     getModelBaselineMtime(projectPath),
@@ -124,6 +165,7 @@ export async function checkDrift(projectPath: string): Promise<DriftReport> {
   ])
   return {
     nodes: await checkSourceDrift(model, baseline, projectPath, files),
+    diagramRefs: await checkDiagramRefDrift(model, baseline, projectPath, files),
     structureChanged: await checkStructureDrift(files, baseline)
   }
 }

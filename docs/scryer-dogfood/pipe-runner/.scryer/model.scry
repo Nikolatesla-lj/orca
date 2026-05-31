@@ -1,0 +1,586 @@
+{
+  "schemaVersion": 2,
+  "startingLevel": "system",
+  "nodes": [
+    {
+      "id": "pipe-runner-app",
+      "type": "c4",
+      "position": { "x": 80, "y": 40 },
+      "data": {
+        "name": "Pipe Runner App",
+        "description": "Dogfood React platform game used to verify Scryer diagram modeling and live review.",
+        "kind": "system",
+        "status": "implemented",
+        "sources": [
+          {
+            "pattern": "src/**/*.tsx",
+            "comment": "React page and canvas component"
+          },
+          {
+            "pattern": "src/game/**/*.ts",
+            "comment": "Game rules, level data, physics, rendering, and shared types"
+          }
+        ],
+        "contract": {
+          "expect": [
+            "Game can be played by keyboard through the visible canvas.",
+            "HUD exposes status, score, lives, and collected coins for live verification.",
+            "Diagrams are linked to real source files and behavior flows."
+          ],
+          "ask": [],
+          "never": [
+            "Do not persist renderer output or render-cache metadata in .scry."
+          ]
+        }
+      }
+    },
+    {
+      "id": "react-shell",
+      "type": "c4",
+      "parentId": "pipe-runner-app",
+      "position": { "x": 80, "y": 170 },
+      "data": {
+        "name": "React Shell",
+        "description": "Owns the page structure, HUD, restart button, and game host wiring.",
+        "kind": "container",
+        "technology": "React",
+        "status": "implemented",
+        "sources": [
+          {
+            "pattern": "src/App.tsx",
+            "comment": "Page shell, HUD, instructions, restart command, and game component host"
+          }
+        ]
+      }
+    },
+    {
+      "id": "game-canvas",
+      "type": "c4",
+      "parentId": "react-shell",
+      "position": { "x": 80, "y": 310 },
+      "data": {
+        "name": "GameCanvas",
+        "description": "Focusable Canvas view that exposes a user-visible game surface.",
+        "kind": "component",
+        "technology": "React Canvas",
+        "status": "implemented",
+        "sources": [
+          {
+            "pattern": "src/components/GameCanvas.tsx",
+            "comment": "Canvas element, accessible label, focus target, and test id"
+          }
+        ]
+      }
+    },
+    {
+      "id": "game-loop",
+      "type": "c4",
+      "parentId": "react-shell",
+      "position": { "x": 340, "y": 310 },
+      "data": {
+        "name": "useGameLoop",
+        "description": "Captures keyboard input, schedules animation frames, updates game state, and calls the renderer.",
+        "kind": "component",
+        "technology": "React Hook",
+        "status": "implemented",
+        "sources": [
+          {
+            "pattern": "src/game/useGameLoop.ts",
+            "comment": "Keyboard input, requestAnimationFrame loop, restart handling, and render bridge"
+          }
+        ]
+      }
+    },
+    {
+      "id": "game-engine",
+      "type": "c4",
+      "parentId": "react-shell",
+      "position": { "x": 600, "y": 310 },
+      "data": {
+        "name": "Game Engine",
+        "description": "Pure update layer that creates game state and applies one deterministic game tick.",
+        "kind": "component",
+        "technology": "TypeScript",
+        "status": "implemented",
+        "sources": [
+          {
+            "pattern": "src/game/game-engine.ts",
+            "comment": "createGameState, restartGame, and updateGame orchestration"
+          }
+        ]
+      }
+    },
+    {
+      "id": "physics",
+      "type": "c4",
+      "parentId": "react-shell",
+      "position": { "x": 600, "y": 470 },
+      "data": {
+        "name": "Physics and Rules",
+        "description": "Movement, gravity, platform collision, enemy collision, coin collection, damage, and goal checks.",
+        "kind": "component",
+        "technology": "TypeScript",
+        "status": "implemented",
+        "sources": [
+          {
+            "pattern": "src/game/physics.ts",
+            "comment": "Movement, collision decisions, scoring, lives, and win/loss rules"
+          }
+        ]
+      }
+    },
+    {
+      "id": "renderer",
+      "type": "c4",
+      "parentId": "react-shell",
+      "position": { "x": 340, "y": 470 },
+      "data": {
+        "name": "Canvas Renderer",
+        "description": "Draws the current game state to Canvas using deterministic 2D shapes.",
+        "kind": "component",
+        "technology": "Canvas 2D",
+        "status": "implemented",
+        "sources": [
+          {
+            "pattern": "src/game/render.ts",
+            "comment": "Canvas drawing for sky, platforms, coins, enemy, goal, player, and message"
+          }
+        ]
+      }
+    },
+    {
+      "id": "level-data",
+      "type": "c4",
+      "parentId": "react-shell",
+      "position": { "x": 860, "y": 310 },
+      "data": {
+        "name": "Level Data",
+        "description": "Deterministic world dimensions, spawn point, platforms, coins, enemy patrol, and goal.",
+        "kind": "component",
+        "technology": "TypeScript data",
+        "shape": "cylinder",
+        "status": "implemented",
+        "sources": [
+          {
+            "pattern": "src/game/level.ts",
+            "comment": "createLevel and viewport constants"
+          }
+        ]
+      }
+    },
+    {
+      "id": "game-types",
+      "type": "c4",
+      "parentId": "react-shell",
+      "position": { "x": 860, "y": 470 },
+      "data": {
+        "name": "Game Types",
+        "description": "Shared state and shape contracts used by the React shell, engine, physics, and renderer.",
+        "kind": "model",
+        "technology": "TypeScript types",
+        "status": "implemented",
+        "sources": [
+          {
+            "pattern": "src/game/types.ts",
+            "comment": "GameStatus, Rect, Player, Level, InputState, and GameState types"
+          }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-react-shell-game-canvas",
+      "source": "react-shell",
+      "target": "game-canvas",
+      "data": { "label": "renders" }
+    },
+    {
+      "id": "edge-react-shell-game-loop",
+      "source": "react-shell",
+      "target": "game-loop",
+      "data": { "label": "uses" }
+    },
+    {
+      "id": "edge-game-loop-game-engine",
+      "source": "game-loop",
+      "target": "game-engine",
+      "data": { "label": "updates via" }
+    },
+    {
+      "id": "edge-game-loop-renderer",
+      "source": "game-loop",
+      "target": "renderer",
+      "data": { "label": "draws via" }
+    },
+    {
+      "id": "edge-game-engine-physics",
+      "source": "game-engine",
+      "target": "physics",
+      "data": { "label": "applies" }
+    },
+    {
+      "id": "edge-game-engine-level-data",
+      "source": "game-engine",
+      "target": "level-data",
+      "data": { "label": "loads" }
+    },
+    {
+      "id": "edge-game-engine-game-types",
+      "source": "game-engine",
+      "target": "game-types",
+      "data": { "label": "uses" }
+    },
+    {
+      "id": "edge-renderer-game-types",
+      "source": "renderer",
+      "target": "game-types",
+      "data": { "label": "reads" }
+    }
+  ],
+  "flows": [
+    {
+      "id": "flow-start-game",
+      "name": "Start Game",
+      "description": "Human focuses the canvas and presses a movement or jump key.",
+      "steps": [
+        {
+          "id": "step-focus-canvas",
+          "description": "Human focuses @[GameCanvas] by clicking the visible canvas."
+        },
+        {
+          "id": "step-key-down",
+          "description": "@[useGameLoop] captures Arrow, WASD, Space, or R key input."
+        },
+        {
+          "id": "step-status-playing",
+          "description": "@[Game Engine] changes status from ready to playing when movement input is active."
+        }
+      ]
+    },
+    {
+      "id": "flow-play-tick",
+      "name": "Play Tick",
+      "description": "One animation frame updates input, state, rendering, and HUD.",
+      "steps": [
+        {
+          "id": "step-read-input",
+          "description": "@[useGameLoop] reads the pressed key set and creates InputState."
+        },
+        {
+          "id": "step-update-game",
+          "description": "@[Game Engine] calls updateGame with current GameState, InputState, and delta time."
+        },
+        {
+          "id": "step-apply-rules",
+          "description": "@[Physics and Rules] applies movement, gravity, platform collision, coins, enemy decisions, damage, and goal checks.",
+          "branches": [
+            {
+              "condition": "if coin overlaps player",
+              "steps": [
+                {
+                  "id": "step-collect-coin",
+                  "description": "collectCoins marks the coin collected and increases score."
+                }
+              ]
+            },
+            {
+              "condition": "if enemy overlaps player",
+              "steps": [
+                {
+                  "id": "step-resolve-enemy",
+                  "description": "handleEnemyCollision either defeats the enemy on stomp or calls damagePlayer on side hit."
+                }
+              ]
+            },
+            {
+              "condition": "if goal overlaps player",
+              "steps": [
+                {
+                  "id": "step-win",
+                  "description": "checkGoal changes status to won and awards goal score."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "step-render-canvas",
+          "description": "@[Canvas Renderer] draws the updated GameState to @[GameCanvas]."
+        },
+        {
+          "id": "step-update-hud",
+          "description": "@[React Shell] exposes status, score, lives, and coin count in the HUD."
+        }
+      ]
+    },
+    {
+      "id": "flow-collect-coin",
+      "name": "Collect Coin",
+      "description": "Player intersects a visible coin while moving through the level.",
+      "steps": [
+        {
+          "id": "step-coin-overlap",
+          "description": "intersects detects overlap between Player and Coin rectangles."
+        },
+        {
+          "id": "step-coin-score",
+          "description": "collectCoins sets collected to true, increments coinsCollected, and adds score."
+        },
+        {
+          "id": "step-coin-hud",
+          "description": "HUD shows the new score and coin count."
+        }
+      ]
+    },
+    {
+      "id": "flow-enemy-collision",
+      "name": "Enemy Collision",
+      "description": "Player reaches the sentry enemy and either stomps it or takes damage.",
+      "steps": [
+        {
+          "id": "step-enemy-overlap",
+          "description": "intersects detects overlap between Player and Enemy rectangles."
+        },
+        {
+          "id": "step-stomp-or-damage",
+          "description": "handleEnemyCollision checks downward velocity and vertical offset to choose stomp or damage."
+        },
+        {
+          "id": "step-damage-respawn",
+          "description": "damagePlayer subtracts one life and respawns the player with short invulnerability."
+        }
+      ]
+    },
+    {
+      "id": "flow-reach-goal",
+      "name": "Reach Goal",
+      "description": "Player moves past the enemy and reaches the flag.",
+      "steps": [
+        {
+          "id": "step-goal-overlap",
+          "description": "checkGoal detects overlap between Player and the goal flag rectangle."
+        },
+        {
+          "id": "step-goal-status",
+          "description": "GameState status becomes won and score increases."
+        }
+      ]
+    },
+    {
+      "id": "flow-restart",
+      "name": "Restart",
+      "description": "Human presses R or the Restart button to recreate level state.",
+      "steps": [
+        {
+          "id": "step-restart-command",
+          "description": "@[useGameLoop] receives R or @[React Shell] receives the Restart button click."
+        },
+        {
+          "id": "step-clear-input",
+          "description": "@[useGameLoop] clears the pressed key set and input state."
+        },
+        {
+          "id": "step-new-state",
+          "description": "@[Game Engine] returns createGameState with lives 3, score 0, coins 0, and status ready."
+        }
+      ]
+    }
+  ],
+  "sourceMap": {
+    "react-shell": [{ "pattern": "src/App.tsx" }],
+    "game-canvas": [{ "pattern": "src/components/GameCanvas.tsx" }],
+    "game-loop": [{ "pattern": "src/game/useGameLoop.ts" }],
+    "game-engine": [{ "pattern": "src/game/game-engine.ts" }],
+    "physics": [{ "pattern": "src/game/physics.ts" }],
+    "renderer": [{ "pattern": "src/game/render.ts" }],
+    "level-data": [{ "pattern": "src/game/level.ts" }],
+    "game-types": [{ "pattern": "src/game/types.ts" }],
+    "flow-play-tick": [{ "pattern": "src/game/game-engine.ts" }]
+  },
+  "refPositions": {},
+  "diagrams": [
+    {
+      "id": "diagram-game-loop",
+      "name": "Game Loop Flow",
+      "kind": "flowchart",
+      "notation": "mermaid",
+      "description": "Frame-by-frame path from keyboard input to updateGame and renderGame.",
+      "tags": ["game-loop", "behavior", "live-test"],
+      "updatedAt": "2026-05-31T00:00:00.000Z",
+      "source": "flowchart TD\n  Human[Human player] -->|keyboard| Hook[useGameLoop]\n  Hook -->|InputState + deltaSeconds| Engine[updateGame]\n  Engine --> Move[applyPlayerInput + integratePlayer]\n  Move --> Platforms[resolvePlatformCollisions]\n  Platforms --> Coins[collectCoins]\n  Coins --> Enemy[handleEnemyCollision]\n  Enemy --> Goal[checkGoal]\n  Goal --> Camera[update cameraX]\n  Camera --> Renderer[renderGame]\n  Renderer --> Canvas[GameCanvas]\n  Engine --> HUD[React HUD state]\n  Enemy -->|side hit| Damage[damagePlayer]\n  Enemy -->|stomp| Score[score + 50]\n  Goal -->|overlap| Won[status won]"
+    },
+    {
+      "id": "diagram-player-state",
+      "name": "Player Status State Machine",
+      "kind": "state",
+      "notation": "mermaid",
+      "description": "GameStatus transitions driven by human input, damage, goal, and restart.",
+      "tags": ["state", "rules"],
+      "updatedAt": "2026-05-31T00:01:00.000Z",
+      "source": "stateDiagram-v2\n  [*] --> ready: createGameState\n  ready --> playing: left/right/jump input\n  playing --> playing: updateGame tick\n  playing --> playing: collectCoins\n  playing --> playing: stomp enemy\n  playing --> playing: damagePlayer with remaining lives\n  playing --> game_over: damagePlayer with no lives\n  playing --> won: checkGoal overlap\n  won --> ready: restartGame\n  game_over --> ready: restartGame"
+    },
+    {
+      "id": "diagram-module-uml",
+      "name": "Module UML",
+      "kind": "class",
+      "notation": "mermaid",
+      "description": "Source module responsibilities and dependencies for C4/code consistency review.",
+      "tags": ["uml", "modules", "source"],
+      "updatedAt": "2026-05-31T00:02:00.000Z",
+      "source": "classDiagram\n  class App {\n    +HUD status score lives coins\n    +Restart button\n  }\n  class GameCanvas {\n    +canvas ref\n    +aria label\n  }\n  class useGameLoop {\n    +inputFromKeys()\n    +restart()\n    +requestAnimationFrame tick()\n  }\n  class GameEngine {\n    +createGameState()\n    +restartGame()\n    +updateGame()\n  }\n  class PhysicsRules {\n    +applyPlayerInput()\n    +integratePlayer()\n    +resolvePlatformCollisions()\n    +collectCoins()\n    +handleEnemyCollision()\n    +damagePlayer()\n    +checkGoal()\n  }\n  class Renderer {\n    +renderGame()\n    +drawRect()\n  }\n  class LevelData {\n    +createLevel()\n    +VIEWPORT_WIDTH\n    +VIEWPORT_HEIGHT\n  }\n  class GameTypes {\n    +GameState\n    +Player\n    +Level\n    +InputState\n  }\n  App --> GameCanvas\n  App --> useGameLoop\n  useGameLoop --> GameEngine\n  useGameLoop --> Renderer\n  GameEngine --> PhysicsRules\n  GameEngine --> LevelData\n  GameEngine --> GameTypes\n  Renderer --> GameTypes"
+    },
+    {
+      "id": "diagram-keyboard-render",
+      "name": "Keyboard To Render Sequence",
+      "kind": "sequence",
+      "notation": "mermaid",
+      "description": "Human keyboard input through React hook, game update, Canvas render, and HUD readback.",
+      "tags": ["sequence", "keyboard", "canvas"],
+      "updatedAt": "2026-05-31T00:03:00.000Z",
+      "source": "sequenceDiagram\n  actor Human\n  participant Canvas as GameCanvas\n  participant Hook as useGameLoop\n  participant Engine as updateGame\n  participant Physics as physics.ts\n  participant Renderer as renderGame\n  participant HUD as React HUD\n  Human->>Canvas: click focus\n  Human->>Hook: keydown ArrowRight or Space\n  Hook->>Hook: inputFromKeys pressed key set\n  Hook->>Engine: updateGame(state, input, deltaSeconds)\n  Engine->>Physics: movement, platform, coin, enemy, goal checks\n  Physics-->>Engine: next GameState\n  Engine-->>Hook: status score lives coins cameraX\n  Hook->>Renderer: renderGame(context, nextState)\n  Renderer->>Canvas: draw visible frame\n  Hook->>HUD: setState(nextState)\n  Human->>Hook: keydown R\n  Hook->>Engine: restartGame()"
+    },
+    {
+      "id": "diagram-collision-decision",
+      "name": "Collision Decision Flow",
+      "kind": "flowchart",
+      "notation": "mermaid",
+      "description": "Detailed collision branches used to review likely gameplay bugs.",
+      "tags": ["collision", "physics", "bug-review"],
+      "updatedAt": "2026-05-31T00:04:00.000Z",
+      "source": "flowchart TD\n  Tick[updateGame tick] --> Platforms[resolvePlatformCollisions]\n  Platforms --> Fall{player below world?}\n  Fall -->|yes| PitDamage[damagePlayer: Fell into the pit]\n  Fall -->|no| CoinScan[collectCoins]\n  CoinScan --> CoinHit{coin intersects player?}\n  CoinHit -->|yes| CoinScore[set collected + score + coinsCollected]\n  CoinHit -->|no| EnemyScan[handleEnemyCollision]\n  CoinScore --> EnemyScan\n  EnemyScan --> EnemyHit{enemy intersects player?}\n  EnemyHit -->|no| GoalCheck[checkGoal]\n  EnemyHit -->|yes| Stomp{velocityY > 100 and player bottom near enemy top?}\n  Stomp -->|yes| Defeat[enemy.defeated true + score 50 + bounce]\n  Stomp -->|no| Invuln{player invulnerable?}\n  Invuln -->|yes| GoalCheck\n  Invuln -->|no| Damage[damagePlayer: Sentry hit]\n  Defeat --> GoalCheck\n  Damage --> GoalCheck\n  GoalCheck --> GoalHit{goal intersects player?}\n  GoalHit -->|yes| Won[status won + score 100]\n  GoalHit -->|no| Continue[continue playing]"
+    }
+  ],
+  "diagramRefs": [
+    {
+      "id": "ref-game-loop-node",
+      "diagramId": "diagram-game-loop",
+      "target": { "type": "node", "id": "game-loop" },
+      "role": "behavior-detail"
+    },
+    {
+      "id": "ref-game-loop-engine-node",
+      "diagramId": "diagram-game-loop",
+      "target": { "type": "node", "id": "game-engine" },
+      "role": "behavior-detail"
+    },
+    {
+      "id": "ref-game-loop-flow-step",
+      "diagramId": "diagram-game-loop",
+      "target": {
+        "type": "flowStep",
+        "flowId": "flow-play-tick",
+        "stepId": "step-update-game"
+      },
+      "role": "behavior-detail",
+      "elementKey": "flowchart:node:Engine",
+      "sourceRange": { "startLine": 3, "startColumn": 3 }
+    },
+    {
+      "id": "ref-game-loop-source",
+      "diagramId": "diagram-game-loop",
+      "target": { "type": "source", "pattern": "src/game/game-engine.ts" },
+      "role": "evidence"
+    },
+    {
+      "id": "ref-player-state-flow",
+      "diagramId": "diagram-player-state",
+      "target": { "type": "flow", "id": "flow-play-tick" },
+      "role": "state-detail"
+    },
+    {
+      "id": "ref-player-state-source",
+      "diagramId": "diagram-player-state",
+      "target": { "type": "source", "pattern": "src/game/types.ts" },
+      "role": "evidence"
+    },
+    {
+      "id": "ref-module-uml-react",
+      "diagramId": "diagram-module-uml",
+      "target": { "type": "node", "id": "react-shell" },
+      "role": "class-detail"
+    },
+    {
+      "id": "ref-module-uml-physics",
+      "diagramId": "diagram-module-uml",
+      "target": { "type": "node", "id": "physics" },
+      "role": "class-detail"
+    },
+    {
+      "id": "ref-module-uml-source",
+      "diagramId": "diagram-module-uml",
+      "target": { "type": "source", "pattern": "src/game/physics.ts" },
+      "role": "evidence"
+    },
+    {
+      "id": "ref-keyboard-render-loop",
+      "diagramId": "diagram-keyboard-render",
+      "target": { "type": "node", "id": "game-loop" },
+      "role": "sequence-detail"
+    },
+    {
+      "id": "ref-keyboard-render-source",
+      "diagramId": "diagram-keyboard-render",
+      "target": { "type": "source", "pattern": "src/game/useGameLoop.ts" },
+      "role": "evidence"
+    },
+    {
+      "id": "ref-keyboard-render-step",
+      "diagramId": "diagram-keyboard-render",
+      "target": {
+        "type": "flowStep",
+        "flowId": "flow-start-game",
+        "stepId": "step-key-down"
+      },
+      "role": "sequence-detail"
+    },
+    {
+      "id": "ref-collision-physics-node",
+      "diagramId": "diagram-collision-decision",
+      "target": { "type": "node", "id": "physics" },
+      "role": "behavior-detail"
+    },
+    {
+      "id": "ref-collision-physics-source",
+      "diagramId": "diagram-collision-decision",
+      "target": { "type": "source", "pattern": "src/game/physics.ts" },
+      "role": "evidence"
+    },
+    {
+      "id": "ref-collision-enemy-step",
+      "diagramId": "diagram-collision-decision",
+      "target": {
+        "type": "flowStep",
+        "flowId": "flow-enemy-collision",
+        "stepId": "step-stomp-or-damage"
+      },
+      "role": "behavior-detail",
+      "elementKey": "flowchart:node:Stomp",
+      "sourceRange": { "startLine": 12, "startColumn": 3 }
+    },
+    {
+      "id": "ref-collision-coin-step",
+      "diagramId": "diagram-collision-decision",
+      "target": {
+        "type": "flowStep",
+        "flowId": "flow-collect-coin",
+        "stepId": "step-coin-score"
+      },
+      "role": "behavior-detail",
+      "elementKey": "flowchart:node:CoinScore",
+      "sourceRange": { "startLine": 7, "startColumn": 3 }
+    },
+    {
+      "id": "ref-collision-goal-step",
+      "diagramId": "diagram-collision-decision",
+      "target": {
+        "type": "flowStep",
+        "flowId": "flow-reach-goal",
+        "stepId": "step-goal-status"
+      },
+      "role": "behavior-detail",
+      "elementKey": "flowchart:node:Won",
+      "sourceRange": { "startLine": 20, "startColumn": 3 }
+    }
+  ]
+}

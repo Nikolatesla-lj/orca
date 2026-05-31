@@ -1,0 +1,6 @@
+stateDiagram-v2
+  [*] --> Draft
+  Draft --> Review: save
+  Review --> Conflict: external reload
+  Conflict --> Draft: keep draft
+  Review --> [*]

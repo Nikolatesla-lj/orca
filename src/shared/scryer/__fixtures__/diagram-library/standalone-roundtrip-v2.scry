@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 2,
+  "compatibleUnknownTopLevel": {
+    "source": "orca",
+    "preserve": true
+  },
+  "nodes": [
+    {
+      "id": "api",
+      "type": "c4",
+      "position": { "x": 10, "y": 20 },
+      "data": {
+        "name": "API",
+        "description": "Backend API",
+        "kind": "container"
+      }
+    }
+  ],
+  "edges": [],
+  "sourceMap": {
+    "api": [
+      {
+        "pattern": "src/api.ts",
+        "line": 3,
+        "endLine": 12
+      }
+    ]
+  },
+  "groups": [
+    {
+      "id": "group-runtime",
+      "name": "Runtime",
+      "memberIds": ["api"]
+    }
+  ],
+  "flows": [
+    {
+      "id": "flow-signup",
+      "name": "Signup",
+      "steps": [
+        {
+          "id": "step-start",
+          "description": "User starts signup",
+          "branches": [
+            {
+              "condition": "if accepted",
+              "steps": [
+                {
+                  "id": "step-nested-review",
+                  "description": "API reviews nested signup state"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "diagrams": [
+    {
+      "id": "diagram-api-flow",
+      "name": "API Flow",
+      "kind": "flowchart",
+      "notation": "mermaid",
+      "source": "flowchart TD\n  api[API] --> worker[Worker]",
+      "description": "Orca v2 diagram data"
+    }
+  ],
+  "diagramRefs": [
+    {
+      "id": "ref-api-node",
+      "diagramId": "diagram-api-flow",
+      "target": { "type": "node", "id": "api" },
+      "role": "architecture-detail",
+      "elementKey": "flowchart:node:api"
+    },
+    {
+      "id": "ref-nested-step",
+      "diagramId": "diagram-api-flow",
+      "target": {
+        "type": "flowStep",
+        "flowId": "flow-signup",
+        "stepId": "step-nested-review"
+      },
+      "role": "behavior-detail"
+    }
+  ]
+}

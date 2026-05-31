@@ -1,0 +1,7 @@
+sequenceDiagram
+  participant User
+  participant UI as Orca UI
+  participant Store as Model Store
+  User->>UI: Save diagram source
+  UI->>Store: write model
+  Store-->>UI: persisted revision

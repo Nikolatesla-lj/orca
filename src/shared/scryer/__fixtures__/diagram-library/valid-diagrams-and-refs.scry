@@ -1,0 +1,119 @@
+{
+  "schemaVersion": 2,
+  "nodes": [
+    {
+      "id": "api",
+      "type": "c4",
+      "position": { "x": 10, "y": 20 },
+      "data": {
+        "name": "API",
+        "description": "Backend API",
+        "kind": "container",
+        "status": "implemented"
+      }
+    },
+    {
+      "id": "worker",
+      "type": "c4",
+      "position": { "x": 240, "y": 20 },
+      "data": {
+        "name": "Worker",
+        "description": "Runs jobs",
+        "kind": "component"
+      },
+      "parentId": "api"
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-api-worker",
+      "source": "api",
+      "target": "worker",
+      "data": { "label": "queues" }
+    }
+  ],
+  "groups": [
+    {
+      "id": "group-runtime",
+      "name": "Runtime",
+      "memberIds": ["api", "worker"]
+    }
+  ],
+  "flows": [
+    {
+      "id": "flow-signup",
+      "name": "Signup",
+      "steps": [
+        {
+          "id": "step-request",
+          "description": "Request account",
+          "branches": [
+            {
+              "condition": "if accepted",
+              "steps": [
+                {
+                  "id": "step-nested-review",
+                  "description": "Nested review"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sourceMap": {
+    "api": [{ "pattern": "src/api.ts", "line": 1 }]
+  },
+  "refPositions": {},
+  "diagrams": [
+    {
+      "id": "diagram-api-flow",
+      "name": "API Flow",
+      "kind": "flowchart",
+      "notation": "mermaid",
+      "source": "flowchart TD\n  api[API] --> worker[Worker]",
+      "description": "Runtime relationship",
+      "tags": ["api"],
+      "updatedAt": "2026-05-26T00:00:00.000Z"
+    },
+    {
+      "id": "diagram-sequence",
+      "name": "Signup Sequence",
+      "kind": "sequence",
+      "notation": "mermaid",
+      "source": "sequenceDiagram\n  participant User\n  participant API\n  User->>API: signup",
+      "updatedAt": "2026-05-26T00:01:00.000Z"
+    },
+    {
+      "id": "diagram-state",
+      "name": "Account State",
+      "kind": "state",
+      "notation": "mermaid",
+      "source": "stateDiagram-v2\n  [*] --> Pending",
+      "updatedAt": "2026-05-26T00:02:00.000Z"
+    }
+  ],
+  "diagramRefs": [
+    {
+      "id": "ref-api-flow",
+      "diagramId": "diagram-api-flow",
+      "target": { "type": "node", "id": "api" },
+      "role": "architecture-detail"
+    },
+    {
+      "id": "ref-api-element",
+      "diagramId": "diagram-api-flow",
+      "target": { "type": "flowStep", "flowId": "flow-signup", "stepId": "step-nested-review" },
+      "role": "behavior-detail",
+      "elementKey": "flowchart:node:api",
+      "sourceRange": { "startLine": 2, "startColumn": 3 }
+    },
+    {
+      "id": "ref-source",
+      "diagramId": "diagram-sequence",
+      "target": { "type": "source", "pattern": "src/api.ts", "line": 1 },
+      "role": "evidence"
+    }
+  ]
+}

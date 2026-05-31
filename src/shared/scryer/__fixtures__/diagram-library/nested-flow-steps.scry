@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 2,
+  "nodes": [
+    {
+      "id": "api",
+      "type": "c4",
+      "position": { "x": 10, "y": 20 },
+      "data": {
+        "name": "API",
+        "description": "Backend API",
+        "kind": "container"
+      }
+    }
+  ],
+  "edges": [],
+  "groups": [],
+  "flows": [
+    {
+      "id": "flow-nested",
+      "name": "Nested Review",
+      "steps": [
+        {
+          "id": "step-root",
+          "description": "Root step",
+          "branches": [
+            {
+              "condition": "if accepted",
+              "steps": [
+                {
+                  "id": "step-child",
+                  "description": "Child step",
+                  "branches": [
+                    {
+                      "condition": "if needs audit",
+                      "steps": [
+                        {
+                          "id": "step-grandchild",
+                          "description": "Grandchild step"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "step-sibling",
+          "description": "Sibling step"
+        }
+      ]
+    }
+  ],
+  "diagrams": [
+    {
+      "id": "diagram-nested",
+      "name": "Nested Flow Detail",
+      "kind": "flowchart",
+      "notation": "mermaid",
+      "source": "flowchart TD\n  A[Root] --> B[Child]"
+    }
+  ],
+  "diagramRefs": [
+    {
+      "id": "ref-root",
+      "diagramId": "diagram-nested",
+      "target": { "type": "flowStep", "flowId": "flow-nested", "stepId": "step-root" },
+      "role": "behavior-detail"
+    },
+    {
+      "id": "ref-child",
+      "diagramId": "diagram-nested",
+      "target": { "type": "flowStep", "flowId": "flow-nested", "stepId": "step-child" },
+      "role": "behavior-detail"
+    },
+    {
+      "id": "ref-grandchild",
+      "diagramId": "diagram-nested",
+      "target": { "type": "flowStep", "flowId": "flow-nested", "stepId": "step-grandchild" },
+      "role": "behavior-detail"
+    },
+    {
+      "id": "ref-sibling",
+      "diagramId": "diagram-nested",
+      "target": { "type": "flowStep", "flowId": "flow-nested", "stepId": "step-sibling" },
+      "role": "behavior-detail"
+    }
+  ]
+}

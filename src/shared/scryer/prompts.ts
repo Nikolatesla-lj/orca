@@ -1,40 +1,20 @@
-import type { C4ModelData, DriftReport } from './model-types'
-
-function stripCompact(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(stripCompact).filter((item) => item !== undefined)
-  }
-  if (typeof value !== 'object' || value === null) {
-    return value === '' ? undefined : value
-  }
-
-  const output: Record<string, unknown> = {}
-  for (const [key, item] of Object.entries(value)) {
-    if (key === 'position' || key === 'type' || key === 'refPositions' || key === 'notes') {
-      continue
-    }
-    const next = stripCompact(item)
-    if (
-      next === undefined ||
-      next === null ||
-      (Array.isArray(next) && next.length === 0) ||
-      (typeof next === 'object' && !Array.isArray(next) && Object.keys(next).length === 0)
-    ) {
-      continue
-    }
-    output[key] = next
-  }
-  return output
-}
-
-export function serializeModelForPrompt(model: C4ModelData): string {
-  return JSON.stringify(stripCompact(model))
-}
+import type { DriftReportV2 } from './model-types'
+import { buildDiagramPromptInstructions } from './prompt-diagram-instructions'
+export {
+  diagramRefTargetMatchesPromptScope,
+  serializeModelForPrompt
+} from './prompt-model-serialization'
+export type {
+  PromptDiagramSummary,
+  SerializeModelForPromptOptions
+} from './prompt-model-serialization'
 
 export function initialModelPrompt(modelName: string, cwd: string): string {
   return `You have access to Orca's Scryer-compatible architecture MCP tools. Build a C4 architecture model named "${modelName}" from the codebase at ${cwd}.
 
 ## Instructions
+
+${buildDiagramPromptInstructions('initial-model')}
 
 1. Call \`get_rules\` to load the full modeling workflow and C4 rules.
 2. Call \`get_structure\` with path "${cwd}" to get the annotated directory tree.
@@ -99,6 +79,8 @@ Do NOT call \`get_model\` - the current state is provided here:
 ${args.modelJson}
 
 ## Instructions
+
+${buildDiagramPromptInstructions('node-fill')}
 
 1. Call \`get_rules\` to load the C4 modeling rules.
 2. Call \`get_node\` with id "${args.nodeId}" to see this node's full context (description, contract, source mappings, existing edges).
@@ -169,7 +151,11 @@ ${args.modelJson}
 - preserve existing \`passed\` flags exactly. New or recovered \`expect\` items must not be marked passed unless the current model already had that exact passed item.
 - Do not delete existing contract items unless the source document or current code proves they are obsolete.
 
-### Phase 5 - Sync rule
+### Phase 5 - Diagram recovery
+
+${buildDiagramPromptInstructions('deep-build')}
+
+### Phase 6 - Sync rule
 
 - If the current model already has reviewed structure, only update model parts that the current code actually changed or that are missing deep detail.
 - During sync, only update model parts that the current code actually changed.
@@ -178,7 +164,7 @@ ${args.modelJson}
 - Use \`status: "vagrant"\` only for existing code discovered during sync that was not part of the reviewed model.
 - Do NOT change contract \`passed\` flags, Do NOT set any node to "verified", and Do NOT call \`get_task\`.
 
-### Phase 6 - Validate and report
+### Phase 7 - Validate and report
 
 - Call \`validate_model\` after each major phase and fix warnings that can be fixed inside the current scope.
 - Call \`get_changes\` at the end.
@@ -193,6 +179,8 @@ export function advisorPrompt(args: { modelName: string; cwd: string; modelJson:
 ${args.modelJson}
 
 ## Instructions
+
+${buildDiagramPromptInstructions('advisor')}
 
 1. Call \`get_rules\` to load the C4 modeling rules.
 2. Inspect the model using the same checks as Scryer's AI advisor:
@@ -212,7 +200,7 @@ ${args.modelJson}
 export function syncPrompt(args: {
   modelName: string
   cwd: string
-  drift: DriftReport
+  drift: DriftReportV2
   modelJson: string
 }): string {
   const driftList =
@@ -225,6 +213,16 @@ export function syncPrompt(args: {
           .join('\n')
       : '- No source-mapped nodes changed.'
 
+  const diagramDriftList =
+    args.drift.diagramRefs.length > 0
+      ? args.drift.diagramRefs
+          .map(
+            (ref) =>
+              `- **${ref.diagramName}** (${ref.diagramId}, ref ${ref.refId}): changed files matching: ${ref.patterns.join(', ')}; sourceHash ${ref.sourceHash}; ${ref.sourceOmitted ? 'source omitted. Call `get_diagram` before editing omitted diagram source.' : 'source included.'}`
+          )
+          .join('\n')
+      : '- No source-linked diagram refs changed.'
+
   const structureSection = args.drift.structureChanged
     ? '\n## Project structure changes\n\nNew or deleted files were detected in the project since the last sync. Call `get_structure` to see the current project layout, then check whether any new code needs to be added to the model or any removed code should be cleaned up.\n'
     : ''
@@ -236,6 +234,12 @@ export function syncPrompt(args: {
 The following nodes have source files that were modified since the model was last updated. The code may or may not have changed in ways that affect the model - check each one.
 
 ${driftList}
+
+## Potentially drifted diagrams
+
+The following diagram refs point at source files modified since the last sync. Treat them separately from C4 node drift.
+
+${diagramDriftList}
 ${structureSection}
 ## Current model state
 
@@ -253,6 +257,8 @@ ${args.modelJson}
    - Add, update, or remove edges with \`add_edges\`, \`update_edges\`, or \`delete_edges\` if relationships changed
    - Update flows or groups with \`set_flows\` or \`set_groups\` only when the code change actually affects them
 3. Call \`get_changes\` to produce a summary.
+
+${buildDiagramPromptInstructions('sync')}
 
 Do NOT call \`get_model\` - the model state is already above. Do NOT call \`get_rules\` unless you need to create entirely new architectural structures.
 

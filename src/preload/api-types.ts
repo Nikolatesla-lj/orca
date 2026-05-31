@@ -296,10 +296,20 @@ import type {
 import type {
   C4ModelData,
   C4NodeData,
+  DiagramRefTarget,
   DriftReport,
   ScryerToolCall,
   ScryerToolResult
 } from '../shared/scryer/model-types'
+import type {
+  DiagramCacheClearRequest,
+  DiagramCacheClearResult,
+  DiagramCacheFailure,
+  DiagramCacheReadRequest,
+  DiagramCacheReadResult,
+  DiagramCacheWriteRequest,
+  DiagramCacheWriteResult
+} from '../shared/scryer/diagram-cache'
 import type { KeybindingActionId, KeybindingFileSnapshot } from '../shared/keybindings'
 
 export type BrowserApi = {
@@ -463,6 +473,15 @@ export type ExportApi = {
     title: string
   }) => Promise<
     { success: true; filePath: string } | { success: false; cancelled?: boolean; error?: string }
+  >
+  diagramPng: (args: { pngDataUrl: string; title: string }) => Promise<
+    | { success: true; filePath: string }
+    | {
+        success: false
+        cancelled?: boolean
+        code?: 'controller.export-failed'
+        error?: string
+      }
   >
 }
 
@@ -689,6 +708,31 @@ export type ArchitectureApi = {
   cancelSync: (args: { projectPath: string }) => Promise<C4ModelData>
   finishSync: (args: { projectPath: string }) => Promise<void>
   callTool: (args: { projectPath: string; call: ScryerToolCall }) => Promise<ScryerToolResult>
+  readDiagramCache: (
+    args: DiagramCacheReadRequest
+  ) => Promise<DiagramCacheReadResult | DiagramCacheFailure>
+  writeDiagramCache: (
+    args: DiagramCacheWriteRequest
+  ) => Promise<DiagramCacheWriteResult | DiagramCacheFailure>
+  clearDiagramCache: (
+    args: DiagramCacheClearRequest
+  ) => Promise<DiagramCacheClearResult | DiagramCacheFailure>
+  openDiagramSourceTarget: (args: {
+    projectPath: string
+    target: Extract<DiagramRefTarget, { type: 'source' }>
+  }) => Promise<
+    | {
+        ok: true
+        action: 'opened' | 'selection-required'
+        locations: { relativePath: string; line?: number; endLine?: number }[]
+      }
+    | {
+        ok: false
+        code: 'controller.invalid-source-target' | 'controller.source-open-failed'
+        reason: string
+        rejectedPattern: string
+      }
+  >
   watchModel: (args: { projectPath: string }) => Promise<void>
   onModelChanged: (
     callback: (event: { projectPath: string; fileName: string }) => void

@@ -1,0 +1,50 @@
+{
+  "validSvgWrite": {
+    "diagramId": "diagram-cache-safe",
+    "cacheKey": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "outputProfile": "review",
+    "svg": "<svg><text>safe</text></svg>"
+  },
+  "unauthorizedProjectPath": {
+    "diagramId": "diagram-cache-safe",
+    "cacheKey": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "outputProfile": "review",
+    "svg": "<svg />"
+  },
+  "pathTraversalDiagramId": {
+    "diagramId": "../outside",
+    "outputProfile": "review",
+    "svg": "<svg />"
+  },
+  "invalidCacheKey": {
+    "diagramId": "diagram-cache-safe",
+    "cacheKey": "sha256:NOT_LOWERCASE_HEX",
+    "outputProfile": "review"
+  },
+  "emptyWritePayload": {
+    "diagramId": "diagram-cache-safe",
+    "outputProfile": "review"
+  },
+  "payloadProfileMismatch": {
+    "diagramId": "diagram-cache-safe",
+    "outputProfile": "review",
+    "pngDataUrl": "data:image/png;base64,AAAA"
+  },
+  "oversizedSvg": {
+    "diagramId": "diagram-cache-safe",
+    "cacheKey": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "outputProfile": "review",
+    "sizeMarker": "MAX_DIAGRAM_CACHE_SVG_BYTES_PLUS_ONE"
+  },
+  "oversizedPngDataUrl": {
+    "diagramId": "diagram-cache-safe",
+    "cacheKey": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "outputProfile": "thumbnail",
+    "sizeMarker": "MAX_DIAGRAM_CACHE_PNG_DATA_URL_BYTES_PLUS_ONE"
+  },
+  "corruptCacheRead": {
+    "diagramId": "diagram-cache-safe",
+    "cacheKey": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "outputProfile": "review"
+  }
+}

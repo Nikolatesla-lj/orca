@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- Why: this panel still composes the migrated C4 canvas, flow, group, sync, and inspector surfaces while controller logic now lives in useArchitectureModelController. */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type React from 'react'
 import {
   Bot,
@@ -18,16 +18,25 @@ import {
   X
 } from 'lucide-react'
 import type { ArchitectureWorkspace } from '../../../../shared/types'
+import type { C4ModelData, DiagramRefTarget } from '../../../../shared/scryer/model-types'
+import { findFlowStep } from '../../../../shared/scryer/parse-model'
 import { e2eConfig } from '../../lib/e2e-config'
 import { useAppStore } from '../../store'
 import { Button } from '../ui/button'
 import { ArchitectureCanvas } from './ArchitectureCanvas'
 import { ArchitectureCommandPalette } from './ArchitectureCommandPalette'
 import { ArchitectureContextPanel } from './ArchitectureContextPanel'
+import { DiagramReviewView } from './DiagramReviewView'
+import { DiagramDraftSwitchDialogView } from './DiagramSourceDraftView'
 import { ArchitectureModelTree } from './ArchitectureModelTree'
 import { ArchitectureSectionBoundary } from './ArchitectureSectionBoundary'
 import { ArchitectureThemeEditor } from './ArchitectureThemeEditor'
 import { CodeLevelRack } from './CodeLevelRack'
+import { diagramRefTargetEquals, type CreatedDiagramLinkState } from './DiagramReferenceControls'
+import {
+  createDiagramReviewExportActions,
+  type DiagramReviewCacheContext
+} from './diagram-export-actions'
 import { FlowScriptView } from './FlowScriptView'
 import { GroupsDndProvider, GroupsMain } from './GroupsView'
 import { SyncBar } from './SyncBar'
@@ -43,9 +52,49 @@ import {
   type ScryerThemeSettings
 } from '../../../../shared/scryer/theme'
 import { recordArchitecturePerformanceMetric } from './architecture-performance'
+import {
+  DEFAULT_ARCHITECTURE_DIAGRAM_FEATURE_FLAGS,
+  type ArchitectureDiagramFeatureFlags
+} from './diagram-controller'
+import { defaultDiagramRenderAdapter, type DiagramRenderTheme } from './diagram-renderer'
 
 const ARCHITECTURE_THEME_STORAGE_KEY = 'orca-scryer:architecture-theme'
+const ARCHITECTURE_DIAGRAM_PREVIEW_STORAGE_KEY =
+  'orca-scryer:enableArchitectureDiagramLibraryPreview'
 type ArchitectureSidePanel = 'tree' | 'inspector'
+
+function diagramRefTargetExists(model: C4ModelData, target: DiagramRefTarget): boolean {
+  switch (target.type) {
+    case 'node':
+      return model.nodes.some((node) => node.id === target.id)
+    case 'edge':
+      return model.edges.some((edge) => edge.id === target.id)
+    case 'group':
+      return (model.groups ?? []).some((group) => group.id === target.id)
+    case 'flow':
+      return (model.flows ?? []).some((flow) => flow.id === target.id)
+    case 'flowStep': {
+      const flow = (model.flows ?? []).find((entry) => entry.id === target.flowId)
+      return !!flow && !!findFlowStep(flow, target.stepId)
+    }
+    case 'source':
+      return true
+  }
+}
+
+function diagramRefTargetLabel(target: DiagramRefTarget): string {
+  switch (target.type) {
+    case 'node':
+    case 'edge':
+    case 'group':
+    case 'flow':
+      return `${target.type}:${target.id}`
+    case 'flowStep':
+      return `flowStep:${target.flowId}/${target.stepId}`
+    case 'source':
+      return `${target.pattern}${target.line ? `:${target.line}` : ''}${target.endLine ? `-${target.endLine}` : ''}`
+  }
+}
 
 function newProjectPromptDismissalKey(projectPath: string, modelName: string): string {
   return `orca-scryer:new-project-dismissed:${projectPath}:${modelName}`
@@ -57,6 +106,21 @@ function readArchitectureTheme(): ScryerThemeSettings {
     return normalizeScryerTheme(raw ? JSON.parse(raw) : null)
   } catch {
     return normalizeScryerTheme(null)
+  }
+}
+
+function readArchitectureDiagramFeatureFlags(): ArchitectureDiagramFeatureFlags {
+  try {
+    const storedPreview = window.localStorage.getItem(ARCHITECTURE_DIAGRAM_PREVIEW_STORAGE_KEY)
+    return {
+      ...DEFAULT_ARCHITECTURE_DIAGRAM_FEATURE_FLAGS,
+      enableArchitectureDiagramLibraryPreview:
+        storedPreview === null
+          ? DEFAULT_ARCHITECTURE_DIAGRAM_FEATURE_FLAGS.enableArchitectureDiagramLibraryPreview
+          : storedPreview === 'true'
+    }
+  } catch {
+    return DEFAULT_ARCHITECTURE_DIAGRAM_FEATURE_FLAGS
   }
 }
 
@@ -79,9 +143,11 @@ function modeButtonClass(activeMode: ArchitectureMode, mode: ArchitectureMode): 
 }
 
 export default function ArchitecturePanel({
-  workspace
+  workspace,
+  featureFlags = readArchitectureDiagramFeatureFlags()
 }: {
   workspace: ArchitectureWorkspace
+  featureFlags?: ArchitectureDiagramFeatureFlags
 }): React.JSX.Element {
   const renderStartedAtRef = useRef(performance.now())
   renderStartedAtRef.current = performance.now()
@@ -96,7 +162,15 @@ export default function ArchitecturePanel({
     setArchitectureMode,
     activeFlow,
     activeFlowId,
-    setActiveFlowId,
+    activeDiagram,
+    activeDiagramId,
+    externalDiagramReloadConflict,
+    diagramDraftSwitchDialog,
+    diagramSourceTargetPicker,
+    requestArchitectureNavigation,
+    resolveDiagramDraftSwitch,
+    chooseDiagramSourceTarget,
+    cancelDiagramSourceTargetPicker,
     selectedNode,
     selectedEdge,
     selectedGroup,
@@ -134,7 +208,7 @@ export default function ArchitecturePanel({
     nodeDiffs,
     followExternalChanges,
     setFollowExternalChanges,
-    loadModel,
+    reloadActiveModel,
     refreshProjectModels,
     writePendingModelNow,
     createBlankProjectModel,
@@ -167,6 +241,16 @@ export default function ArchitecturePanel({
     createFlow,
     updateFlow,
     deleteActiveFlow,
+    createDiagram,
+    renameDiagram,
+    updateDiagramSource,
+    deleteDiagram,
+    createDiagramRef,
+    upsertDiagramRefs,
+    deleteDiagramRefs,
+    navigateDiagramRefTarget,
+    setDiagramDraftState,
+    resolveExternalDiagramReload,
     updateGroups,
     createGroupFromSelection,
     addSelectionToGroup,
@@ -194,6 +278,7 @@ export default function ArchitecturePanel({
   const [blankWorkspaceBusy, setBlankWorkspaceBusy] = useState(false)
   const [blankWorkspaceError, setBlankWorkspaceError] = useState<string | null>(null)
   const [architectureSidePanel, setArchitectureSidePanel] = useState<ArchitectureSidePanel>('tree')
+  const [createdDiagramLink, setCreatedDiagramLink] = useState<CreatedDiagramLinkState | null>(null)
   const [closedModelTabNames, setClosedModelTabNames] = useState<Set<string>>(() => new Set())
   const ignoredInspectorSelectionRef = useRef<{
     nodeId: string | null
@@ -205,6 +290,41 @@ export default function ArchitecturePanel({
     () => new Set()
   )
   const [architectureTheme, setArchitectureTheme] = useState(readArchitectureTheme)
+  const diagramRenderTheme: DiagramRenderTheme = resolveArchitectureThemeDark(architectureTheme)
+    ? 'dark'
+    : 'light'
+  const diagramCacheContext = useMemo<DiagramReviewCacheContext | undefined>(
+    () =>
+      projectPath
+        ? {
+            projectPath,
+            modelName: activeModelName
+          }
+        : undefined,
+    [activeModelName, projectPath]
+  )
+  const diagramExportActions = useMemo(
+    () =>
+      activeDiagram
+        ? createDiagramReviewExportActions({
+            diagramName: activeDiagram.name,
+            diagramId: activeDiagram.id,
+            cacheContext: diagramCacheContext
+          })
+        : undefined,
+    [activeDiagram, diagramCacheContext]
+  )
+  const diagramThumbnailContext = useMemo(
+    () =>
+      diagramCacheContext
+        ? {
+            ...diagramCacheContext,
+            theme: diagramRenderTheme,
+            renderAdapter: defaultDiagramRenderAdapter
+          }
+        : undefined,
+    [diagramCacheContext, diagramRenderTheme]
+  )
   const architectureThemeStyle = useMemo(() => {
     const style = createScryerThemeStyle(
       architectureTheme,
@@ -219,6 +339,115 @@ export default function ArchitecturePanel({
       color: 'var(--architecture-role-foreground)'
     } as React.CSSProperties
   }, [architectureTheme])
+
+  const createDiagramThenLink = useCallback(
+    async (target: DiagramRefTarget, label: string): Promise<void> => {
+      const diagram = await createDiagram({
+        name: `${label} diagram`,
+        kind: 'flowchart',
+        activate: false
+      })
+      if (!diagram) {
+        return
+      }
+      const nextLink: CreatedDiagramLinkState = {
+        diagramId: diagram.id,
+        target,
+        targetLabel: label,
+        status: 'editing'
+      }
+      setCreatedDiagramLink(nextLink)
+      const navigated = await requestArchitectureNavigation({
+        type: 'diagram',
+        diagramId: diagram.id
+      })
+      if (!navigated) {
+        setCreatedDiagramLink((current) =>
+          current?.diagramId === diagram.id ? { ...current, status: 'unlinked' } : current
+        )
+      }
+    },
+    [createDiagram, requestArchitectureNavigation]
+  )
+
+  const linkCreatedDiagramNow = useCallback(async (): Promise<void> => {
+    if (!createdDiagramLink) {
+      return
+    }
+    if (model && diagramRefTargetExists(model, createdDiagramLink.target)) {
+      setCreatedDiagramLink({ ...createdDiagramLink, status: 'ready', targetUnavailable: false })
+      await navigateDiagramRefTarget(createdDiagramLink.target)
+      return
+    }
+    setCreatedDiagramLink({
+      ...createdDiagramLink,
+      status: 'unlinked',
+      targetUnavailable: true
+    })
+    await requestArchitectureNavigation({
+      type: 'diagram',
+      diagramId: createdDiagramLink.diagramId
+    })
+  }, [createdDiagramLink, model, navigateDiagramRefTarget, requestArchitectureNavigation])
+
+  const cancelCreatedDiagramLink = useCallback((): void => {
+    setCreatedDiagramLink((current) =>
+      current ? { ...current, status: 'unlinked', targetUnavailable: false } : current
+    )
+  }, [])
+
+  const createDiagramRefAndClearPending = useCallback(
+    async (input: Parameters<typeof createDiagramRef>[0]): Promise<void> => {
+      await createDiagramRef(input)
+      setCreatedDiagramLink((current) =>
+        current &&
+        current.diagramId === input.diagramId &&
+        diagramRefTargetEquals(current.target, input.target)
+          ? null
+          : current
+      )
+    },
+    [createDiagramRef]
+  )
+
+  const saveDiagramSourceAndResumeCreatedLink = useCallback(
+    async (diagramId: string, source: string): Promise<void> => {
+      await updateDiagramSource(diagramId, source)
+      if (!createdDiagramLink || createdDiagramLink.diagramId !== diagramId) {
+        return
+      }
+      if (model && diagramRefTargetExists(model, createdDiagramLink.target)) {
+        setCreatedDiagramLink({ ...createdDiagramLink, status: 'ready', targetUnavailable: false })
+        await navigateDiagramRefTarget(createdDiagramLink.target)
+        return
+      }
+      setCreatedDiagramLink({
+        ...createdDiagramLink,
+        status: 'unlinked',
+        targetUnavailable: true
+      })
+    },
+    [createdDiagramLink, model, navigateDiagramRefTarget, updateDiagramSource]
+  )
+
+  const diagramReferenceActions = useMemo(
+    () => ({
+      onCreateDiagramRef: createDiagramRefAndClearPending,
+      onDeleteDiagramRefs: deleteDiagramRefs,
+      onCreateDiagramThenLink: createDiagramThenLink,
+      onLinkCreatedDiagramNow: linkCreatedDiagramNow,
+      onCancelCreatedDiagramLink: cancelCreatedDiagramLink,
+      createdDiagramLink
+    }),
+    [
+      cancelCreatedDiagramLink,
+      createDiagramRefAndClearPending,
+      createDiagramThenLink,
+      createdDiagramLink,
+      deleteDiagramRefs,
+      linkCreatedDiagramNow
+    ]
+  )
 
   useEffect(() => {
     recordArchitecturePerformanceMetric('render', performance.now() - renderStartedAtRef.current)
@@ -312,6 +541,25 @@ export default function ArchitecturePanel({
     void openProjectModel(modelName, scope)
   }
 
+  const requestOpenModelTab = (
+    modelName: string,
+    scope: ArchitectureProjectModelEntry['scope'] = 'project'
+  ): void => {
+    void requestArchitectureNavigation({ type: 'topology' }).then((allowed) => {
+      if (allowed) {
+        openModelTab(modelName, scope)
+      }
+    })
+  }
+
+  const requestNavigateToNode = (nodeId: string): void => {
+    void requestArchitectureNavigation({ type: 'topology' }).then((allowed) => {
+      if (allowed) {
+        navigateToNode(nodeId)
+      }
+    })
+  }
+
   const closeModelTab = (modelName: string): void => {
     if (editingLocked || modelTabs.length <= 1) {
       return
@@ -326,6 +574,14 @@ export default function ArchitecturePanel({
     if (fallback) {
       openModelTab(fallback.name, fallback.scope)
     }
+  }
+
+  const requestCloseModelTab = (modelName: string): void => {
+    void requestArchitectureNavigation({ type: 'topology' }).then((allowed) => {
+      if (allowed) {
+        closeModelTab(modelName)
+      }
+    })
   }
 
   const resolveAvailableBlankModelName = (requestedName: string): string => {
@@ -438,6 +694,10 @@ export default function ArchitecturePanel({
     if (!targetPath || blankWorkspaceBusy) {
       return
     }
+    const allowed = await requestArchitectureNavigation({ type: 'topology' })
+    if (!allowed) {
+      return
+    }
     const targetModelName = pendingBlankModelName ?? activeModelName
     setCommandOpen(false)
     setBlankWorkspaceBusy(true)
@@ -467,7 +727,38 @@ export default function ArchitecturePanel({
   const mainContent = error ? (
     <div className="flex-1 p-4 text-sm text-destructive">{error}</div>
   ) : model ? (
-    architectureMode === 'flows' ? (
+    architectureMode === 'diagram' &&
+    featureFlags.enableArchitectureDiagramLibraryPreview &&
+    activeDiagram ? (
+      <DiagramReviewView
+        diagram={activeDiagram}
+        renderAdapter={defaultDiagramRenderAdapter}
+        theme={diagramRenderTheme}
+        editingLocked={editingLocked}
+        cacheContext={diagramCacheContext}
+        exportActions={diagramExportActions}
+        onDraftStateChange={setDiagramDraftState}
+        externalReloadConflict={externalDiagramReloadConflict}
+        onResolveExternalReloadConflict={(resolution) =>
+          resolveExternalDiagramReload(activeDiagram.id, resolution)
+        }
+        onSaveSource={saveDiagramSourceAndResumeCreatedLink}
+        onRenameDiagram={renameDiagram}
+        onDeleteDiagram={deleteDiagram}
+        refActions={{
+          refs: model.diagramRefs ?? [],
+          onCreateRef: createDiagramRef,
+          onUpsertRefs: upsertDiagramRefs,
+          onDeleteRefs: deleteDiagramRefs,
+          onNavigateRefTarget: navigateDiagramRefTarget,
+          isTargetNavigable: (target) => diagramRefTargetExists(model, target),
+          getTargetLabel: diagramRefTargetLabel,
+          createdDiagramLink,
+          onLinkCreatedDiagramNow: linkCreatedDiagramNow,
+          onCancelCreatedDiagramLink: cancelCreatedDiagramLink
+        }}
+      />
+    ) : architectureMode === 'flows' ? (
       <div className="flex min-h-0 flex-1 flex-col bg-[var(--surface)]">
         <div
           className="flex h-9 shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-3"
@@ -485,7 +776,9 @@ export default function ArchitecturePanel({
                     ? 'bg-accent text-foreground'
                     : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
                 }`}
-                onClick={() => setActiveFlowId(flow.id)}
+                onClick={() =>
+                  void requestArchitectureNavigation({ type: 'flows', flowId: flow.id })
+                }
                 data-testid="architecture-flow-tab"
                 data-flow-id={flow.id}
               >
@@ -507,14 +800,16 @@ export default function ArchitecturePanel({
         {activeFlow ? (
           <FlowScriptView
             flow={activeFlow}
+            model={model}
             allNodes={model.nodes}
             sourceMap={model.sourceMap ?? {}}
             onUpdate={updateFlow}
             onDelete={deleteActiveFlow}
-            onNavigateToNode={navigateToNode}
-            onSwitchToTopology={() => setArchitectureMode('topology')}
+            onNavigateToNode={requestNavigateToNode}
+            onSwitchToTopology={() => void requestArchitectureNavigation({ type: 'topology' })}
             onOpenSourceLocation={openSourceLocation}
             onUpdateSourceMap={saveSourceLocations}
+            diagramReferenceActions={diagramReferenceActions}
           />
         ) : (
           <div className="flex flex-1 items-center justify-center">
@@ -540,12 +835,20 @@ export default function ArchitecturePanel({
         syncing={editingLocked}
         parentName={currentParent?.data.name ?? currentParentId}
         onNavigateUp={() => {
-          setExpandedPath((path) => path.slice(0, -1))
-          selectNode(currentParentId)
+          void requestArchitectureNavigation({ type: 'topology' }).then((allowed) => {
+            if (allowed) {
+              setExpandedPath((path) => path.slice(0, -1))
+              selectNode(currentParentId)
+            }
+          })
         }}
         onSelectNode={(nodeId) => {
-          setArchitectureMode('topology')
-          selectNode(nodeId)
+          void requestArchitectureNavigation({ type: 'topology' }).then((allowed) => {
+            if (allowed) {
+              setArchitectureMode('topology')
+              selectNode(nodeId)
+            }
+          })
         }}
         onAddNode={addCodeLevelNode}
         onDeleteNode={deleteNodeById}
@@ -560,24 +863,45 @@ export default function ArchitecturePanel({
         multiSelectedNodeIds={multiSelectedNodeIds}
         changedNodeIds={changedNodeIds}
         driftedNodeIds={driftedNodeIds}
-        onExpandedPathChange={setExpandedPath}
+        onExpandedPathChange={(path) => {
+          void requestArchitectureNavigation({ type: 'topology' }).then((allowed) => {
+            if (allowed) {
+              setExpandedPath(path)
+            }
+          })
+        }}
         onSelectedNodeChange={(nodeId) => {
-          if (nodeId && canAutoOpenNodeInspector(nodeId)) {
-            openInspectorSidePanel()
-          }
-          selectNode(nodeId)
+          void requestArchitectureNavigation({ type: 'topology' }).then((allowed) => {
+            if (!allowed) {
+              return
+            }
+            if (nodeId && canAutoOpenNodeInspector(nodeId)) {
+              openInspectorSidePanel()
+            }
+            selectNode(nodeId)
+          })
         }}
         onSelectedEdgeChange={(edgeId) => {
-          if (edgeId && canAutoOpenEdgeInspector(edgeId)) {
-            openInspectorSidePanel()
-          }
-          selectEdge(edgeId)
+          void requestArchitectureNavigation({ type: 'topology' }).then((allowed) => {
+            if (!allowed) {
+              return
+            }
+            if (edgeId && canAutoOpenEdgeInspector(edgeId)) {
+              openInspectorSidePanel()
+            }
+            selectEdge(edgeId)
+          })
         }}
         onMultiSelectionChange={(nodeIds, selectedCount) => {
-          if (nodeIds.length >= 2 && canAutoOpenMultiInspector(nodeIds)) {
-            openInspectorSidePanel()
-          }
-          selectManyNodes(nodeIds, selectedCount)
+          void requestArchitectureNavigation({ type: 'topology' }).then((allowed) => {
+            if (!allowed) {
+              return
+            }
+            if (nodeIds.length >= 2 && canAutoOpenMultiInspector(nodeIds)) {
+              openInspectorSidePanel()
+            }
+            selectManyNodes(nodeIds, selectedCount)
+          })
         }}
         onModelChange={applyModelChange}
         onOpenSourceLocation={openSourceLocation}
@@ -621,7 +945,7 @@ export default function ArchitecturePanel({
                 disabled={editingLocked}
                 onClick={() => {
                   if (!isActive) {
-                    openModelTab(entry.name, entry.scope)
+                    requestOpenModelTab(entry.name, entry.scope)
                   }
                 }}
               >
@@ -635,7 +959,7 @@ export default function ArchitecturePanel({
                   disabled={editingLocked}
                   onClick={(event) => {
                     event.stopPropagation()
-                    closeModelTab(entry.name)
+                    requestCloseModelTab(entry.name)
                   }}
                   data-testid="architecture-model-tab-close"
                   title={`Close ${entry.fileName}`}
@@ -650,7 +974,13 @@ export default function ArchitecturePanel({
         <button
           type="button"
           className="mb-1 inline-flex size-6 shrink-0 items-center justify-center rounded border border-border bg-background text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-          onClick={() => beginBlankWorkspaceSelection('model')}
+          onClick={() => {
+            void requestArchitectureNavigation({ type: 'topology' }).then((allowed) => {
+              if (allowed) {
+                beginBlankWorkspaceSelection('model')
+              }
+            })
+          }}
           disabled={editingLocked}
           data-testid="architecture-model-tab-new"
           title="New blank model"
@@ -683,7 +1013,7 @@ export default function ArchitecturePanel({
             type="button"
             className={modeButtonClass(architectureMode, 'topology')}
             aria-pressed={architectureMode === 'topology'}
-            onClick={() => setArchitectureMode('topology')}
+            onClick={() => void requestArchitectureNavigation({ type: 'topology' })}
             data-testid="architecture-mode-topology"
           >
             <Network className="size-3" />
@@ -693,7 +1023,7 @@ export default function ArchitecturePanel({
             type="button"
             className={modeButtonClass(architectureMode, 'flows')}
             aria-pressed={architectureMode === 'flows'}
-            onClick={() => setArchitectureMode('flows')}
+            onClick={() => void requestArchitectureNavigation({ type: 'flows' })}
             data-testid="architecture-mode-flows"
           >
             <GitBranch className="size-3" />
@@ -705,7 +1035,11 @@ export default function ArchitecturePanel({
               className={modeButtonClass(architectureMode, 'groups')}
               aria-pressed={architectureMode === 'groups'}
               disabled={!canShowGroups}
-              onClick={() => canShowGroups && setArchitectureMode('groups')}
+              onClick={() => {
+                if (canShowGroups) {
+                  void requestArchitectureNavigation({ type: 'groups' })
+                }
+              }}
               title={
                 canShowGroups ? 'Organize this level into groups' : 'Drill into a system first'
               }
@@ -750,7 +1084,7 @@ export default function ArchitecturePanel({
           />
           Follow
         </label>
-        <Button variant="outline" size="xs" onClick={() => void loadModel()}>
+        <Button variant="outline" size="xs" onClick={() => void reloadActiveModel()}>
           <RefreshCw className="size-3" />
           Reload
         </Button>
@@ -807,7 +1141,7 @@ export default function ArchitecturePanel({
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         <ArchitectureSectionBoundary
           name="Architecture workspace"
-          resetKey={`${activeModelName}:${architectureMode}:${activeFlowId ?? ''}:${currentParentId ?? ''}`}
+          resetKey={`${activeModelName}:${architectureMode}:${activeFlowId ?? ''}:${activeDiagramId ?? ''}:${currentParentId ?? ''}`}
         >
           {mainContent}
         </ArchitectureSectionBoundary>
@@ -859,7 +1193,11 @@ export default function ArchitecturePanel({
                     type="button"
                     className="flex items-center gap-3 rounded border border-border px-3 py-2 text-left hover:bg-accent"
                     onClick={() => {
-                      beginBlankWorkspaceSelection(activeModelName, { keepRequestedName: true })
+                      void requestArchitectureNavigation({ type: 'topology' }).then((allowed) => {
+                        if (allowed) {
+                          beginBlankWorkspaceSelection(activeModelName, { keepRequestedName: true })
+                        }
+                      })
                     }}
                     disabled={editingLocked}
                     data-testid="architecture-start-blank"
@@ -954,6 +1292,48 @@ export default function ArchitecturePanel({
             </div>
           </div>
         ) : null}
+        {diagramDraftSwitchDialog ? (
+          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-background/50">
+            <DiagramDraftSwitchDialogView
+              error={diagramDraftSwitchDialog.error}
+              onResolve={(action) => void resolveDiagramDraftSwitch(action)}
+            />
+          </div>
+        ) : null}
+        {diagramSourceTargetPicker ? (
+          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-background/50">
+            <div
+              className="pointer-events-auto grid w-[min(28rem,calc(100vw-2rem))] gap-2 rounded border border-border bg-background p-3 text-xs shadow-lg"
+              data-testid="diagram-source-target-picker"
+            >
+              <div className="font-medium">Choose source file</div>
+              <div className="grid gap-1">
+                {diagramSourceTargetPicker.locations.map((location) => (
+                  <button
+                    key={`${location.relativePath}:${location.line ?? ''}:${location.endLine ?? ''}`}
+                    type="button"
+                    className="rounded border border-border px-2 py-1 text-left font-mono hover:bg-accent hover:text-accent-foreground"
+                    onClick={() => chooseDiagramSourceTarget(location)}
+                    data-testid="diagram-source-target-option"
+                  >
+                    {location.relativePath}
+                    {location.line ? `:${location.line}` : ''}
+                    {location.endLine ? `-${location.endLine}` : ''}
+                  </button>
+                ))}
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                onClick={cancelDiagramSourceTargetPicker}
+                data-testid="diagram-source-target-cancel"
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <SyncBar
@@ -972,7 +1352,7 @@ export default function ArchitecturePanel({
         onDismissMessage={dismissSyncMessage}
         onDismissDrift={markSynced}
         onToggleLock={toggleLock}
-        onNavigateToNode={navigateToNode}
+        onNavigateToNode={requestNavigateToNode}
       />
     </section>
   )
@@ -1017,6 +1397,7 @@ export default function ArchitecturePanel({
         onUpdateGroup={patchSelectedGroup}
         onDeleteGroup={deleteSelectedGroup}
         onRemoveGroupMember={removeSelectedGroupMember}
+        diagramReferenceActions={diagramReferenceActions}
         docked
         groupsPaletteMode={architectureMode === 'groups' && !!model}
         nodeDiff={selectedNode ? nodeDiffs.get(selectedNode.id) : undefined}
@@ -1031,17 +1412,38 @@ export default function ArchitecturePanel({
         model={model}
         selectedNodeId={selectedNodeId}
         activeFlowId={activeFlowId}
+        activeDiagramId={activeDiagramId}
+        diagramLibraryEnabled={featureFlags.enableArchitectureDiagramLibraryPreview}
+        diagramThumbnailContext={diagramThumbnailContext}
         onSelectNode={(nodeId) => {
-          setArchitectureMode('topology')
-          navigateToNode(nodeId)
+          void requestArchitectureNavigation({ type: 'topology' }).then((allowed) => {
+            if (allowed) {
+              navigateToNode(nodeId)
+            }
+          })
         }}
-        onDrillNode={drillIntoNode}
+        onDrillNode={(nodeId) => {
+          void requestArchitectureNavigation({ type: 'topology' }).then((allowed) => {
+            if (allowed) {
+              drillIntoNode(nodeId)
+            }
+          })
+        }}
         onOpenFlows={() => {
-          setArchitectureMode('flows')
+          void requestArchitectureNavigation({ type: 'flows' })
         }}
         onSelectFlow={(flowId) => {
-          setArchitectureMode('flows')
-          setActiveFlowId(flowId)
+          void requestArchitectureNavigation({ type: 'flows', flowId })
+        }}
+        onSelectDiagram={(diagramId) =>
+          void requestArchitectureNavigation({ type: 'diagram', diagramId })
+        }
+        onCreateDiagram={() => {
+          void requestArchitectureNavigation({ type: 'topology' }).then((allowed) => {
+            if (allowed) {
+              void createDiagram()
+            }
+          })
         }}
         docked
       />
@@ -1103,7 +1505,7 @@ export default function ArchitecturePanel({
         groups={model.groups ?? []}
         onUpdateGroups={updateGroups}
         currentParentId={currentParentId}
-        onNavigateToNode={navigateToNode}
+        onNavigateToNode={requestNavigateToNode}
         selectedGroupId={selectedGroupId}
         onSelectedGroupChange={(groupId) => {
           if (groupId) {
@@ -1132,9 +1534,21 @@ export default function ArchitecturePanel({
           templates={templates}
           disabled={editingLocked}
           onOpenChange={setCommandOpen}
-          onOpenModel={openModelTab}
-          onDeleteModel={deleteProjectModelByName}
-          onLoadTemplate={createModelFromTemplate}
+          onOpenModel={requestOpenModelTab}
+          onDeleteModel={(modelName) => {
+            void requestArchitectureNavigation({ type: 'topology' }).then((allowed) => {
+              if (allowed) {
+                void deleteProjectModelByName(modelName)
+              }
+            })
+          }}
+          onLoadTemplate={(templateId, modelName) => {
+            void requestArchitectureNavigation({ type: 'topology' }).then((allowed) => {
+              if (allowed) {
+                void createModelFromTemplate(templateId, modelName)
+              }
+            })
+          }}
         />
       ) : null}
       <div

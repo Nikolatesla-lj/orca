@@ -1,0 +1,5 @@
+flowchart TD
+  api[API Gateway] --> service[Application Service]
+  service --> db[(Primary Database)]
+  service --> queue[Job Queue]
+  queue --> worker[Background Worker]

@@ -1,0 +1,7 @@
+C4Context
+  title Orca Scryer Context
+  Person(user, "User", "Reviews architecture diagrams")
+  System(orca, "Orca", "Architecture workspace")
+  System_Ext(repo, "Repository", "Stores .scry files")
+  Rel(user, orca, "Uses")
+  Rel(orca, repo, "Reads and writes")

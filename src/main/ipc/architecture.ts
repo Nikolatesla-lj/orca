@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- Why: this IPC registrar remains a compatibility facade for Scryer model, drift, sync, MCP, and prompt handlers while the backing services are split behind injectable deps. */
 import { existsSync, watch, type FSWatcher } from 'fs'
 import { ipcMain, type IpcMainInvokeEvent } from 'electron'
+import type { Store } from '../persistence'
 import {
   createProjectModel,
   deleteProjectModel,
@@ -18,6 +19,8 @@ import {
   writeModel,
   writeModelDocument
 } from '../scryer/model-store'
+import { clearDiagramCache, readDiagramCache, writeDiagramCache } from './diagram-cache'
+import { openDiagramSourceTarget } from './diagram-source-targets'
 import { checkDrift } from '../scryer/drift'
 import { callScryerTool } from '../scryer/mcp-tools'
 import { writeArchitectureMcpConfig } from '../scryer/mcp-config'
@@ -29,7 +32,17 @@ import {
   nodeFillPrompt,
   serializeModelForPrompt
 } from '../../shared/scryer/prompts'
-import type { C4ModelData, C4NodeData, ScryerToolCall } from '../../shared/scryer/model-types'
+import type {
+  C4ModelData,
+  C4NodeData,
+  DiagramRefTarget,
+  ScryerToolCall
+} from '../../shared/scryer/model-types'
+import type {
+  DiagramCacheClearRequest,
+  DiagramCacheReadRequest,
+  DiagramCacheWriteRequest
+} from '../../shared/scryer/diagram-cache'
 import { BUILT_IN_SCRYER_TEMPLATES } from '../../shared/scryer/templates'
 
 const watchers = new Map<string, FSWatcher>()
@@ -63,6 +76,10 @@ export type ArchitectureHandlerDeps = {
   beginSync: typeof beginSync
   cancelSync: typeof cancelSync
   finishSync: typeof finishSync
+  readDiagramCache: typeof readDiagramCache
+  writeDiagramCache: typeof writeDiagramCache
+  clearDiagramCache: typeof clearDiagramCache
+  openDiagramSourceTarget: typeof openDiagramSourceTarget
 }
 
 const defaultArchitectureDeps: ArchitectureHandlerDeps = {
@@ -86,7 +103,11 @@ const defaultArchitectureDeps: ArchitectureHandlerDeps = {
   writeArchitectureMcpConfig,
   beginSync,
   cancelSync,
-  finishSync
+  finishSync,
+  readDiagramCache,
+  writeDiagramCache,
+  clearDiagramCache,
+  openDiagramSourceTarget
 }
 
 export function shouldNotifyModelFile(filename: string | Buffer): boolean {
@@ -124,6 +145,7 @@ export function closeArchitectureWatchers(): void {
 }
 
 export function registerArchitectureHandlers(
+  store?: Store,
   registrar: ArchitectureIpcRegistrar = ipcMain,
   deps: ArchitectureHandlerDeps = defaultArchitectureDeps
 ): void {
@@ -330,6 +352,60 @@ export function registerArchitectureHandlers(
   registrar.handle('architecture:finishSync', async (_event, args: { projectPath: string }) => {
     await deps.finishSync(args.projectPath)
   })
+
+  registrar.handle('architecture:readDiagramCache', (_event, args: DiagramCacheReadRequest) => {
+    if (!store) {
+      return {
+        ok: false,
+        code: 'cache.unauthorized-project',
+        message: 'Architecture project authorization is unavailable'
+      }
+    }
+    return deps.readDiagramCache(args, store)
+  })
+
+  registrar.handle('architecture:writeDiagramCache', (_event, args: DiagramCacheWriteRequest) => {
+    if (!store) {
+      return {
+        ok: false,
+        code: 'cache.unauthorized-project',
+        message: 'Architecture project authorization is unavailable'
+      }
+    }
+    return deps.writeDiagramCache(args, store)
+  })
+
+  registrar.handle('architecture:clearDiagramCache', (_event, args: DiagramCacheClearRequest) => {
+    if (!store) {
+      return {
+        ok: false,
+        code: 'cache.unauthorized-project',
+        message: 'Architecture project authorization is unavailable'
+      }
+    }
+    return deps.clearDiagramCache(args, store)
+  })
+
+  registrar.handle(
+    'architecture:openDiagramSourceTarget',
+    (
+      _event,
+      args: {
+        projectPath: string
+        target: Extract<DiagramRefTarget, { type: 'source' }>
+      }
+    ) => {
+      if (!store) {
+        return {
+          ok: false,
+          code: 'controller.invalid-source-target',
+          reason: 'unauthorized-project',
+          rejectedPattern: args.target.pattern
+        }
+      }
+      return deps.openDiagramSourceTarget({ projectPath: args.projectPath, store }, args.target)
+    }
+  )
 
   registrar.handle(
     'architecture:callTool',

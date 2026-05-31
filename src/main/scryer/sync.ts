@@ -1,4 +1,4 @@
-import type { C4ModelData, DriftReport } from '../../shared/scryer/model-types'
+import type { C4ModelData, DriftReportV2 } from '../../shared/scryer/model-types'
 import { serializeModelForPrompt, syncPrompt } from '../../shared/scryer/prompts'
 import { checkDrift } from './drift'
 import {
@@ -13,7 +13,7 @@ import {
 
 export type BeginSyncResult = {
   prompt: string
-  drift: DriftReport
+  drift: DriftReportV2
   snapshot: C4ModelData
 }
 

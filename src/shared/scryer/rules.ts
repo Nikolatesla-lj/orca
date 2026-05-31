@@ -1,3 +1,5 @@
+import { buildDiagramPromptInstructions } from './prompt-diagram-instructions'
+
 export const SCRYER_RULES = `1. One edge per relationship. Edges represent relationships, not individual data flows. Do NOT split a single interaction into separate "send" and "receive" edges - one edge captures the full interaction. Two edges between the same pair of nodes are only valid when they represent genuinely independent relationships: different purpose, different data, and either could exist without the other. If in doubt, use one edge.
 2. Arrow direction = dependency. The arrow points from the initiator/requester toward the provider/dependency, for example "Web App" -> "API Server" -> "Database".
 3. Descriptions match abstraction level. System = high-level purpose, for example "Handles user authentication". Container = what it deploys as, for example "Spring Boot REST API". Component = specific responsibility, for example "Password hashing service".
@@ -41,6 +43,8 @@ export const SCRYER_RULES = `1. One edge per relationship. Edges represent relat
 7. Default workflow: model first, then wait. After modeling proposed changes, stop and let the user review the diagram before implementing. If the user asks you to implement, build, or code in the same request, go ahead.
 8. Implementation loop. Use get_task to get the next implementation task. Build it, mark nodes as implemented via update_nodes with a reason, then call get_task again. Repeat this loop until get_task returns "All tasks complete." Do not read the full model and plan your own work order - get_task handles dependency ordering, contract inheritance, and progress tracking. Parent containers and systems are marked implemented via completion hints from get_task once all their children are done. When multiple containers are ready, use Orca's agent workflow per container instead of working through them sequentially.
 9. Verification is separate from implementation. A node is verified only when implementation is complete, the code does what the node description says, relevant tests pass, and all inherited expect contract items are marked passed. The user decides when to verify. If anything fails, leave the node as implemented and explain what is missing.
+
+${buildDiagramPromptInstructions('mcp-rules')}
 
 ## Authority Hierarchy
 The model is a specification, not just documentation. Higher-level nodes have authority over lower-level ones.
@@ -134,4 +138,6 @@ If something is unclear or the spec does not cover a decision you need to make, 
 The architecture model is your source of truth. Build exactly what it describes - no more, no less. If a template or generator adds code that is not in the model, remove it or flag it as drift.
 
 ## When modifying existing code
-If you rename, move, delete, or restructure code that is source-mapped in the model, update the model in the same loop using update_nodes, update_source_map, or delete_nodes. The model must stay in sync with the code.`
+If you rename, move, delete, or restructure code that is source-mapped in the model, update the model in the same loop using update_nodes, update_source_map, or delete_nodes. The model must stay in sync with the code.
+
+${buildDiagramPromptInstructions('task-implementation')}`

@@ -1,0 +1,20 @@
+erDiagram
+  USER ||--o{ DIAGRAM : creates
+  DIAGRAM ||--o{ DIAGRAM_REF : has
+  C4_TARGET ||--o{ DIAGRAM_REF : referenced_by
+  USER {
+    string id
+    string name
+  }
+  DIAGRAM {
+    string id
+    string source
+  }
+  DIAGRAM_REF {
+    string id
+    string role
+  }
+  C4_TARGET {
+    string id
+    string type
+  }

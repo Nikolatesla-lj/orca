@@ -139,7 +139,7 @@ export function registerCoreHandlers(
   }
   registerTelemetryHandlers(store)
   registerBrowserHandlers()
-  registerArchitectureHandlers()
+  registerArchitectureHandlers(store)
   // Why: applyPendingCookieImport MUST run before restorePersistedUserAgent
   // because the latter calls session.fromPartition() which initializes
   // CookieMonster. The pending import replaces the live DB file so

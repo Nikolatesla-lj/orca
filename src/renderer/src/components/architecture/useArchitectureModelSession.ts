@@ -151,6 +151,8 @@ export function useArchitectureModelSession({
     }
   }, [onError])
 
+  const getActiveModelRevision = useCallback(() => revisionRef.current, [])
+
   const scheduleModelWrite = useCallback(
     (nextModel: C4ModelData) => {
       if (!projectPath) {
@@ -259,6 +261,7 @@ export function useArchitectureModelSession({
     refreshProjectModels,
     scheduleModelWrite,
     writePendingModelNow,
+    getActiveModelRevision,
     patchActiveNodeData
   }
 }

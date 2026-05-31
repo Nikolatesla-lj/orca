@@ -3,11 +3,20 @@ import type {
   C4Edge,
   C4Kind,
   C4ModelData,
+  C4ModelDataV2,
   C4Node,
   C4NodeData,
   Contract,
   ContractImage,
   ContractItem,
+  Diagram,
+  DiagramKind,
+  DiagramRef,
+  DiagramRefRole,
+  DiagramRefTarget,
+  DiagramSourceRange,
+  DiagramErrorCode,
+  DiagramNotation,
   Flow,
   FlowBranch,
   FlowStep,
@@ -17,11 +26,124 @@ import type {
   SourceLocation,
   Status
 } from './model-types'
+import { SCRY_SCHEMA_VERSION as CURRENT_SCRY_SCHEMA_VERSION } from './model-types'
+import { validateWorkspaceRelativeSourcePattern } from './source-targets'
 
 const VALID_STATUSES = new Set<Status>(['proposed', 'implemented', 'verified', 'vagrant'])
+const VALID_ID_PATTERN = /^[A-Za-z0-9_-]{1,120}$/
+const MODEL_TOP_LEVEL_FIELDS = new Set([
+  'nodes',
+  'edges',
+  'startingLevel',
+  'sourceMap',
+  'projectPath',
+  'refPositions',
+  'groups',
+  'flows',
+  'scenarios',
+  'validationWarnings',
+  'schemaVersion',
+  'diagrams',
+  'diagramRefs'
+])
+const VALID_DIAGRAM_KINDS = new Set<DiagramKind>([
+  'flowchart',
+  'sequence',
+  'class',
+  'state',
+  'er',
+  'architecture',
+  'gitGraph',
+  'c4',
+  'gantt',
+  'journey',
+  'mindmap',
+  'timeline',
+  'requirement',
+  'quadrant',
+  'xy',
+  'block',
+  'packet',
+  'kanban',
+  'other'
+])
+const VALID_DIAGRAM_ROLES = new Set<DiagramRefRole>([
+  'architecture-detail',
+  'behavior-detail',
+  'sequence-detail',
+  'state-detail',
+  'data-detail',
+  'class-detail',
+  'deployment-detail',
+  'evidence',
+  'other'
+])
+
+export type DiagramValidationContext = {
+  nodeIds: Set<string>
+  edgeIds: Set<string>
+  groupIds: Set<string>
+  flows: Flow[]
+  diagrams: Diagram[]
+}
+
+export type DiagramNormalizeResult<T> = {
+  value: T
+  warnings: ModelValidationWarning[]
+}
+
+export type DiagramRefDeleteTarget =
+  | { type: 'diagram'; diagramId: string }
+  | { type: 'node'; id: string }
+  | { type: 'edge'; id: string }
+  | { type: 'group'; id: string }
+  | { type: 'flow'; id: string }
+  | { type: 'flowStep'; flowId: string; stepId: string; flow: Flow }
+
+export type DiagramRefPruneResult = {
+  diagramRefs: DiagramRef[]
+  deletedRefIds: string[]
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
+}
+
+function extractExtraTopLevelFields(root: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(root).filter(
+      ([key, value]) => !MODEL_TOP_LEVEL_FIELDS.has(key) && value !== undefined
+    )
+  )
+}
+
+function diagramWarning(args: {
+  code: DiagramErrorCode
+  message: string
+  path: string
+  diagramId?: string
+  diagramRefId?: string
+  target?: DiagramRefTarget
+  details?: Record<string, unknown>
+}): ModelValidationWarning {
+  return {
+    kind: 'diagram-validation',
+    path: args.path,
+    code: args.code,
+    message: args.message,
+    ...(args.diagramId ? { diagramId: args.diagramId } : {}),
+    ...(args.diagramRefId ? { diagramRefId: args.diagramRefId } : {}),
+    ...(args.target ? { target: args.target } : {}),
+    ...(args.details ? { details: args.details } : {})
+  }
+}
+
+function isValidEntityId(value: string): boolean {
+  return VALID_ID_PATTERN.test(value)
+}
+
+function isValidUtcTimestamp(value: string): boolean {
+  return value.endsWith('Z') && !Number.isNaN(Date.parse(value))
 }
 
 function normalizeContractImage(raw: unknown): ContractImage | undefined {
@@ -336,7 +458,539 @@ function collectMentionWarnings(model: {
   return warnings
 }
 
-export function parseModelData(raw: string): C4ModelData {
+function normalizeOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function normalizeDiagram(raw: unknown, index: number): DiagramNormalizeResult<Diagram | null> {
+  const warnings: ModelValidationWarning[] = []
+  if (!isRecord(raw)) {
+    return {
+      value: null,
+      warnings: [
+        diagramWarning({
+          code: 'parser.invalid-diagram',
+          message: 'Diagram entry must be an object',
+          path: `diagrams.${index}`,
+          details: { field: 'diagram' }
+        })
+      ]
+    }
+  }
+
+  const id = normalizeOptionalString(raw.id)
+  const name = normalizeOptionalString(raw.name)
+  const source = typeof raw.source === 'string' && raw.source.trim() ? raw.source : undefined
+  const notation = raw.notation === 'mermaid' ? (raw.notation as DiagramNotation) : undefined
+  const kind =
+    typeof raw.kind === 'string' && VALID_DIAGRAM_KINDS.has(raw.kind as DiagramKind)
+      ? (raw.kind as DiagramKind)
+      : undefined
+
+  const invalidFields = [
+    !id || !isValidEntityId(id) ? 'id' : null,
+    !name ? 'name' : null,
+    !kind ? 'kind' : null,
+    !notation ? 'notation' : null,
+    !source ? 'source' : null
+  ].filter((field): field is string => field !== null)
+
+  if (!id || invalidFields.length > 0 || !name || !kind || !notation || !source) {
+    return {
+      value: null,
+      warnings: [
+        diagramWarning({
+          code: 'parser.invalid-diagram',
+          message: `Diagram has invalid fields: ${invalidFields.join(', ')}`,
+          path: `diagrams.${index}`,
+          ...(id ? { diagramId: id } : {}),
+          details: { fields: invalidFields }
+        })
+      ]
+    }
+  }
+
+  const rawUpdatedAt = typeof raw.updatedAt === 'string' ? raw.updatedAt : undefined
+  const updatedAt = rawUpdatedAt && isValidUtcTimestamp(rawUpdatedAt) ? rawUpdatedAt : undefined
+  if (rawUpdatedAt && !updatedAt) {
+    warnings.push(
+      diagramWarning({
+        code: 'parser.invalid-updated-at',
+        message: `Diagram '${id}' has invalid updatedAt`,
+        path: `diagrams.${index}.updatedAt`,
+        diagramId: id,
+        details: { rejectedValue: rawUpdatedAt }
+      })
+    )
+  }
+
+  return {
+    value: {
+      id,
+      name,
+      kind,
+      notation,
+      source,
+      ...(typeof raw.description === 'string' ? { description: raw.description } : {}),
+      ...(Array.isArray(raw.tags)
+        ? { tags: raw.tags.filter((tag): tag is string => typeof tag === 'string') }
+        : {}),
+      ...(updatedAt ? { updatedAt } : {})
+    },
+    warnings
+  }
+}
+
+export function normalizeDiagrams(raw: unknown): DiagramNormalizeResult<Diagram[]> {
+  if (!Array.isArray(raw)) {
+    return { value: [], warnings: [] }
+  }
+
+  const diagrams: Diagram[] = []
+  const warnings: ModelValidationWarning[] = []
+  const seenIds = new Map<string, number>()
+
+  raw.forEach((entry, index) => {
+    const result = normalizeDiagram(entry, index)
+    warnings.push(...result.warnings)
+    if (!result.value) {
+      return
+    }
+    const keptIndex = seenIds.get(result.value.id)
+    if (keptIndex !== undefined) {
+      warnings.push(
+        diagramWarning({
+          code: 'parser.duplicate-diagram-id',
+          message: `Duplicate diagram id '${result.value.id}' was dropped`,
+          path: `diagrams.${index}.id`,
+          diagramId: result.value.id,
+          details: { keptIndex, droppedIndex: index }
+        })
+      )
+      return
+    }
+    seenIds.set(result.value.id, diagrams.length)
+    diagrams.push(result.value)
+  })
+
+  return { value: diagrams, warnings }
+}
+
+function normalizeDiagramRefTarget(rawTarget: unknown): DiagramRefTarget | null {
+  if (!isRecord(rawTarget) || typeof rawTarget.type !== 'string') {
+    return null
+  }
+
+  switch (rawTarget.type) {
+    case 'node':
+    case 'edge':
+    case 'group':
+    case 'flow': {
+      const id = normalizeOptionalString(rawTarget.id)
+      return id ? { type: rawTarget.type, id } : null
+    }
+    case 'flowStep': {
+      const flowId = normalizeOptionalString(rawTarget.flowId)
+      const stepId = normalizeOptionalString(rawTarget.stepId)
+      return flowId && stepId ? { type: 'flowStep', flowId, stepId } : null
+    }
+    case 'source': {
+      const pattern = typeof rawTarget.pattern === 'string' ? rawTarget.pattern : ''
+      if (!pattern) {
+        return null
+      }
+      const line = Number(rawTarget.line)
+      const endLine = Number(rawTarget.endLine)
+      return {
+        type: 'source',
+        pattern,
+        ...(Number.isInteger(line) && line > 0 ? { line } : {}),
+        ...(Number.isInteger(endLine) && endLine > 0 ? { endLine } : {})
+      }
+    }
+    default:
+      return null
+  }
+}
+
+function normalizeDiagramSourceRange(
+  rawRange: unknown,
+  refId: string,
+  path: string
+): DiagramNormalizeResult<DiagramSourceRange | undefined> {
+  if (rawRange === undefined) {
+    return { value: undefined, warnings: [] }
+  }
+  if (!isRecord(rawRange)) {
+    return {
+      value: undefined,
+      warnings: [
+        diagramWarning({
+          code: 'parser.invalid-source-range',
+          message: `DiagramRef '${refId}' has invalid sourceRange`,
+          path,
+          diagramRefId: refId
+        })
+      ]
+    }
+  }
+  const startLine = Number(rawRange.startLine)
+  const startColumn = Number(rawRange.startColumn)
+  const endLine = Number(rawRange.endLine)
+  const endColumn = Number(rawRange.endColumn)
+  const hasEndLine = rawRange.endLine !== undefined
+  const hasStartColumn = rawRange.startColumn !== undefined
+  const hasEndColumn = rawRange.endColumn !== undefined
+  const invalid =
+    !Number.isInteger(startLine) ||
+    startLine < 1 ||
+    (hasStartColumn && (!Number.isInteger(startColumn) || startColumn < 1)) ||
+    (hasEndLine && (!Number.isInteger(endLine) || endLine < 1 || endLine < startLine)) ||
+    (hasEndColumn && (!Number.isInteger(endColumn) || endColumn < 1)) ||
+    (hasEndLine &&
+      hasStartColumn &&
+      hasEndColumn &&
+      endLine === startLine &&
+      endColumn < startColumn)
+
+  if (invalid) {
+    return {
+      value: undefined,
+      warnings: [
+        diagramWarning({
+          code: 'parser.invalid-source-range',
+          message: `DiagramRef '${refId}' has invalid sourceRange`,
+          path,
+          diagramRefId: refId,
+          details: { sourceRange: rawRange }
+        })
+      ]
+    }
+  }
+
+  return {
+    value: {
+      startLine,
+      ...(hasStartColumn ? { startColumn } : {}),
+      ...(hasEndLine ? { endLine } : {}),
+      ...(hasEndColumn ? { endColumn } : {})
+    },
+    warnings: []
+  }
+}
+
+function normalizeDiagramRef(
+  raw: unknown,
+  index: number
+): DiagramNormalizeResult<DiagramRef | null> {
+  if (!isRecord(raw)) {
+    return {
+      value: null,
+      warnings: [
+        diagramWarning({
+          code: 'parser.invalid-diagram',
+          message: 'DiagramRef entry must be an object',
+          path: `diagramRefs.${index}`
+        })
+      ]
+    }
+  }
+
+  const id = normalizeOptionalString(raw.id)
+  const diagramId = normalizeOptionalString(raw.diagramId)
+  const target = normalizeDiagramRefTarget(raw.target)
+  const role =
+    typeof raw.role === 'string' && VALID_DIAGRAM_ROLES.has(raw.role as DiagramRefRole)
+      ? (raw.role as DiagramRefRole)
+      : undefined
+  const invalidFields = [
+    !id || !isValidEntityId(id) ? 'id' : null,
+    !diagramId || !isValidEntityId(diagramId) ? 'diagramId' : null,
+    !target ? 'target' : null,
+    !role ? 'role' : null
+  ].filter((field): field is string => field !== null)
+
+  if (!id || !diagramId || !target || !role || invalidFields.length > 0) {
+    return {
+      value: null,
+      warnings: [
+        diagramWarning({
+          code: 'parser.invalid-diagram',
+          message: `DiagramRef has invalid fields: ${invalidFields.join(', ')}`,
+          path: `diagramRefs.${index}`,
+          ...(id ? { diagramRefId: id } : {}),
+          ...(diagramId ? { diagramId } : {}),
+          ...(target ? { target } : {}),
+          details: { fields: invalidFields }
+        })
+      ]
+    }
+  }
+
+  const sourceRangeResult = normalizeDiagramSourceRange(
+    raw.sourceRange,
+    id,
+    `diagramRefs.${index}.sourceRange`
+  )
+
+  return {
+    value: {
+      id,
+      diagramId,
+      target,
+      role,
+      ...(typeof raw.elementKey === 'string' && raw.elementKey.trim()
+        ? { elementKey: raw.elementKey.trim() }
+        : {}),
+      ...(sourceRangeResult.value ? { sourceRange: sourceRangeResult.value } : {}),
+      ...(typeof raw.note === 'string' && raw.note.trim() ? { note: raw.note.trim() } : {})
+    },
+    warnings: sourceRangeResult.warnings
+  }
+}
+
+export function findFlowStep(flow: Flow, stepId: string): FlowStep | null {
+  const visit = (steps: FlowStep[]): FlowStep | null => {
+    for (const step of steps) {
+      if (step.id === stepId) {
+        return step
+      }
+      for (const branch of step.branches ?? []) {
+        const found = visit(branch.steps)
+        if (found) {
+          return found
+        }
+      }
+    }
+    return null
+  }
+  return visit(flow.steps)
+}
+
+export function validateDiagramRefs(
+  refs: DiagramRef[],
+  context: DiagramValidationContext
+): ModelValidationWarning[] {
+  const warnings: ModelValidationWarning[] = []
+  const diagramIds = new Set(context.diagrams.map((diagram) => diagram.id))
+
+  refs.forEach((ref, index) => {
+    if (!diagramIds.has(ref.diagramId)) {
+      warnings.push(
+        diagramWarning({
+          code: 'parser.missing-diagram',
+          message: `DiagramRef '${ref.id}' points to missing diagram '${ref.diagramId}'`,
+          path: `diagramRefs.${index}.diagramId`,
+          diagramId: ref.diagramId,
+          diagramRefId: ref.id,
+          target: ref.target
+        })
+      )
+    }
+
+    switch (ref.target.type) {
+      case 'node':
+        if (!context.nodeIds.has(ref.target.id)) {
+          warnings.push(
+            diagramWarning({
+              code: 'parser.missing-target',
+              message: `DiagramRef '${ref.id}' points to missing node '${ref.target.id}'`,
+              path: `diagramRefs.${index}.target`,
+              diagramRefId: ref.id,
+              target: ref.target
+            })
+          )
+        }
+        break
+      case 'edge':
+        if (!context.edgeIds.has(ref.target.id)) {
+          warnings.push(
+            diagramWarning({
+              code: 'parser.missing-target',
+              message: `DiagramRef '${ref.id}' points to missing edge '${ref.target.id}'`,
+              path: `diagramRefs.${index}.target`,
+              diagramRefId: ref.id,
+              target: ref.target
+            })
+          )
+        }
+        break
+      case 'group':
+        if (!context.groupIds.has(ref.target.id)) {
+          warnings.push(
+            diagramWarning({
+              code: 'parser.missing-target',
+              message: `DiagramRef '${ref.id}' points to missing group '${ref.target.id}'`,
+              path: `diagramRefs.${index}.target`,
+              diagramRefId: ref.id,
+              target: ref.target
+            })
+          )
+        }
+        break
+      case 'flow': {
+        const target = ref.target
+        const flow = context.flows.find((candidate) => candidate.id === target.id)
+        if (!flow) {
+          warnings.push(
+            diagramWarning({
+              code: 'parser.missing-target',
+              message: `DiagramRef '${ref.id}' points to missing flow '${target.id}'`,
+              path: `diagramRefs.${index}.target`,
+              diagramRefId: ref.id,
+              target
+            })
+          )
+        }
+        break
+      }
+      case 'flowStep': {
+        const target = ref.target
+        const flow = context.flows.find((candidate) => candidate.id === target.flowId)
+        if (!flow) {
+          warnings.push(
+            diagramWarning({
+              code: 'parser.missing-target',
+              message: `DiagramRef '${ref.id}' points to missing flow '${target.flowId}'`,
+              path: `diagramRefs.${index}.target`,
+              diagramRefId: ref.id,
+              target
+            })
+          )
+        } else if (!findFlowStep(flow, target.stepId)) {
+          warnings.push(
+            diagramWarning({
+              code: 'parser.missing-flow-step',
+              message: `DiagramRef '${ref.id}' points to missing flow step '${target.stepId}'`,
+              path: `diagramRefs.${index}.target`,
+              diagramRefId: ref.id,
+              target
+            })
+          )
+        }
+        break
+      }
+      case 'source': {
+        const validation = validateWorkspaceRelativeSourcePattern(ref.target.pattern, 'parser')
+        if (!validation.ok) {
+          warnings.push(
+            diagramWarning({
+              code: validation.code,
+              message: `DiagramRef '${ref.id}' has unsafe source target '${ref.target.pattern}'`,
+              path: `diagramRefs.${index}.target.pattern`,
+              diagramRefId: ref.id,
+              target: ref.target,
+              details: {
+                rejectedPattern: validation.rejectedPattern,
+                reason: validation.reason
+              }
+            })
+          )
+        }
+        break
+      }
+    }
+  })
+
+  return warnings
+}
+
+export function normalizeDiagramRefs(
+  raw: unknown,
+  context: DiagramValidationContext
+): DiagramNormalizeResult<DiagramRef[]> {
+  if (!Array.isArray(raw)) {
+    return { value: [], warnings: [] }
+  }
+
+  const refs: DiagramRef[] = []
+  const warnings: ModelValidationWarning[] = []
+  const seenIds = new Map<string, number>()
+
+  raw.forEach((entry, index) => {
+    const result = normalizeDiagramRef(entry, index)
+    warnings.push(...result.warnings)
+    if (!result.value) {
+      return
+    }
+    const keptIndex = seenIds.get(result.value.id)
+    if (keptIndex !== undefined) {
+      warnings.push(
+        diagramWarning({
+          code: 'parser.duplicate-ref-id',
+          message: `Duplicate diagramRef id '${result.value.id}' was dropped`,
+          path: `diagramRefs.${index}.id`,
+          diagramRefId: result.value.id,
+          diagramId: result.value.diagramId,
+          target: result.value.target,
+          details: { keptIndex, droppedIndex: index }
+        })
+      )
+      return
+    }
+    seenIds.set(result.value.id, refs.length)
+    refs.push(result.value)
+  })
+
+  warnings.push(...validateDiagramRefs(refs, context))
+  return { value: refs, warnings }
+}
+
+function collectFlowStepAndDescendantIds(step: FlowStep): Set<string> {
+  const ids = new Set([step.id])
+  const visit = (steps: FlowStep[]): void => {
+    for (const child of steps) {
+      ids.add(child.id)
+      for (const branch of child.branches ?? []) {
+        visit(branch.steps)
+      }
+    }
+  }
+  for (const branch of step.branches ?? []) {
+    visit(branch.steps)
+  }
+  return ids
+}
+
+export function pruneDiagramRefsForDeletedTarget(
+  refs: DiagramRef[],
+  target: DiagramRefDeleteTarget
+): DiagramRefPruneResult {
+  const deletedRefIds: string[] = []
+  const nestedFlowStepIds =
+    target.type === 'flowStep'
+      ? collectFlowStepAndDescendantIds(
+          findFlowStep(target.flow, target.stepId) ?? {
+            id: target.stepId
+          }
+        )
+      : null
+
+  const diagramRefs = refs.filter((ref) => {
+    const shouldDelete =
+      (target.type === 'diagram' && ref.diagramId === target.diagramId) ||
+      (target.type === 'node' && ref.target.type === 'node' && ref.target.id === target.id) ||
+      (target.type === 'edge' && ref.target.type === 'edge' && ref.target.id === target.id) ||
+      (target.type === 'group' && ref.target.type === 'group' && ref.target.id === target.id) ||
+      (target.type === 'flow' &&
+        ((ref.target.type === 'flow' && ref.target.id === target.id) ||
+          (ref.target.type === 'flowStep' && ref.target.flowId === target.id))) ||
+      (target.type === 'flowStep' &&
+        ref.target.type === 'flowStep' &&
+        ref.target.flowId === target.flowId &&
+        nestedFlowStepIds?.has(ref.target.stepId) === true)
+
+    if (shouldDelete) {
+      deletedRefIds.push(ref.id)
+      return false
+    }
+    return true
+  })
+
+  return { diagramRefs, deletedRefIds }
+}
+
+export function parseModelData(raw: string): C4ModelDataV2 {
   let data: unknown
   try {
     data = JSON.parse(raw)
@@ -378,9 +1032,23 @@ export function parseModelData(raw: string): C4ModelData {
   const validSourceKeys = new Set([...nodeIds, ...flows.map((flow) => flow.id)])
   const groups = normalizeGroups(root.groups, nodeIds)
   const sourceMap = normalizeSourceMap(root.sourceMap, validSourceKeys)
-  const validationWarnings = collectMentionWarnings({ nodes, flows })
+  const diagramResult = normalizeDiagrams(root.diagrams)
+  const diagramRefResult = normalizeDiagramRefs(root.diagramRefs, {
+    nodeIds,
+    edgeIds: seenEdgeIds,
+    groupIds: new Set(groups.map((group) => group.id)),
+    flows,
+    diagrams: diagramResult.value
+  })
+  const validationWarnings = [
+    ...collectMentionWarnings({ nodes, flows }),
+    ...diagramResult.warnings,
+    ...diagramRefResult.warnings
+  ]
 
-  const parsed: C4ModelData = {
+  const parsed: C4ModelDataV2 = {
+    ...extractExtraTopLevelFields(root),
+    schemaVersion: CURRENT_SCRY_SCHEMA_VERSION,
     nodes,
     edges,
     startingLevel:
@@ -393,12 +1061,31 @@ export function parseModelData(raw: string): C4ModelData {
       ? (root.refPositions as C4ModelData['refPositions'])
       : {},
     groups,
-    flows
+    flows,
+    diagrams: diagramResult.value,
+    diagramRefs: diagramRefResult.value
   }
   return validationWarnings.length > 0 ? { ...parsed, validationWarnings } : parsed
 }
 
 export function serializeModelData(model: C4ModelData): string {
-  const { validationWarnings: _validationWarnings, ...serializable } = model
+  const nodeIds = new Set(model.nodes.map((node) => node.id))
+  const edgeIds = new Set(model.edges.map((edge) => edge.id))
+  const flows = model.flows ?? []
+  const groups = model.groups ?? []
+  const diagramResult = normalizeDiagrams(model.diagrams)
+  const diagramRefResult = normalizeDiagramRefs(model.diagramRefs, {
+    nodeIds,
+    edgeIds,
+    groupIds: new Set(groups.map((group) => group.id)),
+    flows,
+    diagrams: diagramResult.value
+  })
+  const { validationWarnings: _validationWarnings, ...serializable } = {
+    ...model,
+    schemaVersion: CURRENT_SCRY_SCHEMA_VERSION,
+    diagrams: diagramResult.value,
+    diagramRefs: diagramRefResult.value
+  }
   return JSON.stringify(serializable, null, 2)
 }

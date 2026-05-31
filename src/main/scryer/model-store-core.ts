@@ -1,7 +1,11 @@
 import { mkdir, rename, writeFile } from 'fs/promises'
 import { homedir } from 'os'
 import { dirname, join, resolve } from 'path'
-import type { C4ModelData } from '../../shared/scryer/model-types'
+import {
+  SCRY_SCHEMA_VERSION,
+  type C4ModelData,
+  type C4ModelDataV2
+} from '../../shared/scryer/model-types'
 
 export function getProjectScryerDir(projectPath: string): string {
   return join(resolve(projectPath), '.scryer')
@@ -44,8 +48,9 @@ export function getProjectPreSyncSnapshotPath(projectPath: string): string {
   return join(getProjectScryerDir(projectPath), 'model.presync.scry')
 }
 
-export function createBlankModel(projectPath: string): C4ModelData {
+export function createBlankModel(projectPath: string): C4ModelDataV2 {
   return {
+    schemaVersion: SCRY_SCHEMA_VERSION,
     nodes: [],
     edges: [],
     startingLevel: 'system',
@@ -53,19 +58,24 @@ export function createBlankModel(projectPath: string): C4ModelData {
     projectPath: resolve(projectPath),
     refPositions: {},
     groups: [],
-    flows: []
+    flows: [],
+    diagrams: [],
+    diagramRefs: []
   }
 }
 
-export function normalizeModelForProject(projectPath: string, model: C4ModelData): C4ModelData {
+export function normalizeModelForProject(projectPath: string, model: C4ModelData): C4ModelDataV2 {
   return {
     ...model,
+    schemaVersion: SCRY_SCHEMA_VERSION,
     projectPath: resolve(projectPath),
     startingLevel: model.startingLevel ?? 'system',
     sourceMap: model.sourceMap ?? {},
     refPositions: model.refPositions ?? {},
     groups: model.groups ?? [],
-    flows: model.flows ?? []
+    flows: model.flows ?? [],
+    diagrams: model.diagrams ?? [],
+    diagramRefs: model.diagramRefs ?? []
   }
 }
 

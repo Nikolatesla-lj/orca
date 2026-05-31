@@ -778,7 +778,19 @@ const api = {
       title: string
     }): Promise<
       { success: true; filePath: string } | { success: false; cancelled?: boolean; error?: string }
-    > => ipcRenderer.invoke('export:html-to-pdf', args)
+    > => ipcRenderer.invoke('export:html-to-pdf', args),
+    diagramPng: (args: {
+      pngDataUrl: string
+      title: string
+    }): Promise<
+      | { success: true; filePath: string }
+      | {
+          success: false
+          cancelled?: boolean
+          code?: 'controller.export-failed'
+          error?: string
+        }
+    > => ipcRenderer.invoke('export:diagram-png', args)
   },
 
   gh: {
@@ -1419,6 +1431,14 @@ const api = {
       ipcRenderer.invoke('architecture:finishSync', args),
     callTool: (args: { projectPath: string; call: unknown }): Promise<unknown> =>
       ipcRenderer.invoke('architecture:callTool', args),
+    readDiagramCache: (args: unknown): Promise<unknown> =>
+      ipcRenderer.invoke('architecture:readDiagramCache', args),
+    writeDiagramCache: (args: unknown): Promise<unknown> =>
+      ipcRenderer.invoke('architecture:writeDiagramCache', args),
+    clearDiagramCache: (args: unknown): Promise<unknown> =>
+      ipcRenderer.invoke('architecture:clearDiagramCache', args),
+    openDiagramSourceTarget: (args: unknown): Promise<unknown> =>
+      ipcRenderer.invoke('architecture:openDiagramSourceTarget', args),
     watchModel: (args: { projectPath: string }): Promise<void> =>
       ipcRenderer.invoke('architecture:watchModel', args),
     onModelChanged: (
