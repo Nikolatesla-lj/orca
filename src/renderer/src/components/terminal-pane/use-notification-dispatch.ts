@@ -8,6 +8,10 @@ import type { ParsedAgentStatusPayload } from '../../../../shared/agent-status-t
 import { buildAgentNotificationId } from '../../../../shared/agent-notification-id'
 import { parsePaneKey } from '../../../../shared/stable-pane-id'
 import type { TerminalPaneLayoutNode } from '../../../../shared/types'
+import {
+  isOrcaWindowForegroundFocused,
+  isVisibleForegroundPaneKey
+} from './terminal-notification-pane-visibility'
 
 const AGENT_NOTIFICATION_SNAPSHOT_MAX_AGE_MS = 10_000
 
@@ -18,6 +22,7 @@ export type TerminalNotificationEvent = {
   terminalTitle?: string
   paneKey?: string
   agentStatusSnapshot?: ParsedAgentStatusPayload
+  suppressOsNotification?: boolean
 }
 
 function hasLivePtyForWorktree(state: StoreSnapshot, candidateWorktreeId: string): boolean {
@@ -214,13 +219,6 @@ function countReposNeedingNotificationDisambiguation(state: StoreSnapshot): numb
   return Math.max(activeRepoIds.size, countReposWithWorktrees(state))
 }
 
-function isOrcaWindowForegroundFocused(): boolean {
-  if (typeof document === 'undefined') {
-    return true
-  }
-  return document.visibilityState === 'visible' && document.hasFocus()
-}
-
 /**
  * Returns a stable dispatch function for terminal notifications.
  * Reads repo/worktree labels from the store at dispatch time rather
@@ -279,15 +277,29 @@ export function dispatchTerminalNotification(
       }
     }
 
-    if (terminalAttentionEnabled && tabId && event.paneKey) {
-      state.markWorktreeUnread(worktreeId)
-      state.markTerminalTabUnread(tabId)
-      state.markTerminalPaneUnread(event.paneKey)
-    } else if (state.activeWorktreeId !== worktreeId || !isOrcaWindowForegroundFocused()) {
+    // Why: a focused worktree can still hide other terminal tabs/split panes;
+    // only the exact active pane counts as already viewed.
+    const shouldMarkUnread = event.paneKey
+      ? !isVisibleForegroundPaneKey(state, worktreeId, event.paneKey)
+      : state.activeWorktreeId !== worktreeId || !isOrcaWindowForegroundFocused()
+    if (shouldMarkUnread) {
       // Why: activeWorktreeId is only in-app selection. If Orca is backgrounded,
       // a selected chat finishing still needs unread/Dock attention.
       state.markWorktreeUnread(worktreeId)
+      if (event.paneKey) {
+        // Why: focus-return auto-ack needs an agent-specific source marker;
+        // generic pane unread also covers BEL and must still show until interact.
+        state.markAgentCompletionPaneUnread(event.paneKey)
+      }
+      if (terminalAttentionEnabled && tabId && event.paneKey) {
+        state.markTerminalTabUnread(tabId)
+        state.markTerminalPaneUnread(event.paneKey)
+      }
     }
+  }
+
+  if (event.suppressOsNotification) {
+    return
   }
 
   // Why: prefer worktree.repoId over string-parsing the worktreeId. The

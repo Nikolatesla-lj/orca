@@ -90,6 +90,7 @@ import { normalizeTerminalQuickCommands } from '../shared/terminal-quick-command
 import { normalizeTaskProviderSettings } from '../shared/task-providers'
 import { normalizeOpenInApplications } from '../shared/open-in-applications'
 import { normalizeTerminalShortcutPolicy } from '../shared/keybindings'
+import { normalizeAppIconId } from '../shared/app-icon'
 import {
   normalizeFeatureInteractions,
   type FeatureInteractionId
@@ -122,6 +123,12 @@ import {
   sourceControlAiSettingsFromLegacy
 } from '../shared/source-control-ai'
 import { normalizeDisabledTuiAgents } from '../shared/tui-agent-selection'
+import {
+  collectTerminalScrollbackSnapshotRefs,
+  deleteTerminalScrollbackSnapshotSync,
+  migrateWorkspaceSessionTerminalScrollbackSnapshots,
+  readTerminalScrollbackSnapshotSync
+} from './terminal-scrollback-snapshots'
 
 function encrypt(plaintext: string): string {
   if (!plaintext || !safeStorage.isEncryptionAvailable()) {
@@ -495,14 +502,25 @@ function remapLegacyOnboardingLastCompletedStep(
   if (raw.outcome === 'completed' && lastCompletedStep >= ONBOARDING_FINAL_STEP) {
     return ONBOARDING_FINAL_STEP
   }
+  // Why: v2 was the five-step flow; missing/older versions were seven-step
+  // data where step 4 was removed agent setup, not completed integrations.
+  if (raw.flowVersion === 2) {
+    if (lastCompletedStep === 3) {
+      return 2
+    }
+    if (lastCompletedStep >= 4) {
+      return 3
+    }
+    return lastCompletedStep
+  }
+  if (lastCompletedStep === 3) {
+    return 2
+  }
   if (lastCompletedStep === 4) {
+    return 2
+  }
+  if (lastCompletedStep >= 5) {
     return 3
-  }
-  if (lastCompletedStep === 5 || lastCompletedStep === 6) {
-    return 4
-  }
-  if (lastCompletedStep > 6) {
-    return 4
   }
   return lastCompletedStep
 }
@@ -581,6 +599,60 @@ export function sanitizeOnboardingUpdate(
     out.flowVersion = ONBOARDING_FLOW_VERSION
   }
   return out
+}
+
+function normalizeLoadedOnboardingState(
+  input: unknown,
+  defaults: OnboardingState
+): OnboardingState {
+  // Why: if we successfully parsed an existing orca-data.json that lacks an
+  // onboarding block, this is an upgrade-cohort user — backfill as completed
+  // (not dismissed) so they don't get dropped into the wizard regardless of
+  // whether they currently have repos, SSH targets, or just non-default
+  // settings. Analytics still distinguish this from users who explicitly
+  // bailed mid-funnel.
+  if (!input) {
+    return {
+      ...defaults,
+      closedAt: Date.now(),
+      outcome: 'completed',
+      lastCompletedStep: ONBOARDING_FINAL_STEP
+    }
+  }
+  // Why: validate every persisted onboarding key explicitly via the shared
+  // sanitizer instead of spreading raw values. A type-flipped field on disk
+  // (string where number expected, unknown checklist key) is dropped or
+  // coerced to the default rather than poisoning in-memory state.
+  const sanitized = sanitizeOnboardingUpdate(input, {
+    migrateLegacyProgress: true
+  })
+  // Why: a persisted completed/dismissed outcome means the user left
+  // onboarding. Recover from a bad/missing/null closedAt instead of reopening
+  // the new-user sidebar checklist.
+  const recoveredClosedAt =
+    typeof sanitized.closedAt === 'number'
+      ? sanitized.closedAt
+      : sanitized.outcome !== null && sanitized.outcome !== undefined
+        ? Date.now()
+        : sanitized.closedAt
+  return {
+    ...defaults,
+    ...sanitized,
+    closedAt: recoveredClosedAt ?? defaults.closedAt,
+    checklist: {
+      ...defaults.checklist,
+      ...sanitized.checklist
+    }
+  }
+}
+
+function resolveSetupGuideSidebarDismissedOnLoad(
+  persistedDismissed: unknown,
+  onboarding: OnboardingState
+): boolean {
+  // Why: the sidebar checklist is a new-user prompt. Once onboarding is
+  // closed, persisted false is just the old default value, not a user opt-in.
+  return onboarding.closedAt !== null || persistedDismissed === true
 }
 
 // Why: read a settings field that was removed from the GlobalSettings type
@@ -1101,6 +1173,11 @@ function normalizeTerminalLayoutSnapshotForPersistence(
     leafIdByInputLeafId,
     duplicatedInputLeafIds
   )
+  const scrollbackRefsByLeafId = remapLeafRecordForPersistence(
+    inputSnapshot.scrollbackRefsByLeafId,
+    leafIdByInputLeafId,
+    duplicatedInputLeafIds
+  )
   const titlesByLeafId = remapLeafRecordForPersistence(
     inputSnapshot.titlesByLeafId,
     leafIdByInputLeafId,
@@ -1109,6 +1186,7 @@ function normalizeTerminalLayoutSnapshotForPersistence(
   const recordsChanged =
     !leafRecordEquivalent(inputSnapshot.ptyIdsByLeafId, ptyIdsByLeafId) ||
     !leafRecordEquivalent(inputSnapshot.buffersByLeafId, buffersByLeafId) ||
+    !leafRecordEquivalent(inputSnapshot.scrollbackRefsByLeafId, scrollbackRefsByLeafId) ||
     !leafRecordEquivalent(inputSnapshot.titlesByLeafId, titlesByLeafId)
   const metadataChanged =
     activeLeafId !== inputSnapshot.activeLeafId || expandedLeafId !== inputSnapshot.expandedLeafId
@@ -1118,6 +1196,7 @@ function normalizeTerminalLayoutSnapshotForPersistence(
   const {
     ptyIdsByLeafId: _oldPtyIdsByLeafId,
     buffersByLeafId: _oldBuffersByLeafId,
+    scrollbackRefsByLeafId: _oldScrollbackRefsByLeafId,
     titlesByLeafId: _oldTitlesByLeafId,
     ...snapshotWithoutLeafRecords
   } = inputSnapshot
@@ -1129,6 +1208,7 @@ function normalizeTerminalLayoutSnapshotForPersistence(
       expandedLeafId,
       ...(ptyIdsByLeafId ? { ptyIdsByLeafId } : {}),
       ...(buffersByLeafId ? { buffersByLeafId } : {}),
+      ...(scrollbackRefsByLeafId ? { scrollbackRefsByLeafId } : {}),
       ...(titlesByLeafId ? { titlesByLeafId } : {})
     },
     changed: true,
@@ -1460,6 +1540,21 @@ function cloneWorkspaceSessionState(session: WorkspaceSessionState): WorkspaceSe
   return structuredClone(session)
 }
 
+function deleteRemovedTerminalScrollbackSnapshots(
+  prior: WorkspaceSessionState | undefined,
+  next: WorkspaceSessionState
+): void {
+  if (!prior) {
+    return
+  }
+  const nextRefs = collectTerminalScrollbackSnapshotRefs(next)
+  for (const ref of collectTerminalScrollbackSnapshotRefs(prior)) {
+    if (!nextRefs.has(ref)) {
+      deleteTerminalScrollbackSnapshotSync(ref)
+    }
+  }
+}
+
 export class Store {
   private state: PersistedState
   private writeTimer: ReturnType<typeof setTimeout> | null = null
@@ -1755,6 +1850,13 @@ export class Store {
         if (!visibleTaskProvidersDefaultedForJira) {
           this.loadNeedsSave = true
         }
+        const normalizedOnboarding = normalizeLoadedOnboardingState(
+          parsed.onboarding,
+          defaults.onboarding
+        )
+        if (!parsed.onboarding) {
+          this.loadNeedsSave = true
+        }
         result = {
           ...defaults,
           ...parsed,
@@ -1791,6 +1893,7 @@ export class Store {
             terminalQuickCommands: normalizeTerminalQuickCommands(
               parsed.settings?.terminalQuickCommands
             ),
+            appIcon: normalizeAppIconId(parsed.settings?.appIcon),
             defaultTaskSource: taskProviderSettings.defaultTaskSource,
             visibleTaskProviders: taskProviderSettings.visibleTaskProviders,
             visibleTaskProvidersDefaultedForJira: true,
@@ -1798,7 +1901,9 @@ export class Store {
               parsed.settings?.terminalShortcutPolicy
             ),
             disabledTuiAgents: normalizeDisabledTuiAgents(parsed.settings?.disabledTuiAgents),
-            openInApplications: normalizeOpenInApplications(parsed.settings?.openInApplications),
+            openInApplications: normalizeOpenInApplications(parsed.settings?.openInApplications, {
+              seedDefaults: true
+            }),
             notifications: normalizeNotificationSettings(parsed.settings?.notifications),
             sourceControlAi: migratedSourceControlAi,
             // Why: new builds read sourceControlAi, but rollback builds still
@@ -1935,6 +2040,16 @@ export class Store {
             ) {
               this.loadNeedsSave = true
             }
+            const setupGuideSidebarDismissed = resolveSetupGuideSidebarDismissedOnLoad(
+              parsed.ui?.setupGuideSidebarDismissed,
+              normalizedOnboarding
+            )
+            if (
+              parsed.ui?.setupGuideSidebarDismissed !== setupGuideSidebarDismissed &&
+              (setupGuideSidebarDismissed || parsed.ui?.setupGuideSidebarDismissed !== undefined)
+            ) {
+              this.loadNeedsSave = true
+            }
             return {
               ...defaults.ui,
               ...parsed.ui,
@@ -1942,6 +2057,7 @@ export class Store {
               // when no explicit persisted chrome preference exists yet.
               rightSidebarOpen,
               rightSidebarTab: normalizeRightSidebarTab(parsed.ui?.rightSidebarTab),
+              setupGuideSidebarDismissed,
               sortBy: migrate ? ('smart' as const) : sort,
               showDotfilesByWorktree: normalizeShowDotfilesByWorktree(
                 parsed.ui?.showDotfilesByWorktree
@@ -1995,38 +2111,7 @@ export class Store {
           ),
           automations: Array.isArray(parsed.automations) ? parsed.automations : [],
           automationRuns: Array.isArray(parsed.automationRuns) ? parsed.automationRuns : [],
-          onboarding: (() => {
-            // Why: if we successfully parsed an existing orca-data.json that
-            // lacks an onboarding block, this is an upgrade-cohort user —
-            // backfill as completed (not dismissed) so they don't get dropped
-            // into the wizard regardless of whether they currently have repos,
-            // SSH targets, or just non-default settings. Analytics still
-            // distinguish this from users who explicitly bailed mid-funnel.
-            if (!parsed.onboarding) {
-              return {
-                ...defaults.onboarding,
-                closedAt: Date.now(),
-                outcome: 'completed' as const,
-                lastCompletedStep: ONBOARDING_FINAL_STEP
-              }
-            }
-            // Why: validate every persisted onboarding key explicitly via the
-            // shared sanitizer instead of spreading raw values. A type-flipped
-            // field on disk (string where number expected, unknown checklist
-            // key) is dropped or coerced to the default rather than poisoning
-            // in-memory state.
-            const sanitized = sanitizeOnboardingUpdate(parsed.onboarding, {
-              migrateLegacyProgress: true
-            })
-            return {
-              ...defaults.onboarding,
-              ...sanitized,
-              checklist: {
-                ...defaults.onboarding.checklist,
-                ...sanitized.checklist
-              }
-            }
-          })()
+          onboarding: normalizedOnboarding
         }
       }
     } catch (err) {
@@ -2058,12 +2143,18 @@ export class Store {
       result = getDefaultPersistedState(homedir())
     }
 
+    const workspaceSession = pruneWorkspaceSessionBrowserHistory(
+      pruneLocalTerminalScrollbackBuffers(result.workspaceSession, result.repos)
+    )
+    const migratedScrollback = migrateWorkspaceSessionTerminalScrollbackSnapshots(workspaceSession)
+    if (migratedScrollback.changed) {
+      this.loadNeedsSave = true
+    }
+
     result = {
       ...result,
       repos: clearMissingProjectGroupMemberships(result.repos, result.projectGroups ?? []),
-      workspaceSession: pruneWorkspaceSessionBrowserHistory(
-        pruneLocalTerminalScrollbackBuffers(result.workspaceSession, result.repos)
-      )
+      workspaceSession: migratedScrollback.session
     }
 
     return this.migrateTelemetry(result, fileExistedOnLoad)
@@ -2942,6 +3033,9 @@ export class Store {
         updates.terminalShortcutPolicy
       )
     }
+    if ('appIcon' in updates) {
+      sanitizedUpdates.appIcon = normalizeAppIconId(updates.appIcon)
+    }
     const historyWithPreviousLayout = buildWorkspaceDirHistoryForUpdate(
       this.state.settings,
       sanitizedUpdates
@@ -3154,6 +3248,10 @@ export class Store {
     return this.state.workspaceSession ?? getDefaultWorkspaceSession()
   }
 
+  readTerminalScrollbackSnapshot(ref: string): string | null {
+    return readTerminalScrollbackSnapshotSync(ref)
+  }
+
   /** Resolve the worktree a terminal tab belongs to, from the session's
    *  tab→worktree map. More reliable than agent-echoed hook fields. */
   getWorktreeIdForTab(tabId: string): string | undefined {
@@ -3279,6 +3377,11 @@ export class Store {
             layout.buffersByLeafId,
             liveLeafIds
           )
+          const scrollbackRefsByLeafId = preserveMissingLeafRecordEntries(
+            priorLayout.scrollbackRefsByLeafId,
+            layout.scrollbackRefsByLeafId,
+            liveLeafIds
+          )
           const titlesByLeafId = preserveMissingLeafRecordEntries(
             priorLayout.titlesByLeafId,
             layout.titlesByLeafId,
@@ -3287,12 +3390,19 @@ export class Store {
           if (buffersByLeafId) {
             layout.buffersByLeafId = buffersByLeafId
           }
+          if (scrollbackRefsByLeafId) {
+            layout.scrollbackRefsByLeafId = scrollbackRefsByLeafId
+          }
           if (titlesByLeafId) {
             layout.titlesByLeafId = titlesByLeafId
           }
         }
       }
     }
+    session = pruneLocalTerminalScrollbackBuffers(session, this.state.repos)
+    const migratedScrollback = migrateWorkspaceSessionTerminalScrollbackSnapshots(session)
+    session = migratedScrollback.session
+    deleteRemovedTerminalScrollbackSnapshots(prior, session)
     this.state.workspaceSession = session
     this.scheduleSave()
   }
@@ -3624,24 +3734,34 @@ export class Store {
   markSshRemotePtyLeases(targetId: string, state: SshRemotePtyLease['state']): void {
     const now = Date.now()
     let changed = false
+    const shouldClearBindings = state === 'terminated' || state === 'expired'
+    const leasesToClear: SshRemotePtyLease[] = []
     this.state.sshRemotePtyLeases ??= []
     for (const lease of this.state.sshRemotePtyLeases) {
-      if (lease.targetId !== targetId || lease.state === state) {
+      if (lease.targetId !== targetId) {
         continue
       }
       if (state === 'detached' && lease.state !== 'attached') {
         continue
       }
-      lease.state = state
-      lease.updatedAt = now
-      if (state === 'attached') {
-        lease.lastAttachedAt = now
-      } else if (state === 'detached') {
-        lease.lastDetachedAt = now
+      if (lease.state !== state) {
+        lease.state = state
+        lease.updatedAt = now
+        if (state === 'attached') {
+          lease.lastAttachedAt = now
+        } else if (state === 'detached') {
+          lease.lastDetachedAt = now
+        }
+        changed = true
       }
-      changed = true
+      if (shouldClearBindings) {
+        leasesToClear.push(lease)
+      }
     }
-    if (changed) {
+    const bindingsChanged = shouldClearBindings
+      ? this.clearSshRemotePtyBindingsForLeases(targetId, leasesToClear)
+      : false
+    if (changed || bindingsChanged) {
       this.flush()
     }
   }
@@ -3651,7 +3771,14 @@ export class Store {
     const lease = this.state.sshRemotePtyLeases?.find(
       (entry) => entry.targetId === targetId && entry.ptyId === relayPtyId
     )
-    if (!lease || lease.state === state) {
+    if (!lease) {
+      return
+    }
+    const shouldClearBindings = state === 'terminated' || state === 'expired'
+    if (lease.state === state) {
+      if (shouldClearBindings && this.clearSshRemotePtyBindingsForLeases(targetId, [lease])) {
+        this.flush()
+      }
       return
     }
     const now = Date.now()
@@ -3661,6 +3788,9 @@ export class Store {
       lease.lastAttachedAt = now
     } else if (state === 'detached') {
       lease.lastDetachedAt = now
+    }
+    if (shouldClearBindings) {
+      this.clearSshRemotePtyBindingsForLeases(targetId, [lease])
     }
     this.flush()
   }
@@ -3697,10 +3827,13 @@ export class Store {
     this.clearSshRemotePtyBindingsForLeases(targetId, leases ?? [])
   }
 
-  private clearSshRemotePtyBindingsForLeases(targetId: string, leases: SshRemotePtyLease[]): void {
+  private clearSshRemotePtyBindingsForLeases(
+    targetId: string,
+    leases: SshRemotePtyLease[]
+  ): boolean {
     const session = this.state.workspaceSession
     if (!leases?.length || !session) {
-      return
+      return false
     }
     let changed = false
     for (const [worktreeId, tabs] of Object.entries(session.tabsByWorktree ?? {})) {
@@ -3751,6 +3884,7 @@ export class Store {
     if (changed) {
       this.scheduleSave()
     }
+    return changed
   }
 
   // ── Flush (for shutdown) ───────────────────────────────────────────

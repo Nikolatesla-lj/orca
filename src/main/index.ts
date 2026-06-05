@@ -6,11 +6,11 @@ import { grantDirAcl } from './win32-utils'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import os from 'node:os'
-import { app, BrowserWindow, nativeImage, nativeTheme } from 'electron'
+import { app, BrowserWindow, nativeTheme } from 'electron'
 import { electronApp, is } from '@electron-toolkit/utils'
 import * as QRCode from 'qrcode'
-import devIcon from '../../resources/icon-dev.png?asset'
 import { Store, initDataPath } from './persistence'
+import { applyAppIcon } from './app-icon'
 import { StatsCollector, initStatsPath } from './stats/collector'
 import { ClaudeUsageStore, initClaudeUsagePath } from './claude-usage/store'
 import { CodexUsageStore, initCodexUsagePath } from './codex-usage/store'
@@ -114,6 +114,10 @@ import {
   shouldRecoverRendererAfterProcessGone,
   type ExpectedTeardownScope
 } from './crash-reporting/process-gone-classification'
+import {
+  buildProcessGoneCrashDetails,
+  buildSuppressedProcessGoneBreadcrumbData
+} from './crash-reporting/process-gone-diagnostics'
 import { getProcessGoneDedupeKey, processGoneDedupe } from './crash-reporting/process-gone-dedupe'
 import {
   advanceSyntheticTitleSpinnerEntries,
@@ -691,18 +695,23 @@ function recordProcessGoneCrash(
       expectedTeardown: getExpectedTeardownScope(webContentsId)
     })
   ) {
-    recordCrashBreadcrumb('process_gone_suppressed', {
-      source,
-      processType,
-      reason,
-      exitCode
-    })
+    recordCrashBreadcrumb(
+      'process_gone_suppressed',
+      buildSuppressedProcessGoneBreadcrumbData({
+        source,
+        processType,
+        reason,
+        exitCode,
+        details
+      })
+    )
     return
   }
   const key = getProcessGoneDedupeKey(processType, reason, exitCode)
   if (!processGoneDedupe.shouldRecord(key)) {
     return
   }
+  const crashDetails = buildProcessGoneCrashDetails(details)
   const span = startSpan('electron.process_gone', {
     attributes: {
       'crash.source': source,
@@ -715,7 +724,7 @@ function recordProcessGoneCrash(
       arch: process.arch,
       electronVersion: process.versions.electron,
       chromeVersion: process.versions.chrome,
-      details,
+      details: crashDetails,
       breadcrumbs: getCrashBreadcrumbSnapshot()
     }
   })
@@ -734,7 +743,7 @@ function recordProcessGoneCrash(
       arch: process.arch,
       electronVersion: process.versions.electron,
       chromeVersion: process.versions.chrome,
-      details,
+      details: crashDetails,
       // Why: breadcrumbs stay memory-only during normal operation. Persist a
       // snapshot only after Electron reports a crash-like process exit.
       breadcrumbs: getCrashBreadcrumbSnapshot()
@@ -1043,12 +1052,8 @@ app.whenReady().then(async () => {
   electronApp.setAppUserModelId(devInstanceIdentity.appUserModelId)
   app.setName(devInstanceIdentity.name)
 
-  if (process.platform === 'darwin' && is.dev) {
-    const dockIcon = nativeImage.createFromPath(devIcon)
-    app.dock?.setIcon(dockIcon)
-  }
-
   store = new Store()
+  applyAppIcon(store.getSettings().appIcon)
   if (shouldSuppressDevEducation({ isDev: is.dev })) {
     suppressDevEducationForStore(store)
   }
@@ -1259,6 +1264,7 @@ app.whenReady().then(async () => {
       const ui = store?.getUI()
       return {
         showTasksButton: settings?.showTasksButton !== false,
+        showAutomationsButton: settings?.showAutomationsButton !== false,
         showMobileButton: settings?.showMobileButton !== false,
         showTitlebarAppName: settings?.showTitlebarAppName !== false,
         statusBarVisible: ui?.statusBarVisible !== false

@@ -20,6 +20,7 @@ import type { TabDragItemData } from '../tab-group/useTabDragSplit'
 import {
   ACTIVE_TAB_INDICATOR_CLASSES,
   getDropIndicatorClasses,
+  getTabRootStateClasses,
   type DropIndicator
 } from './drop-indicator'
 import { canOpenMarkdownPreview } from '@/components/editor/markdown-preview-controls'
@@ -35,7 +36,7 @@ export default function EditorFileTab({
   onClose,
   onCloseToRight,
   onCloseAll,
-  onPin,
+  onMakePermanent,
   onTogglePin,
   onSplitGroup,
   dragData,
@@ -50,7 +51,7 @@ export default function EditorFileTab({
   onClose: () => void
   onCloseToRight: () => void
   onCloseAll: () => void
-  onPin?: () => void
+  onMakePermanent?: () => void
   onTogglePin: () => void
   onSplitGroup: (direction: 'left' | 'right' | 'up' | 'down', sourceVisibleTabId: string) => void
   dragData: TabDragItemData
@@ -199,9 +200,7 @@ export default function EditorFileTab({
       data-pinned={isPinned ? 'true' : 'false'}
       {...attributes}
       {...listeners}
-      className={`group relative flex items-center h-full px-1.5 text-xs cursor-pointer select-none shrink-0 outline-none focus:outline-none focus-visible:outline-none border-t ${hasTabsToRight ? 'border-r' : ''} border-border bg-card ${getDropIndicatorClasses(dropIndicator ?? null)} ${
-        isActive ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
-      }`}
+      className={`group relative flex items-center h-full px-1.5 text-xs cursor-pointer select-none shrink-0 outline-none focus:outline-none focus-visible:outline-none border-t ${hasTabsToRight ? 'border-r' : ''} border-border ${getDropIndicatorClasses(dropIndicator ?? null)} ${getTabRootStateClasses(isActive)}`}
       onPointerDown={(e) => {
         if (e.button !== 0) {
           return
@@ -210,8 +209,8 @@ export default function EditorFileTab({
         listeners?.onPointerDown?.(e)
       }}
       onDoubleClick={() => {
-        if (file.isPreview && onPin) {
-          onPin()
+        if (file.isPreview && onMakePermanent) {
+          onMakePermanent()
         }
       }}
       onMouseDown={(e) => {
@@ -284,9 +283,14 @@ export default function EditorFileTab({
             className={`truncate max-w-[80px]${file.isPreview ? ' italic' : ''}${file.externalMutation ? ' line-through' : ''}`}
             style={tabStatusColor ? { color: tabStatusColor } : undefined}
             onDoubleClick={(e) => {
-              // Why: the outer tab's onDoubleClick pins preview tabs. Scope
-              // rename to the filename text only so pin-on-dblclick still
-              // works anywhere else on the tab chrome (matching VS Code).
+              if (file.isPreview && onMakePermanent) {
+                e.stopPropagation()
+                onMakePermanent()
+                return
+              }
+              // Why: preview tabs use double-click to become permanent. Scope
+              // rename to non-preview filename text so preview promotion wins on
+              // the tab label as well as the surrounding tab chrome.
               if (!canRename) {
                 return
               }

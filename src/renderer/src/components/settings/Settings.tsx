@@ -55,6 +55,7 @@ import {
   getWindowsTerminalCapabilityOwnerKey,
   useWindowsTerminalCapabilities
 } from '@/lib/windows-terminal-capabilities'
+import { getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import { getShortcutPlatform } from '@/lib/shortcut-platform'
 import { keybindingMatchesAction } from '../../../../shared/keybindings'
 import {
@@ -306,8 +307,8 @@ function Settings(): React.JSX.Element {
       return true
     }
     const shouldDiscard = await confirm({
-      title: 'Discard unsaved Source Control AI prompt changes?',
-      description: 'You have unsaved Source Control AI prompt changes. Leaving will discard them.',
+      title: 'Discard unsaved Git AI Author prompt changes?',
+      description: 'You have unsaved Git AI Author prompt changes. Leaving will discard them.',
       confirmLabel: 'Discard',
       confirmVariant: 'destructive'
     })
@@ -583,19 +584,29 @@ function Settings(): React.JSX.Element {
   const windowsTerminalCapabilityOwnerKey = getWindowsTerminalCapabilityOwnerKey(
     settings?.activeRuntimeEnvironmentId
   )
-  // Why: General owns the Orca CLI controls, including WSL skill-location setup.
-  const windowsTerminalCapabilities = useWindowsTerminalCapabilities(
-    (isWindows || isWebClient) &&
+  const runtimeTarget = useMemo(
+    () => getActiveRuntimeTarget(settings),
+    [settings?.activeRuntimeEnvironmentId]
+  )
+  const hasActiveRuntimeEnvironment = Boolean(settings?.activeRuntimeEnvironmentId?.trim())
+  const shouldLoadWindowsTerminalCapabilities =
+    hasActiveRuntimeEnvironment ||
+    ((isWindows || isWebClient) &&
       (neededSectionIds.has('terminal') ||
         neededSectionIds.has('general') ||
         neededSectionIds.has('accounts') ||
-        neededSectionIds.has('agents')),
+        neededSectionIds.has('agents')))
+  // Why: General owns the Orca CLI controls, including WSL skill-location setup.
+  const windowsTerminalCapabilities = useWindowsTerminalCapabilities(
+    shouldLoadWindowsTerminalCapabilities,
     true,
-    windowsTerminalCapabilityOwnerKey
+    windowsTerminalCapabilityOwnerKey,
+    runtimeTarget
   )
   // Why: WSL can be unsupported on macOS/Linux, or supported-but-unavailable on Windows.
   // Only the latter should render disabled WSL controls.
   const wslSupportedPlatform = isWindows || windowsTerminalCapabilities.hostPlatform === 'win32'
+  const isWindowsTerminalHost = isWindows || windowsTerminalCapabilities.hostPlatform === 'win32'
 
   if ([...neededSectionIds].some((id) => !mountedSectionIds.has(id))) {
     // Why: lazy Settings sections are remembered for the session; record newly
@@ -1020,7 +1031,7 @@ function Settings(): React.JSX.Element {
                 <SettingsSection
                   id="git"
                   title="Git & Source Control"
-                  description="Branch naming, base refs, attribution, and Source Control AI."
+                  description="Branch naming, base refs, attribution, and Git AI Author."
                   searchEntries={getSectionSearchEntries('git')}
                   forceVisible={hasUnsavedSourceControlAiPromptChanges}
                 >
@@ -1041,6 +1052,7 @@ function Settings(): React.JSX.Element {
                         writeSourceControlAiSettings={writeSourceControlAiSettings}
                         onCustomPromptDirtyChange={setHasUnsavedCommitPromptChanges}
                         customPromptDiscardSignal={sourceControlAiPromptDiscardSignal}
+                        settingsSearchQuery={settingsSearchQuery}
                       />
                     </>
                   ) : null}
@@ -1074,6 +1086,7 @@ function Settings(): React.JSX.Element {
                       wslCapabilitiesLoading={windowsTerminalCapabilities.isLoading}
                       pwshAvailable={windowsTerminalCapabilities.pwshAvailable}
                       gitBashAvailable={windowsTerminalCapabilities.gitBashAvailable}
+                      isWindowsTerminalHost={isWindowsTerminalHost}
                     />
                   ) : null}
                 </SettingsSection>

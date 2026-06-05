@@ -1573,6 +1573,64 @@ describe('removeWorktree state cleanup', () => {
     expect(store.getState().editorViewMode).toEqual({ 'file-2': 'changes' })
   })
 
+  it('cleans up markdownFrontmatterVisible for files in the removed worktree', async () => {
+    const store = createTestStore()
+    const wt = makeWorktree({ id: 'repo1::/path/wt1', repoId: 'repo1', path: '/path/wt1' })
+
+    store.setState({
+      worktreesByRepo: { repo1: [wt] },
+      openFiles: [
+        {
+          id: 'file-1',
+          worktreeId: 'repo1::/path/wt1',
+          filePath: '/path/wt1/readme.md',
+          relativePath: 'readme.md',
+          language: 'markdown',
+          isDirty: false,
+          isPreview: false,
+          mode: 'edit' as const
+        }
+      ],
+      markdownFrontmatterVisible: {
+        'file-1': true,
+        'file-2': true
+      }
+    } as unknown as Partial<AppState>)
+
+    await store.getState().removeWorktree('repo1::/path/wt1')
+
+    expect(store.getState().markdownFrontmatterVisible).toEqual({ 'file-2': true })
+  })
+
+  it('cleans up markdownFrontmatterVisible for preview-only source files in the removed worktree', async () => {
+    const store = createTestStore()
+    const wt = makeWorktree({ id: 'repo1::/path/wt1', repoId: 'repo1', path: '/path/wt1' })
+
+    store.setState({
+      worktreesByRepo: { repo1: [wt] },
+      openFiles: [
+        {
+          id: 'markdown-preview::file-1',
+          worktreeId: 'repo1::/path/wt1',
+          filePath: '/path/wt1/readme.md',
+          relativePath: 'readme.md',
+          language: 'markdown',
+          isDirty: false,
+          markdownPreviewSourceFileId: 'file-1',
+          mode: 'markdown-preview' as const
+        }
+      ],
+      markdownFrontmatterVisible: {
+        'file-1': true,
+        'file-2': true
+      }
+    } as unknown as Partial<AppState>)
+
+    await store.getState().removeWorktree('repo1::/path/wt1')
+
+    expect(store.getState().markdownFrontmatterVisible).toEqual({ 'file-2': true })
+  })
+
   it('records the sidebar scroll anchor in the same tick it removes the worktree', async () => {
     const store = createTestStore()
     const wt = makeWorktree({ id: 'repo1::/path/wt1', repoId: 'repo1', path: '/path/wt1' })
@@ -2081,7 +2139,7 @@ describe('worktree remote runtime mutations', () => {
     expect(runtimeEnvironmentCall).toHaveBeenCalledWith({
       selector: 'env-1',
       method: 'worktree.rm',
-      params: { worktree: wt.id, force: undefined, runHooks: true },
+      params: { worktree: `id:${wt.id}`, force: undefined, runHooks: true },
       timeoutMs: 60_000
     })
     expect(mockApi.worktrees.remove).not.toHaveBeenCalled()
@@ -2985,11 +3043,13 @@ describe('purgeWorktreeTerminalState direct (design §4.4)', () => {
           relativePath: 'a.ts',
           language: 'typescript',
           isDirty: false,
+          markdownPreviewSourceFileId: 'source-1',
           isPreview: false,
           mode: 'edit' as const
         }
       ],
       editorDrafts: { 'file-1': 'draft', 'file-99': 'other' },
+      markdownFrontmatterVisible: { 'source-1': true, 'file-99': true },
       gitIgnoredPathsByWorktree: {
         'repoA::/a/wt1': ['dist/'],
         'repoA::/a/wt2': ['coverage/']
@@ -3022,6 +3082,7 @@ describe('purgeWorktreeTerminalState direct (design §4.4)', () => {
     expect(s.runtimePaneTitlesByTabId).toEqual({ 'tab-3': 'bash' })
     expect(s.openFiles).toEqual([])
     expect(s.editorDrafts).toEqual({ 'file-99': 'other' })
+    expect(s.markdownFrontmatterVisible).toEqual({ 'file-99': true })
     expect(s.gitIgnoredPathsByWorktree).toEqual({ 'repoA::/a/wt2': ['coverage/'] })
     expect(s.rightSidebarTabByWorktree).toEqual({ 'repoA::/a/wt2': 'checks' })
     expect(s.activeWorktreeId).toBeNull()
@@ -3114,6 +3175,20 @@ describe('markWorktreeVisited', () => {
     store.getState().pruneLastVisitedTimestamps()
 
     expect(store.getState().lastVisitedAtByWorktreeId).toEqual({ 'repo1::/hidden': 100 })
+  })
+})
+
+describe('setRenamingWorktreeId', () => {
+  it('sets and clears the workspace rename signal', () => {
+    const store = createTestStore()
+
+    expect(store.getState().renamingWorktreeId).toBeNull()
+
+    store.getState().setRenamingWorktreeId('repo1::/feature')
+    expect(store.getState().renamingWorktreeId).toBe('repo1::/feature')
+
+    store.getState().setRenamingWorktreeId(null)
+    expect(store.getState().renamingWorktreeId).toBeNull()
   })
 })
 

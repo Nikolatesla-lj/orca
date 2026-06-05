@@ -10,6 +10,7 @@ import {
   unwrapRuntimeRpcResult
 } from '@/runtime/runtime-rpc-client'
 import { assertRuntimeStatusCompatible } from '@/runtime/runtime-protocol-compat'
+import { toRuntimeWorktreeSelector } from '@/runtime/runtime-worktree-selector'
 import {
   getRemoteRuntimePtyEnvironmentId,
   getRemoteRuntimeTerminalHandle
@@ -97,6 +98,7 @@ function runtimeScopedStateReset(): Partial<AppState> {
     editorDrafts: {},
     markdownViewMode: {},
     editorViewMode: {},
+    markdownFrontmatterVisible: {},
     editorCursorLine: {},
     gitIgnoredPathsByWorktree: {},
     activeFileId: null,
@@ -170,7 +172,7 @@ async function closeRemoteBrowserPagesBeforeRuntimeSwitch(state: AppState): Prom
       return callRuntimeRpc(
         { kind: 'environment', environmentId: handle.environmentId },
         'browser.tabClose',
-        { worktree: `id:${worktreeId}`, page: handle.remotePageId },
+        { worktree: toRuntimeWorktreeSelector(worktreeId), page: handle.remotePageId },
         { timeoutMs: 15_000 }
       )
     })
