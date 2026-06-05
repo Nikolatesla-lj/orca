@@ -18,6 +18,7 @@ function makeRun(overrides: Partial<AutomationRun>): AutomationRun {
     sessionKind: 'terminal',
     chatSessionId: null,
     terminalSessionId: 'tab-1',
+    pipelineRunId: null,
     outputSnapshot: null,
     precheckResult: null,
     usage: null,

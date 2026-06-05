@@ -30,6 +30,7 @@ import {
 } from '../flags'
 import { RuntimeClientError } from '../runtime-client'
 import { getOptionalWorktreeSelector, resolveCurrentWorktreeSelector } from '../selectors'
+import { buildPipelineRunInput } from './pipelines'
 
 type AutomationCreateParams = Omit<AutomationCreateInput, 'projectId' | 'timezone'> & {
   repo?: string
@@ -289,6 +290,39 @@ function getWorkspaceModeFlag(
   )
 }
 
+function getAutomationTargetFlag(flags: Map<string, string | boolean>): 'prompt' | 'pipeline' {
+  const target = getOptionalStringFlag(flags, 'target') ?? 'prompt'
+  if (target === 'prompt' || target === 'pipeline') {
+    return target
+  }
+  throw new RuntimeClientError('invalid_argument', '--target must be prompt or pipeline')
+}
+
+function buildAutomationTarget(
+  flags: Map<string, string | boolean>,
+  target: 'prompt' | 'pipeline'
+): AutomationCreateInput['target'] | undefined {
+  if (target === 'prompt') {
+    return undefined
+  }
+  const pipelineInput = buildPipelineRunInput(flags)
+  return {
+    type: 'pipeline',
+    pipelineTemplateId: pipelineInput.templateId,
+    pipelineInput
+  }
+}
+
+function getAutomationPromptFlag(
+  flags: Map<string, string | boolean>,
+  target: 'prompt' | 'pipeline'
+): string {
+  if (target === 'pipeline') {
+    return getOptionalStringFlag(flags, 'prompt') ?? ''
+  }
+  return getRequiredStringFlag(flags, 'prompt')
+}
+
 async function resolveDefaultTarget(
   flags: Map<string, string | boolean>,
   cwd: string,
@@ -341,12 +375,15 @@ export const AUTOMATION_HANDLERS: Record<string, CommandHandler> = {
     if (!schedule) {
       throw new RuntimeClientError('invalid_argument', 'Missing required --trigger')
     }
+    const targetKind = getAutomationTargetFlag(flags)
+    const automationTarget = buildAutomationTarget(flags, targetKind)
     const target = await resolveDefaultTarget(flags, cwd, client)
     const workspaceMode =
       getWorkspaceModeFlag(flags) ?? (target.workspace ? 'existing' : 'new_per_run')
     const result = await client.call<{ automation: Automation }>('automation.create', {
       name: getRequiredStringFlag(flags, 'name'),
-      prompt: getRequiredStringFlag(flags, 'prompt'),
+      prompt: getAutomationPromptFlag(flags, targetKind),
+      target: automationTarget,
       precheck: getPrecheckFlag(flags),
       agentId: getProviderFlag(flags),
       repo: target.repo,

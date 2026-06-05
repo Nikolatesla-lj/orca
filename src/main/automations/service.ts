@@ -6,15 +6,17 @@ import type {
   AutomationDispatchResult,
   AutomationPrecheckResult,
   AutomationRun,
-  AutomationRunStatus,
-  AutomationRunUsage
+  AutomationRunStatus
 } from '../../shared/automations-types'
 import type { ClaudeUsageStore } from '../claude-usage/store'
 import type { CodexUsageStore } from '../codex-usage/store'
+import type { PipelineService } from '../pipelines/service'
 import { splitWorktreeIdForFilesystem } from '../../shared/worktree-id'
 import { runAutomationPrecheck } from './precheck-runner'
+import { collectAutomationRunUsage } from './usage-collector'
 
 const DEFAULT_TICK_MS = 60 * 1000
+type PipelineRunner = Pick<PipelineService, 'run'>
 
 export class AutomationService {
   private readonly store: Store
@@ -25,15 +27,22 @@ export class AutomationService {
   private evaluating = false
   private readonly claudeUsage: ClaudeUsageStore | null
   private readonly codexUsage: CodexUsageStore | null
+  private readonly pipelineService: PipelineRunner | null
 
   constructor(
     store: Store,
-    opts: { tickMs?: number; claudeUsage?: ClaudeUsageStore; codexUsage?: CodexUsageStore } = {}
+    opts: {
+      tickMs?: number
+      claudeUsage?: ClaudeUsageStore
+      codexUsage?: CodexUsageStore
+      pipelineService?: PipelineRunner
+    } = {}
   ) {
     this.store = store
     this.tickMs = opts.tickMs ?? DEFAULT_TICK_MS
     this.claudeUsage = opts.claudeUsage ?? null
     this.codexUsage = opts.codexUsage ?? null
+    this.pipelineService = opts.pipelineService ?? null
   }
 
   setWebContents(webContents: WebContents | null): void {
@@ -124,7 +133,13 @@ export class AutomationService {
     if (run.usage) {
       return run
     }
-    const usage = await this.collectRunUsage(run)
+    const automation = this.store.listAutomations().find((entry) => entry.id === run.automationId)
+    const usage = await collectAutomationRunUsage({
+      automation,
+      run,
+      claudeUsage: this.claudeUsage,
+      codexUsage: this.codexUsage
+    })
     return this.store.updateAutomationRun({
       runId: run.id,
       status: run.status,
@@ -133,83 +148,6 @@ export class AutomationService {
       usage,
       error: run.error
     })
-  }
-
-  private async collectRunUsage(run: AutomationRun): Promise<AutomationRunUsage> {
-    const automation = this.store.listAutomations().find((entry) => entry.id === run.automationId)
-    const collectedAt = Date.now()
-    const unavailable = (
-      provider: AutomationRunUsage['provider'],
-      unavailableReason: AutomationRunUsage['unavailableReason'],
-      unavailableMessage: string
-    ): AutomationRunUsage => ({
-      status: 'unavailable',
-      provider,
-      model: null,
-      inputTokens: null,
-      outputTokens: null,
-      cacheReadTokens: null,
-      cacheWriteTokens: null,
-      reasoningOutputTokens: null,
-      totalTokens: null,
-      estimatedCostUsd: null,
-      estimatedCostSource: null,
-      providerSessionId: null,
-      attribution: null,
-      collectedAt,
-      unavailableReason,
-      unavailableMessage
-    })
-
-    if (!automation || run.status !== 'completed') {
-      return unavailable(
-        automation?.agentId === 'codex'
-          ? 'codex'
-          : automation?.agentId === 'claude'
-            ? 'claude'
-            : null,
-        'run_not_finished',
-        'Usage is only collected for completed automation runs.'
-      )
-    }
-    if (automation.executionTargetType === 'ssh') {
-      return unavailable(
-        automation.agentId === 'codex'
-          ? 'codex'
-          : automation.agentId === 'claude'
-            ? 'claude'
-            : null,
-        'remote_usage_unavailable',
-        'Remote automation usage is not available from local usage logs.'
-      )
-    }
-    if (automation.agentId === 'claude') {
-      if (!this.claudeUsage) {
-        return unavailable('claude', 'scan_failed', 'Claude usage store is unavailable.')
-      }
-      return this.claudeUsage.getAutomationRunUsage({
-        worktreeId: run.workspaceId,
-        terminalSessionId: run.terminalSessionId,
-        startedAt: run.startedAt,
-        completedAt: collectedAt
-      })
-    }
-    if (automation.agentId === 'codex') {
-      if (!this.codexUsage) {
-        return unavailable('codex', 'scan_failed', 'Codex usage store is unavailable.')
-      }
-      return this.codexUsage.getAutomationRunUsage({
-        worktreeId: run.workspaceId,
-        terminalSessionId: run.terminalSessionId,
-        startedAt: run.startedAt,
-        completedAt: collectedAt
-      })
-    }
-    return unavailable(
-      null,
-      'provider_unsupported',
-      'This agent does not report usage to Orca yet.'
-    )
   }
 
   private async evaluateDueRuns(): Promise<void> {
@@ -267,6 +205,35 @@ export class AutomationService {
     automation: Automation,
     run: AutomationRun
   ): Promise<AutomationRun> {
+    if (automation.target.type === 'pipeline') {
+      if (!this.pipelineService) {
+        return this.store.updateAutomationRun({
+          runId: run.id,
+          status: 'dispatch_failed',
+          workspaceId: null,
+          error: 'Pipeline service is unavailable.'
+        })
+      }
+      try {
+        const result = this.pipelineService.run(automation.target.pipelineInput, {
+          automationRunId: run.id
+        })
+        return this.store.updateAutomationRun({
+          runId: run.id,
+          status: 'dispatched',
+          workspaceId: null,
+          pipelineRunId: result.run.id,
+          error: null
+        })
+      } catch (err) {
+        return this.store.updateAutomationRun({
+          runId: run.id,
+          status: 'dispatch_failed',
+          workspaceId: null,
+          error: err instanceof Error ? err.message : 'Pipeline run dispatch failed.'
+        })
+      }
+    }
     const webContents = this.webContents
     if (!webContents || webContents.isDestroyed() || !this.rendererReady) {
       return this.store.updateAutomationRun({

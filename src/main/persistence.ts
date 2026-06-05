@@ -21,6 +21,7 @@ import type {
   Automation,
   AutomationCreateInput,
   AutomationDispatchResult,
+  AutomationTarget,
   AutomationPrecheckResult,
   AutomationRunOutputSnapshot,
   AutomationRun,
@@ -442,9 +443,34 @@ function normalizeAutomationPrecheckResult(
   }
 }
 
+function normalizeAutomationTarget(value: unknown, prompt: string): AutomationTarget {
+  if (value && typeof value === 'object') {
+    const target = value as Partial<AutomationTarget>
+    if (target.type === 'pipeline') {
+      const pipelineTemplateId =
+        typeof target.pipelineTemplateId === 'string' ? target.pipelineTemplateId.trim() : ''
+      if (pipelineTemplateId && target.pipelineInput && typeof target.pipelineInput === 'object') {
+        return {
+          type: 'pipeline',
+          pipelineTemplateId,
+          pipelineInput: target.pipelineInput
+        }
+      }
+    }
+    if (target.type === 'prompt' && typeof target.prompt === 'string') {
+      return { type: 'prompt', prompt: target.prompt }
+    }
+  }
+  return { type: 'prompt', prompt }
+}
+
 function normalizeAutomationSessionReuse(automation: Automation): Automation {
+  const prompt = typeof automation.prompt === 'string' ? automation.prompt : ''
+  const target = normalizeAutomationTarget(automation.target, prompt)
   return {
     ...automation,
+    prompt: target.type === 'prompt' ? target.prompt : prompt,
+    target,
     precheck: normalizeAutomationPrecheck(automation.precheck),
     reuseSession: automation.workspaceMode === 'existing' && automation.reuseSession === true
   }
@@ -2688,6 +2714,7 @@ export class Store {
     return [...(automationId ? runs.filter((run) => run.automationId === automationId) : runs)]
       .map((run) => ({
         ...run,
+        pipelineRunId: run.pipelineRunId ?? null,
         precheckResult: normalizeAutomationPrecheckResult(run.precheckResult)
       }))
       .sort((left, right) => right.createdAt - left.createdAt)
@@ -2697,10 +2724,12 @@ export class Store {
     const repo = this.state.repos.find((entry) => entry.id === input.projectId)
     const now = Date.now()
     const executionTargetType = repo?.connectionId ? 'ssh' : 'local'
+    const target = normalizeAutomationTarget(input.target, input.prompt)
     const automation: Automation = {
       id: randomUUID(),
       name: input.name.trim() || 'Untitled automation',
-      prompt: input.prompt,
+      prompt: target.type === 'prompt' ? target.prompt : input.prompt,
+      target,
       precheck: normalizeAutomationPrecheck(input.precheck),
       agentId: input.agentId,
       projectId: input.projectId,
@@ -2740,11 +2769,20 @@ export class Store {
     const dtstart = updates.dtstart ?? current.dtstart
     const scheduleChanged = updates.rrule !== undefined || updates.dtstart !== undefined
     const workspaceMode = updates.workspaceMode ?? current.workspaceMode
+    const currentTarget = normalizeAutomationTarget(current.target, current.prompt)
+    const prompt = updates.prompt ?? current.prompt
+    const target = Object.hasOwn(updates, 'target')
+      ? normalizeAutomationTarget(updates.target, prompt)
+      : currentTarget.type === 'prompt'
+        ? { type: 'prompt' as const, prompt }
+        : currentTarget
     const updated: Automation = {
       ...current,
       ...updates,
       name:
         updates.name !== undefined ? updates.name.trim() || 'Untitled automation' : current.name,
+      prompt: target.type === 'prompt' ? target.prompt : prompt,
+      target,
       precheck: Object.hasOwn(updates, 'precheck')
         ? normalizeAutomationPrecheck(updates.precheck)
         : normalizeAutomationPrecheck(current.precheck),
@@ -2816,6 +2854,7 @@ export class Store {
       sessionKind: 'terminal',
       chatSessionId: null,
       terminalSessionId: null,
+      pipelineRunId: null,
       outputSnapshot: null,
       precheckResult: null,
       usage: null,
@@ -2852,6 +2891,9 @@ export class Store {
         normalizeAutomationRunWorkspaceDisplayName(current.workspaceDisplayName ?? null) ??
         this.getAutomationRunWorkspaceDisplayName(workspaceId),
       terminalSessionId: result.terminalSessionId ?? current.terminalSessionId,
+      pipelineRunId: Object.hasOwn(result, 'pipelineRunId')
+        ? (result.pipelineRunId ?? null)
+        : (current.pipelineRunId ?? null),
       outputSnapshot: Object.hasOwn(result, 'outputSnapshot')
         ? normalizeAutomationRunOutputSnapshot(result.outputSnapshot)
         : normalizeAutomationRunOutputSnapshot(current.outputSnapshot),

@@ -80,6 +80,20 @@ docs/**
 !docs/readme/**
 !docs/reference/
 !docs/reference/**
+!docs/agents/
+!docs/agents/**
+!docs/adr/
+!docs/adr/**
+!docs/architecture/
+!docs/architecture/**
+!docs/contracts/
+!docs/contracts/**
+!docs/prd/
+!docs/prd/**
+!docs/tasks/
+!docs/tasks/**
+!docs/testing/
+!docs/testing/**
 # Keep generated React perf scan ledgers local; durable docs still use docs/reference.
 docs/reference/react-performance-audit.md
 !docs/STYLEGUIDE.md
@@ -104,3 +118,4 @@ playwright-report/
 
 # Agent hook runtime endpoints (machine-local secrets)
 /agent-hooks/
+.gitnexus

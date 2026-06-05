@@ -29,6 +29,17 @@ Automations:
   automations run           Run an Orca automation now
   automations runs          List automation run history
 
+Pipelines:
+  pipelines template-list   List Pipeline templates
+  pipelines run             Create a Pipeline run
+  pipelines list            List Pipeline runs
+  pipelines show            Show Pipeline run details
+  pipelines cancel          Cancel a Pipeline run
+  pipelines logs            Show Pipeline logs
+  pipelines release-stale-reservation Release a stale Pipeline reservation
+  pipelines recovery-reports List Pipeline recovery reports
+  pipelines recovery-report-acknowledge Acknowledge a Pipeline recovery report
+
 Repos:
   repo list                 List repos registered in Orca
   repo add                  Add a project to Orca by filesystem path
@@ -169,6 +180,15 @@ Common Commands:
   orca environment list [--json]
   orca environment show --environment <selector> [--json]
   orca environment rm --environment <selector> [--json]
+  orca pipelines template-list [--json]
+  orca pipelines run --template <id> --repo <repo> --source-branch <branch> --target-branch <branch> --task-source github --task-owner <owner> --task-repo <repo> --prd-issue <number> --planner-agent <agent> --implementer-agent <agent> --merger-agent <agent> [--json]
+  orca pipelines list [--repo <repo>] [--status <status>] [--limit <n>] [--json]
+  orca pipelines show --run <run_id> [--json]
+  orca pipelines cancel --run <run_id> [--preserve-worktrees] [--json]
+  orca pipelines logs --run <run_id> [--stage <stage_id>] [--task <task_id>] [--limit <n>] [--json]
+  orca pipelines release-stale-reservation --reservation <reservation_id> --confirm [--json]
+  orca pipelines recovery-reports [--repo <repo>] [--prd-issue <number>] [--status <status>] [--json]
+  orca pipelines recovery-report-acknowledge --report <report_id> [--json]
   orca worktree list [--repo <selector>] [--limit <n>] [--json]
   orca worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>] [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>] [--comment <text>] [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]
   orca worktree show --worktree <selector> [--json]

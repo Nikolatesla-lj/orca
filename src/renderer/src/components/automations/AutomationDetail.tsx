@@ -111,6 +111,9 @@ export function AutomationDetail({
     automation.workspaceMode === 'new_per_run'
       ? (automation.baseBranch ?? projectDefaultBaseRef ?? 'Project default')
       : workspaceName
+  const pipelineTarget = automation.target.type === 'pipeline' ? automation.target : null
+  const isPipelineTarget = pipelineTarget !== null
+  const targetLabel = isPipelineTarget ? 'Pipeline' : 'Prompt'
 
   return (
     <div className="flex w-full flex-col gap-4">
@@ -171,6 +174,7 @@ export function AutomationDetail({
           label={automation.workspaceMode === 'new_per_run' ? 'Create from' : 'Run location'}
           value={runLocationLabel}
         />
+        <DetailMetric label="Target" value={targetLabel} />
         <DetailMetric
           label="Session"
           value={automation.reuseSession ? 'Reuse live session' : 'Fresh each run'}
@@ -207,14 +211,31 @@ export function AutomationDetail({
       </div>
 
       <div className="rounded-md border border-border/50 bg-muted/20 shadow-sm">
-        <div className="border-b border-border/50 px-3 py-2 text-sm font-medium">Prompt</div>
+        <div className="border-b border-border/50 px-3 py-2 text-sm font-medium">
+          {isPipelineTarget ? 'Pipeline target' : 'Prompt'}
+        </div>
         <div className="px-3 py-3">
-          <div className="min-w-0">
-            <div className="text-[11px] font-medium uppercase text-muted-foreground">Prompt</div>
-            <p className="mt-1 line-clamp-4 whitespace-pre-wrap text-sm text-foreground">
-              {automation.prompt}
-            </p>
-          </div>
+          {isPipelineTarget ? (
+            <div className="grid gap-3 md:grid-cols-2">
+              <DetailMetric label="Template" value={pipelineTarget.pipelineTemplateId} />
+              <DetailMetric label="Repo" value={pipelineTarget.pipelineInput.repoId} />
+              <DetailMetric
+                label="Branches"
+                value={`${pipelineTarget.pipelineInput.sourceBranch} to ${pipelineTarget.pipelineInput.targetBranch}`}
+              />
+              <DetailMetric
+                label="Task source"
+                value={pipelineTarget.pipelineInput.taskSource.type}
+              />
+            </div>
+          ) : (
+            <div className="min-w-0">
+              <div className="text-[11px] font-medium uppercase text-muted-foreground">Prompt</div>
+              <p className="mt-1 line-clamp-4 whitespace-pre-wrap text-sm text-foreground">
+                {automation.prompt}
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </div>

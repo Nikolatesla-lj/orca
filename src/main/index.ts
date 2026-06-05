@@ -1158,7 +1158,11 @@ app.whenReady().then(async () => {
     onPtyStopped: clearProviderPtyState
   })
   runtime = runtimeService
-  automations = new AutomationService(store, { claudeUsage, codexUsage })
+  automations = new AutomationService(store, {
+    claudeUsage,
+    codexUsage,
+    pipelineService: runtimeService.getPipelineService()
+  })
   runtimeService.setAutomationService(automations)
   runtimeService.setAccountServices({ claudeAccounts, codexAccounts, rateLimits })
   runtimeService.setCommitMessageAgentEnvironmentResolvers({

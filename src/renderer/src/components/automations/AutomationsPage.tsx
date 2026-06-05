@@ -88,6 +88,7 @@ import {
 } from './AutomationEditorDialog'
 import { AutomationRunPageFrame } from './AutomationRunPageFrame'
 import { AutomationRunHistory } from './AutomationRunHistory'
+import { PipelinePanel } from './PipelinePanel'
 import { AUTOMATION_TEMPLATES, type AutomationTemplate } from './automation-templates'
 import { getExternalAutomationScheduleDisplay } from './external-automation-schedule-display'
 import { ExternalAutomationManagers } from './ExternalAutomationManagers'
@@ -97,7 +98,7 @@ import { useContextualTour } from '@/components/contextual-tours/use-contextual-
 const AGENTS = AGENT_CATALOG.map((agent) => agent.id)
 const DEFAULT_TIME = '09:00'
 const AUTOMATIONS_CHANGED_EVENT = 'orca:automations-changed'
-type AutomationPaneTab = 'overview' | 'runs'
+type AutomationPaneTab = 'overview' | 'runs' | 'pipelines'
 
 type ExternalAutomationListEntry =
   | {
@@ -226,6 +227,9 @@ function getExternalRunContent(run: ExternalAutomationRun): string {
 }
 
 function getAutomationRunContent(run: AutomationRun): string {
+  if (run.pipelineRunId) {
+    return `Pipeline run: ${run.pipelineRunId}`
+  }
   const savedOutput = run.outputSnapshot?.content.trim()
   if (savedOutput) {
     return run.outputSnapshot?.content ?? savedOutput
@@ -1956,6 +1960,7 @@ export default function AutomationsPage(): React.JSX.Element {
                     Runs
                     <span className="text-xs text-muted-foreground">{selectedRuns.length}</span>
                   </TabsTrigger>
+                  <TabsTrigger value="pipelines">Pipelines</TabsTrigger>
                 </TabsList>
               </div>
 
@@ -2052,6 +2057,10 @@ export default function AutomationsPage(): React.JSX.Element {
                     Select an automation to view runs.
                   </div>
                 )}
+              </TabsContent>
+
+              <TabsContent value="pipelines" className="scrollbar-sleek min-h-0 overflow-auto p-5">
+                <PipelinePanel repos={repos} settings={settings} />
               </TabsContent>
             </Tabs>
           )}

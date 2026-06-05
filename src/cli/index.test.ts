@@ -2017,6 +2017,108 @@ describe('orca cli worktree awareness', () => {
     })
   })
 
+  it('creates a Pipeline target automation from Pipeline run flags', async () => {
+    queueFixtures(
+      callMock,
+      okFixture('req_automation_create', {
+        automation: { id: 'auto-1', name: 'Daily Pipeline' }
+      })
+    )
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await main(
+      [
+        'automations',
+        'create',
+        '--target',
+        'pipeline',
+        '--name',
+        'Daily Pipeline',
+        '--trigger',
+        'daily',
+        '--provider',
+        'codex',
+        '--repo',
+        'repo-1',
+        '--template',
+        'parallel-planner-with-review',
+        '--source-branch',
+        'main',
+        '--target-branch',
+        'pipeline-output',
+        '--task-source',
+        'github',
+        '--task-owner',
+        'Nikolatesla-lj',
+        '--task-repo',
+        'orca',
+        '--prd-issue',
+        '13',
+        '--max-concurrent',
+        '2',
+        '--max-iterations',
+        '2',
+        '--planner-agent',
+        'codex',
+        '--implementer-agent',
+        'codex',
+        '--merger-agent',
+        'codex',
+        '--verify-command',
+        'test -f pipeline-smoke.txt',
+        '--execution-target-type',
+        'local',
+        '--json'
+      ],
+      '/tmp/repo'
+    )
+
+    expect(callMock).toHaveBeenCalledWith('automation.create', {
+      name: 'Daily Pipeline',
+      prompt: '',
+      target: {
+        type: 'pipeline',
+        pipelineTemplateId: 'parallel-planner-with-review',
+        pipelineInput: expect.objectContaining({
+          templateId: 'parallel-planner-with-review',
+          repoId: 'repo-1',
+          sourceBranch: 'main',
+          targetBranch: 'pipeline-output',
+          taskSource: {
+            type: 'github_issues',
+            provider: 'github',
+            owner: 'Nikolatesla-lj',
+            repo: 'orca',
+            prdIssueNumber: 13,
+            pipelinePrdLabel: 'pipeline:prd-13',
+            state: 'open'
+          },
+          maxConcurrent: 2,
+          maxIterations: 2,
+          plannerAgentId: 'codex',
+          implementerAgentId: 'codex',
+          mergerAgentId: 'codex',
+          verifier: {
+            commands: ['test -f pipeline-smoke.txt'],
+            timeoutSeconds: 60
+          },
+          executionTargetType: 'local'
+        })
+      },
+      agentId: 'codex',
+      repo: 'repo-1',
+      workspace: undefined,
+      workspaceMode: 'new_per_run',
+      baseBranch: undefined,
+      reuseSession: undefined,
+      timezone: undefined,
+      enabled: undefined,
+      missedRunGraceMinutes: undefined,
+      rrule: 'FREQ=DAILY;BYHOUR=9;BYMINUTE=0',
+      dtstart: expect.any(Number)
+    })
+  })
+
   it('rejects invalid automation --day values before calling the runtime', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
