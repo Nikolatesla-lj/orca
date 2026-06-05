@@ -1,10 +1,21 @@
 import { z } from 'zod'
+import {
+  isFeatureInteractionId,
+  type FeatureInteractionId
+} from '../../../../shared/feature-interactions'
+import { isFeatureTipId } from '../../../../shared/feature-tips'
 import { isTuiAgent } from '../../../../shared/tui-agent-config'
-import type { PersistedUIState } from '../../../../shared/types'
+import { isTaskProvider } from '../../../../shared/task-providers'
+import { normalizeDisabledTuiAgents } from '../../../../shared/tui-agent-selection'
+import type { PersistedUIState, TaskProvider } from '../../../../shared/types'
 import { defineMethod, type RpcMethod } from '../core'
 
 const NullableString = z.string().nullable()
 const StringArray = z.array(z.string())
+const TaskProviderParam = z.custom<TaskProvider>(isTaskProvider, {
+  message: 'Unknown task provider'
+})
+const FeatureTipIds = z.array(z.custom(isFeatureTipId, { message: 'Unknown feature tip id' }))
 const UnknownRecord = z.record(z.string(), z.unknown())
 const UnknownRecordArray = z.array(UnknownRecord)
 const WorktreeCardProperty = z.enum([
@@ -12,10 +23,13 @@ const WorktreeCardProperty = z.enum([
   'unread',
   'ci',
   'issue',
+  'linear-issue',
   'pr',
   'comment',
+  'ports',
   'inline-agents'
 ])
+const AgentActivityDisplayMode = z.enum(['compact', 'full'])
 const StatusBarItem = z.enum(['claude', 'codex', 'gemini', 'opencode-go', 'ssh', 'resource-usage'])
 const WorkspaceStatusDefinition = z.object({
   id: z.string(),
@@ -46,6 +60,28 @@ const WorkspaceCleanup = z
     dismissals: z.record(z.string(), WorkspaceCleanupDismissal)
   })
   .strict()
+const FeatureInteractionRecord = z
+  .object({
+    firstInteractedAt: z.number().finite().nonnegative(),
+    interactionCount: z.number().int().positive().optional()
+  })
+  .strict()
+const FeatureInteractions = z
+  .record(z.string(), FeatureInteractionRecord)
+  .superRefine((value, ctx) => {
+    for (const id of Object.keys(value)) {
+      if (!isFeatureInteractionId(id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Unknown feature interaction id: ${id}`,
+          path: [id]
+        })
+      }
+    }
+  })
+const FeatureInteractionIdParam = z.custom<FeatureInteractionId>(isFeatureInteractionId, {
+  message: 'Unknown feature interaction id'
+})
 const GitHubProjectRef = z
   .object({
     owner: z.string(),
@@ -74,10 +110,16 @@ const SettingsUpdate = z
         value === null || value === 'blank' || isTuiAgent(value) ? value : undefined
       )
       .optional(),
-    defaultTaskSource: z.enum(['github', 'gitlab', 'linear']).optional(),
+    disabledTuiAgents: z
+      .unknown()
+      .transform((value) => normalizeDisabledTuiAgents(value))
+      .optional(),
+    defaultTaskSource: TaskProviderParam.optional(),
+    visibleTaskProviders: z.array(TaskProviderParam).optional(),
     defaultTaskViewPreset: z
       .enum(['issues', 'my-issues', 'prs', 'my-prs', 'review', 'all'])
       .optional(),
+    agentStatusHooksEnabled: z.boolean().optional(),
     defaultRepoSelection: z.array(z.string()).nullable().optional(),
     defaultLinearTeamSelection: z.array(z.string()).nullable().optional(),
     githubProjects: GitHubProjectSettings.optional()
@@ -90,6 +132,8 @@ const UiUpdate = z
     lastActiveRepoId: NullableString.optional(),
     lastActiveWorktreeId: NullableString.optional(),
     sidebarWidth: z.number().finite().optional(),
+    rightSidebarOpen: z.boolean().optional(),
+    rightSidebarTab: z.enum(['explorer', 'search', 'source-control', 'checks', 'ports']).optional(),
     rightSidebarWidth: z.number().finite().optional(),
     groupBy: z.enum(['none', 'workspace-status', 'repo', 'pr-status']).optional(),
     showWorkspaceLineage: z.boolean().optional(),
@@ -104,9 +148,9 @@ const UiUpdate = z
     uiZoomLevel: z.number().finite().optional(),
     editorFontZoomLevel: z.number().finite().optional(),
     worktreeCardProperties: z.array(WorktreeCardProperty).optional(),
+    agentActivityDisplayMode: AgentActivityDisplayMode.optional(),
     workspaceStatuses: z.array(WorkspaceStatusDefinition).optional(),
     workspaceBoardOpacity: z.number().finite().optional(),
-    workspaceBoardCompact: z.boolean().optional(),
     workspaceBoardColumnWidth: z.number().finite().optional(),
     _workspaceStatusesDefaultOrderMigrated: z.boolean().optional(),
     _workspaceStatusesDefaultWorkflowMigrated: z.boolean().optional(),
@@ -154,7 +198,11 @@ const UiUpdate = z
     customSidekicks: UnknownRecordArray.optional(),
     sidekickSize: z.number().finite().optional(),
     taskResumeState: TaskResumeState.optional(),
-    workspaceCleanup: WorkspaceCleanup.optional()
+    workspaceCleanup: WorkspaceCleanup.optional(),
+    featureTipsSeenIds: FeatureTipIds.optional(),
+    featureInteractions: FeatureInteractions.optional(),
+    contextualToursSeenIds: StringArray.optional(),
+    contextualToursAutoEligible: z.boolean().optional()
   })
   .strict()
   .default({})
@@ -180,6 +228,13 @@ export const CLIENT_UI_METHODS: RpcMethod[] = [
     params: UiUpdate,
     handler: (params, { runtime }) => ({
       ui: runtime.updateUIState(params as Partial<PersistedUIState>)
+    })
+  }),
+  defineMethod({
+    name: 'ui.recordFeatureInteraction',
+    params: FeatureInteractionIdParam,
+    handler: (params, { runtime }) => ({
+      ui: runtime.recordFeatureInteraction(params)
     })
   })
 ]

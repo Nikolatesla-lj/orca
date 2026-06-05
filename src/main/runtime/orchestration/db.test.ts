@@ -1,9 +1,9 @@
 /* eslint-disable max-lines -- Why: DB tests cover messages, tasks, dispatch contexts, decision gates, coordinator runs, and lifecycle in one suite to share the createDb() helper and afterEach cleanup. */
-import Database from 'better-sqlite3'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
+import Database from '../../sqlite/sync-database'
 import { OrchestrationDb } from './db'
 import type { MessageType } from './db'
 
@@ -181,6 +181,45 @@ describe('OrchestrationDb', () => {
 
       expect(task.created_by_terminal_handle).toBe('term_creator')
       expect(d.getTask(task.id)?.created_by_terminal_handle).toBe('term_creator')
+    })
+
+    it('persists generic task execution context', () => {
+      const d = createDb()
+      const task = d.createTask({
+        spec: 'work in a specific workspace',
+        executionContext: {
+          worktreeSelector: 'id:wt_task',
+          preferredTerminalHandle: 'term_existing',
+          title: 'Pipeline task #7'
+        }
+      })
+
+      expect(d.getTaskExecutionContext(task.id)).toEqual({
+        worktreeSelector: 'id:wt_task',
+        preferredTerminalHandle: 'term_existing',
+        title: 'Pipeline task #7'
+      })
+    })
+
+    it('merges task execution context updates', () => {
+      const d = createDb()
+      const task = d.createTask({
+        spec: 'work in a specific workspace',
+        executionContext: {
+          worktreeSelector: 'id:wt_task',
+          title: 'Pipeline task #7'
+        }
+      })
+
+      expect(
+        d.updateTaskExecutionContext(task.id, {
+          preferredTerminalHandle: 'term_pipeline_worker'
+        })
+      ).toEqual({
+        worktreeSelector: 'id:wt_task',
+        preferredTerminalHandle: 'term_pipeline_worker',
+        title: 'Pipeline task #7'
+      })
     })
 
     it('creates a task with deps as pending', () => {
@@ -362,6 +401,21 @@ describe('OrchestrationDb', () => {
       const active = d.getActiveDispatchForTerminal('term_a')
       expect(active?.task_id).toBe(task.id)
       expect(d.getActiveDispatchForTerminal('term_b')).toBeUndefined()
+    })
+
+    it('getLatestDispatchForTerminal returns the most recent completed dispatch', () => {
+      const d = createDb()
+      const firstTask = d.createTask({ spec: 'first' })
+      const first = d.createDispatchContext(firstTask.id, 'term_a')
+      d.completeDispatch(first.id)
+      const secondTask = d.createTask({ spec: 'second' })
+      const second = d.createDispatchContext(secondTask.id, 'term_a')
+      d.completeDispatch(second.id)
+
+      const latest = d.getLatestDispatchForTerminal('term_a')
+      expect(latest?.id).toBe(second.id)
+      expect(latest?.status).toBe('completed')
+      expect(d.getActiveDispatchForTerminal('term_a')).toBeUndefined()
     })
 
     it('circuit breaker trips after 3 failures', () => {

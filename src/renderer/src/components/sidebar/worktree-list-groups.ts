@@ -1,8 +1,10 @@
 /* eslint-disable max-lines -- Why: sidebar row construction keeps every grouping mode in one pure module so reveal, virtualized rendering, and tests share the same flat row contract. */
-import { CircleX, Folder, List, Pin } from 'lucide-react'
+import { CircleX, FolderTree, List, Pin } from 'lucide-react'
 import type React from 'react'
 import type {
+  DetectedWorktree,
   Repo,
+  ProjectGroup,
   Worktree,
   WorktreeLineage,
   WorkspaceStatusDefinition
@@ -23,13 +25,18 @@ import { cloneDefaultWorkspaceStatuses } from '../../../../shared/workspace-stat
 import type { SortBy } from './smart-sort'
 import type { AppState } from '@/store/types'
 import { getGitHubPRCacheKey, getLegacyGitHubPRCacheKey } from '@/store/slices/github-cache-key'
+import { UNGROUPED_PROJECT_GROUP_KEY } from '../../../../shared/project-groups'
+import { getRepoDisplayLabelsByPath } from '@/lib/repo-display-labels'
 
 export { branchName }
 
 export type WorktreeGroupBy = 'none' | 'workspace-status' | 'repo' | 'pr-status'
-export type RepoGroupOrdering = 'manual' | 'visible-worktree-order'
+export type ProjectGroupOrdering = 'manual' | 'visible-worktree-order'
 
-export function getRepoGroupOrdering(groupBy: WorktreeGroupBy, sortBy: SortBy): RepoGroupOrdering {
+export function getProjectGroupOrdering(
+  groupBy: WorktreeGroupBy,
+  sortBy: SortBy
+): ProjectGroupOrdering {
   return groupBy === 'repo' && (sortBy === 'recent' || sortBy === 'smart')
     ? 'visible-worktree-order'
     : 'manual'
@@ -43,6 +50,8 @@ export type GroupHeaderRow = {
   tone: string
   icon?: React.ComponentType<{ className?: string }>
   repo?: Repo
+  projectGroup?: ProjectGroup | { id: null; name: 'Ungrouped'; tabOrder: number }
+  projectGroupDepth?: number
 }
 
 export type WorktreeRow = {
@@ -50,13 +59,30 @@ export type WorktreeRow = {
   worktree: Worktree
   repo: Repo | undefined
   depth: number
+  groupDepth: number
   lineageTrail: boolean[]
   isLastLineageChild: boolean
   lineageChildCount: number
   lineageGroupKey?: string
   lineageCollapsed?: boolean
 }
-export type Row = GroupHeaderRow | WorktreeRow
+
+export type ImportedWorktreesCardCandidate = {
+  repo: Repo
+  hiddenWorktrees: DetectedWorktree[]
+}
+
+export type ImportedWorktreesCardRow = {
+  type: 'imported-worktrees-card'
+  key: string
+  repo: Repo
+  hiddenWorktrees: DetectedWorktree[]
+  placement: 'repo-group' | 'pinned-fallback'
+}
+
+export type Row = GroupHeaderRow | WorktreeRow | ImportedWorktreesCardRow
+
+type OrderedGroupEntry = [string, { label: string; items: Worktree[]; repo?: Repo }]
 
 export type PRGroupKey = 'done' | 'in-review' | 'in-progress' | 'closed'
 
@@ -92,10 +118,14 @@ export const PR_GROUP_META: Record<
   }
 }
 
-export const REPO_GROUP_META = {
+export const PROJECT_GROUP_META = {
   tone: 'text-foreground',
-  icon: Folder
+  icon: FolderTree
 } as const
+
+export function getProjectGroupHeaderKey(groupId: string | null): string {
+  return groupId ? `project-group:${groupId}` : UNGROUPED_PROJECT_GROUP_KEY
+}
 
 export const PINNED_GROUP_KEY = 'pinned'
 
@@ -198,9 +228,9 @@ export function getPRGroupKey(
 function emitPinnedGroup(
   worktrees: Worktree[],
   repoMap: Map<string, Repo>,
-  lineageById: Record<string, WorktreeLineage>,
-  worktreeMap: Map<string, Worktree>,
   collapsedGroups: Set<string>,
+  visibleUnpinnedRepoIds: ReadonlySet<string>,
+  importedWorktreesByRepo: ReadonlyMap<string, ImportedWorktreesCardCandidate>,
   result: Row[]
 ): Set<string> {
   const pinned = worktrees.filter((w) => w.isPinned)
@@ -217,18 +247,41 @@ function emitPinnedGroup(
     icon: PINNED_GROUP_META.icon
   })
   if (!collapsedGroups.has(PINNED_GROUP_KEY)) {
-    appendWorktreeRows(result, pinned, repoMap, lineageById, worktreeMap, {
-      nestLineage: false,
-      collapsedGroups
-    })
+    const lastPinnedIndexByRepoId = new Map<string, number>()
+    pinned.forEach((worktree, index) => lastPinnedIndexByRepoId.set(worktree.repoId, index))
+    for (const [index, worktree] of pinned.entries()) {
+      result.push(buildWorktreeRow(worktree, repoMap, 0, 0, [], false, 0, false))
+      const candidate = importedWorktreesByRepo.get(worktree.repoId)
+      if (
+        candidate &&
+        !visibleUnpinnedRepoIds.has(worktree.repoId) &&
+        lastPinnedIndexByRepoId.get(worktree.repoId) === index
+      ) {
+        result.push(buildImportedWorktreesCardRow(candidate, 'pinned-fallback'))
+      }
+    }
   }
   return new Set(pinned.map((w) => w.id))
+}
+
+function buildImportedWorktreesCardRow(
+  candidate: ImportedWorktreesCardCandidate,
+  placement: ImportedWorktreesCardRow['placement']
+): ImportedWorktreesCardRow {
+  return {
+    type: 'imported-worktrees-card',
+    key: `imported-worktrees-card:${placement}:${candidate.repo.id}`,
+    repo: candidate.repo,
+    hiddenWorktrees: candidate.hiddenWorktrees,
+    placement
+  }
 }
 
 function buildWorktreeRow(
   worktree: Worktree,
   repoMap: Map<string, Repo>,
   depth: number,
+  groupDepth: number,
   lineageTrail: boolean[],
   isLastLineageChild: boolean,
   lineageChildCount: number,
@@ -239,6 +292,7 @@ function buildWorktreeRow(
     worktree,
     repo: repoMap.get(worktree.repoId),
     depth,
+    groupDepth,
     lineageTrail,
     isLastLineageChild,
     lineageChildCount,
@@ -256,12 +310,13 @@ function appendWorktreeRows(
   options: {
     nestLineage: boolean
     collapsedGroups: Set<string>
+    groupDepth: number
   }
 ): void {
-  const { nestLineage, collapsedGroups } = options
+  const { nestLineage, collapsedGroups, groupDepth } = options
   if (!nestLineage) {
     for (const worktree of worktrees) {
-      result.push(buildWorktreeRow(worktree, repoMap, 0, [], false, 0, false))
+      result.push(buildWorktreeRow(worktree, repoMap, 0, groupDepth, [], false, 0, false))
     }
     return
   }
@@ -299,6 +354,7 @@ function appendWorktreeRows(
         worktree,
         repoMap,
         depth,
+        groupDepth,
         lineageTrail,
         isLastChild,
         children.length,
@@ -333,6 +389,30 @@ function appendWorktreeRows(
   }
 }
 
+function orderMainWorktreeFirst(worktrees: Worktree[]): Worktree[] {
+  const mainWorktrees = worktrees.filter((worktree) => worktree.isMainWorktree)
+  if (mainWorktrees.length === 0) {
+    return worktrees
+  }
+  // Why: project groups are scanned by repo; keep the repo's canonical
+  // workspace anchored even when dynamic sorts rank a child workspace first.
+  return [...mainWorktrees, ...worktrees.filter((worktree) => !worktree.isMainWorktree)]
+}
+
+function withRepoSectionDisplayLabels(entries: readonly OrderedGroupEntry[]): OrderedGroupEntry[] {
+  const repos = entries
+    .map((entry) => entry[1].repo)
+    .filter((repo): repo is Repo => repo !== undefined)
+  if (repos.length < 2) {
+    return [...entries]
+  }
+  const labelsByPath = getRepoDisplayLabelsByPath(repos)
+  return entries.map(([key, group]) => [
+    key,
+    group.repo ? { ...group, label: labelsByPath.get(group.repo.path) ?? group.label } : group
+  ])
+}
+
 /**
  * Build the flat row list consumed by the virtualizer.
  * Extracted here to keep WorktreeList.tsx under the line-count lint limit.
@@ -345,22 +425,31 @@ export function buildRows(
   collapsedGroups: Set<string>,
   repoOrder?: Map<string, number>,
   workspaceStatuses: readonly WorkspaceStatusDefinition[] = cloneDefaultWorkspaceStatuses(),
-  repoGroupOrdering: RepoGroupOrdering = 'manual',
+  projectGroupOrdering: ProjectGroupOrdering = 'manual',
   lineageById: Record<string, WorktreeLineage> = {},
   worktreeMap: Map<string, Worktree> = new Map(
     worktrees.map((worktree) => [worktree.id, worktree])
   ),
   nestLineage = false,
-  settings?: AppState['settings']
+  settings?: AppState['settings'],
+  projectGroups: readonly ProjectGroup[] = [],
+  placeholderRepoIds: ReadonlySet<string> = new Set(),
+  importedWorktreesByRepo: ReadonlyMap<string, ImportedWorktreesCardCandidate> = new Map()
 ): Row[] {
   const result: Row[] = []
 
+  const visibleUnpinnedRepoIds = new Set(
+    worktrees.filter((worktree) => !worktree.isPinned).map((worktree) => worktree.repoId)
+  )
+  const visiblePinnedRepoIds = new Set(
+    worktrees.filter((worktree) => worktree.isPinned).map((worktree) => worktree.repoId)
+  )
   const pinnedIds = emitPinnedGroup(
     worktrees,
     repoMap,
-    lineageById,
-    worktreeMap,
     collapsedGroups,
+    visibleUnpinnedRepoIds,
+    importedWorktreesByRepo,
     result
   )
   const unpinned = pinnedIds.size > 0 ? worktrees.filter((w) => !pinnedIds.has(w.id)) : worktrees
@@ -378,7 +467,8 @@ export function buildRows(
       if (!collapsedGroups.has(ALL_GROUP_KEY)) {
         appendWorktreeRows(result, unpinned, repoMap, lineageById, worktreeMap, {
           nestLineage,
-          collapsedGroups
+          collapsedGroups,
+          groupDepth: 0
         })
       }
     }
@@ -409,8 +499,34 @@ export function buildRows(
     }
     grouped.get(key)!.items.push(w)
   }
+  if (groupBy === 'repo') {
+    for (const repoId of placeholderRepoIds) {
+      const repo = repoMap.get(repoId)
+      if (!repo) {
+        continue
+      }
+      const key = `repo:${repoId}`
+      if (!grouped.has(key)) {
+        // Why: repos can arrive before worktree scans, but stale IDs passed by
+        // older snapshots must not render an "Unknown" project header.
+        grouped.set(key, { label: repo.displayName, items: [], repo })
+      }
+    }
+  }
+  if (groupBy === 'repo') {
+    for (const [repoId, candidate] of importedWorktreesByRepo) {
+      const key = `repo:${repoId}`
+      if (!grouped.has(key) && !visiblePinnedRepoIds.has(repoId)) {
+        grouped.set(key, {
+          label: candidate.repo.displayName,
+          items: [],
+          repo: candidate.repo
+        })
+      }
+    }
+  }
 
-  const orderedGroups: [string, { label: string; items: Worktree[]; repo?: Repo }][] = []
+  const orderedGroups: OrderedGroupEntry[] = []
   if (groupBy === 'pr-status') {
     for (const prGroup of PR_GROUP_ORDER) {
       const key = `pr:${prGroup}`
@@ -434,7 +550,7 @@ export function buildRows(
     // visible child. Manual ordering still uses the canonical state.repos
     // order so repo-header drag has a stable source of truth.
     const entries = Array.from(grouped.entries())
-    if (repoGroupOrdering === 'manual' && repoOrder) {
+    if (projectGroupOrdering === 'manual' && repoOrder) {
       const rankFor = (key: string): number => {
         const repoId = key.startsWith('repo:') ? key.slice('repo:'.length) : key
         const rank = repoOrder.get(repoId)
@@ -449,61 +565,170 @@ export function buildRows(
         return a[1].label.localeCompare(b[1].label)
       })
     }
-    orderedGroups.push(...entries)
-  }
-
-  for (const [key, group] of orderedGroups) {
-    const isCollapsed = collapsedGroups.has(key)
-    const repo = group.repo
-    const header =
-      groupBy === 'repo'
-        ? {
-            type: 'header' as const,
-            key,
-            label: group.label,
-            count: group.items.length,
-            tone: REPO_GROUP_META.tone,
-            icon: REPO_GROUP_META.icon,
-            repo
-          }
-        : groupBy === 'workspace-status'
-          ? (() => {
-              const workspaceStatus =
-                getWorkspaceStatusFromGroupKey(key, workspaceStatuses) ??
-                workspaceStatuses[0]?.id ??
-                'in-progress'
-              const definition = workspaceStatuses.find((status) => status.id === workspaceStatus)
-              const meta = getWorkspaceStatusVisualMeta(definition ?? workspaceStatus)
-              return {
-                type: 'header' as const,
-                key,
-                label: definition?.label ?? workspaceStatus,
-                count: group.items.length,
-                tone: meta.tone,
-                icon: meta.icon
-              }
-            })()
-          : (() => {
-              const prGroup = key.replace(/^pr:/, '') as PRGroupKey
-              const meta = PR_GROUP_META[prGroup]
-              return {
-                type: 'header' as const,
-                key,
-                label: meta.label,
-                count: group.items.length,
-                tone: meta.tone,
-                icon: meta.icon
-              }
-            })()
-
-    result.push(header)
-    if (!isCollapsed) {
-      appendWorktreeRows(result, group.items, repoMap, lineageById, worktreeMap, {
-        nestLineage,
-        collapsedGroups
-      })
+    // Why: large imported repo sets can have one group per repo; spreading
+    // those entries into push can exceed V8's argument limit.
+    for (const entry of entries) {
+      orderedGroups.push(entry)
     }
   }
+
+  const appendOrderedGroups = (
+    groupsToAppend: OrderedGroupEntry[],
+    projectGroupDepth = 0
+  ): void => {
+    for (const [key, group] of groupsToAppend) {
+      const isCollapsed = collapsedGroups.has(key)
+      const repo = group.repo
+      const header =
+        groupBy === 'repo'
+          ? {
+              type: 'header' as const,
+              key,
+              label: group.label,
+              count: group.items.length,
+              tone: PROJECT_GROUP_META.tone,
+              icon: PROJECT_GROUP_META.icon,
+              repo,
+              projectGroupDepth
+            }
+          : groupBy === 'workspace-status'
+            ? (() => {
+                const workspaceStatus =
+                  getWorkspaceStatusFromGroupKey(key, workspaceStatuses) ??
+                  workspaceStatuses[0]?.id ??
+                  'in-progress'
+                const definition = workspaceStatuses.find((status) => status.id === workspaceStatus)
+                const meta = getWorkspaceStatusVisualMeta(definition ?? workspaceStatus)
+                return {
+                  type: 'header' as const,
+                  key,
+                  label: definition?.label ?? workspaceStatus,
+                  count: group.items.length,
+                  tone: meta.tone,
+                  icon: meta.icon
+                }
+              })()
+            : (() => {
+                const prGroup = key.replace(/^pr:/, '') as PRGroupKey
+                const meta = PR_GROUP_META[prGroup]
+                return {
+                  type: 'header' as const,
+                  key,
+                  label: meta.label,
+                  count: group.items.length,
+                  tone: meta.tone,
+                  icon: meta.icon
+                }
+              })()
+
+      result.push(header)
+      if (!isCollapsed) {
+        if (groupBy === 'repo' && repo) {
+          const candidate = importedWorktreesByRepo.get(repo.id)
+          if (candidate) {
+            result.push(buildImportedWorktreesCardRow(candidate, 'repo-group'))
+          }
+        }
+        const items = groupBy === 'repo' ? orderMainWorktreeFirst(group.items) : group.items
+        appendWorktreeRows(result, items, repoMap, lineageById, worktreeMap, {
+          nestLineage,
+          collapsedGroups,
+          groupDepth: projectGroupDepth
+        })
+      }
+    }
+  }
+
+  if (groupBy !== 'repo' || projectGroups.length === 0) {
+    appendOrderedGroups(
+      groupBy === 'repo' ? withRepoSectionDisplayLabels(orderedGroups) : orderedGroups
+    )
+    return result
+  }
+
+  const groupByProjectGroupId = new Map<string | null, OrderedGroupEntry[]>()
+  for (const entry of orderedGroups) {
+    const repo = entry[1].repo
+    const projectGroupId = repo?.projectGroupId ?? null
+    const list = groupByProjectGroupId.get(projectGroupId) ?? []
+    list.push(entry)
+    groupByProjectGroupId.set(projectGroupId, list)
+  }
+
+  const sortRepoEntriesWithinGroup = (entries: OrderedGroupEntry[]): OrderedGroupEntry[] => {
+    if (projectGroupOrdering !== 'manual') {
+      return entries
+    }
+    return [...entries].sort((left, right) => {
+      const leftOrder = left[1].repo?.projectGroupOrder
+      const rightOrder = right[1].repo?.projectGroupOrder
+      const leftRank =
+        typeof leftOrder === 'number' && Number.isFinite(leftOrder)
+          ? leftOrder
+          : Number.POSITIVE_INFINITY
+      const rightRank =
+        typeof rightOrder === 'number' && Number.isFinite(rightOrder)
+          ? rightOrder
+          : Number.POSITIVE_INFINITY
+      return leftRank - rightRank
+    })
+  }
+
+  const projectGroupsById = new Map(projectGroups.map((group) => [group.id, group]))
+  const childGroupsByParentId = new Map<string | null, ProjectGroup[]>()
+  for (const group of projectGroups) {
+    const parentId =
+      group.parentGroupId && projectGroupsById.has(group.parentGroupId) ? group.parentGroupId : null
+    const children = childGroupsByParentId.get(parentId) ?? []
+    children.push(group)
+    childGroupsByParentId.set(parentId, children)
+  }
+  for (const groups of childGroupsByParentId.values()) {
+    groups.sort(
+      (left, right) => left.tabOrder - right.tabOrder || left.name.localeCompare(right.name)
+    )
+  }
+
+  const getProjectGroupSubtreeCount = (groupId: string): number => {
+    const directCount = groupByProjectGroupId.get(groupId)?.length ?? 0
+    const children = childGroupsByParentId.get(groupId) ?? []
+    return children.reduce(
+      (count, child) => count + getProjectGroupSubtreeCount(child.id),
+      directCount
+    )
+  }
+
+  const appendProjectGroup = (projectGroup: ProjectGroup, depth: number): void => {
+    const repoEntries = sortRepoEntriesWithinGroup(groupByProjectGroupId.get(projectGroup.id) ?? [])
+    const childGroups = childGroupsByParentId.get(projectGroup.id) ?? []
+    const key = getProjectGroupHeaderKey(projectGroup.id)
+    result.push({
+      type: 'header',
+      key,
+      label: projectGroup.name,
+      count: getProjectGroupSubtreeCount(projectGroup.id),
+      tone: PROJECT_GROUP_META.tone,
+      icon: PROJECT_GROUP_META.icon,
+      projectGroup,
+      projectGroupDepth: depth
+    })
+    if (!collapsedGroups.has(key)) {
+      appendOrderedGroups(withRepoSectionDisplayLabels(repoEntries), depth + 1)
+      for (const childGroup of childGroups) {
+        appendProjectGroup(childGroup, depth + 1)
+      }
+    }
+    groupByProjectGroupId.delete(projectGroup.id)
+  }
+
+  for (const projectGroup of childGroupsByParentId.get(null) ?? []) {
+    appendProjectGroup(projectGroup, 0)
+  }
+
+  appendOrderedGroups(
+    withRepoSectionDisplayLabels(sortRepoEntriesWithinGroup(groupByProjectGroupId.get(null) ?? [])),
+    0
+  )
 
   return result
 }
@@ -526,4 +751,41 @@ export function getGroupKeyForWorktree(
     return `repo:${worktree.repoId}`
   }
   return `pr:${getPRGroupKey(worktree, repoMap, prCache, settings)}`
+}
+
+export function getGroupKeysForWorktree(
+  groupBy: WorktreeGroupBy,
+  worktree: Worktree,
+  repoMap: Map<string, Repo>,
+  prCache: Record<string, unknown> | null,
+  workspaceStatuses: readonly WorkspaceStatusDefinition[] = cloneDefaultWorkspaceStatuses(),
+  settings?: AppState['settings'],
+  projectGroups: readonly ProjectGroup[] = []
+): string[] {
+  const groupKey = getGroupKeyForWorktree(
+    groupBy,
+    worktree,
+    repoMap,
+    prCache,
+    workspaceStatuses,
+    settings
+  )
+  if (!groupKey) {
+    return []
+  }
+  if (groupBy !== 'repo') {
+    return [groupKey]
+  }
+  const repo = repoMap.get(worktree.repoId)
+  const groupIds: string[] = []
+  const groupsById = new Map(projectGroups.map((group) => [group.id, group]))
+  const visited = new Set<string>()
+  let currentGroupId = repo?.projectGroupId ?? null
+  while (currentGroupId && !visited.has(currentGroupId)) {
+    visited.add(currentGroupId)
+    groupIds.unshift(currentGroupId)
+    const parentId = groupsById.get(currentGroupId)?.parentGroupId ?? null
+    currentGroupId = parentId && groupsById.has(parentId) ? parentId : null
+  }
+  return [...groupIds.map((id) => getProjectGroupHeaderKey(id)), groupKey]
 }

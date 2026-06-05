@@ -4,14 +4,19 @@ import type {
   Automation,
   AutomationDispatchRequest,
   AutomationDispatchResult,
+  AutomationPrecheckResult,
   AutomationRun,
-  AutomationRunStatus,
-  AutomationRunUsage
+  AutomationRunStatus
 } from '../../shared/automations-types'
 import type { ClaudeUsageStore } from '../claude-usage/store'
 import type { CodexUsageStore } from '../codex-usage/store'
+import type { PipelineService } from '../pipelines/service'
+import { splitWorktreeIdForFilesystem } from '../../shared/worktree-id'
+import { runAutomationPrecheck } from './precheck-runner'
+import { collectAutomationRunUsage } from './usage-collector'
 
 const DEFAULT_TICK_MS = 60 * 1000
+type PipelineRunner = Pick<PipelineService, 'run'>
 
 export class AutomationService {
   private readonly store: Store
@@ -22,15 +27,22 @@ export class AutomationService {
   private evaluating = false
   private readonly claudeUsage: ClaudeUsageStore | null
   private readonly codexUsage: CodexUsageStore | null
+  private readonly pipelineService: PipelineRunner | null
 
   constructor(
     store: Store,
-    opts: { tickMs?: number; claudeUsage?: ClaudeUsageStore; codexUsage?: CodexUsageStore } = {}
+    opts: {
+      tickMs?: number
+      claudeUsage?: ClaudeUsageStore
+      codexUsage?: CodexUsageStore
+      pipelineService?: PipelineRunner
+    } = {}
   ) {
     this.store = store
     this.tickMs = opts.tickMs ?? DEFAULT_TICK_MS
     this.claudeUsage = opts.claudeUsage ?? null
     this.codexUsage = opts.codexUsage ?? null
+    this.pipelineService = opts.pipelineService ?? null
   }
 
   setWebContents(webContents: WebContents | null): void {
@@ -72,6 +84,43 @@ export class AutomationService {
     return await this.requestDispatch(automation, run)
   }
 
+  async runPrecheck(automationId: string, runId: string): Promise<AutomationPrecheckResult | null> {
+    const automation = this.store.listAutomations().find((entry) => entry.id === automationId)
+    if (!automation) {
+      throw new Error('Automation not found.')
+    }
+    const run = this.store.listAutomationRuns(automationId).find((entry) => entry.id === runId)
+    if (!run) {
+      throw new Error('Automation run not found.')
+    }
+    if (run.trigger !== 'scheduled' || !automation.precheck) {
+      return null
+    }
+    const cwd = this.getPrecheckCwd(automation)
+    if (!cwd) {
+      return {
+        command: automation.precheck.command,
+        exitCode: null,
+        timedOut: false,
+        durationMs: 0,
+        stdout: '',
+        stderr: '',
+        stdoutTruncated: false,
+        stderrTruncated: false,
+        error: 'Automation precheck target is no longer available.',
+        startedAt: Date.now(),
+        completedAt: Date.now()
+      }
+    }
+    return await runAutomationPrecheck({
+      precheck: automation.precheck,
+      target:
+        automation.executionTargetType === 'ssh'
+          ? { type: 'ssh', cwd, connectionId: automation.executionTargetId }
+          : { type: 'local', cwd }
+    })
+  }
+
   async markDispatchResult(result: AutomationDispatchResult): Promise<AutomationRun> {
     const run = this.store.updateAutomationRun(result)
     if (!isFinalRunStatus(run.status)) {
@@ -84,7 +133,13 @@ export class AutomationService {
     if (run.usage) {
       return run
     }
-    const usage = await this.collectRunUsage(run)
+    const automation = this.store.listAutomations().find((entry) => entry.id === run.automationId)
+    const usage = await collectAutomationRunUsage({
+      automation,
+      run,
+      claudeUsage: this.claudeUsage,
+      codexUsage: this.codexUsage
+    })
     return this.store.updateAutomationRun({
       runId: run.id,
       status: run.status,
@@ -93,83 +148,6 @@ export class AutomationService {
       usage,
       error: run.error
     })
-  }
-
-  private async collectRunUsage(run: AutomationRun): Promise<AutomationRunUsage> {
-    const automation = this.store.listAutomations().find((entry) => entry.id === run.automationId)
-    const collectedAt = Date.now()
-    const unavailable = (
-      provider: AutomationRunUsage['provider'],
-      unavailableReason: AutomationRunUsage['unavailableReason'],
-      unavailableMessage: string
-    ): AutomationRunUsage => ({
-      status: 'unavailable',
-      provider,
-      model: null,
-      inputTokens: null,
-      outputTokens: null,
-      cacheReadTokens: null,
-      cacheWriteTokens: null,
-      reasoningOutputTokens: null,
-      totalTokens: null,
-      estimatedCostUsd: null,
-      estimatedCostSource: null,
-      providerSessionId: null,
-      attribution: null,
-      collectedAt,
-      unavailableReason,
-      unavailableMessage
-    })
-
-    if (!automation || run.status !== 'completed') {
-      return unavailable(
-        automation?.agentId === 'codex'
-          ? 'codex'
-          : automation?.agentId === 'claude'
-            ? 'claude'
-            : null,
-        'run_not_finished',
-        'Usage is only collected for completed automation runs.'
-      )
-    }
-    if (automation.executionTargetType === 'ssh') {
-      return unavailable(
-        automation.agentId === 'codex'
-          ? 'codex'
-          : automation.agentId === 'claude'
-            ? 'claude'
-            : null,
-        'remote_usage_unavailable',
-        'Remote automation usage is not available from local usage logs.'
-      )
-    }
-    if (automation.agentId === 'claude') {
-      if (!this.claudeUsage) {
-        return unavailable('claude', 'scan_failed', 'Claude usage store is unavailable.')
-      }
-      return this.claudeUsage.getAutomationRunUsage({
-        worktreeId: run.workspaceId,
-        terminalSessionId: run.terminalSessionId,
-        startedAt: run.startedAt,
-        completedAt: collectedAt
-      })
-    }
-    if (automation.agentId === 'codex') {
-      if (!this.codexUsage) {
-        return unavailable('codex', 'scan_failed', 'Codex usage store is unavailable.')
-      }
-      return this.codexUsage.getAutomationRunUsage({
-        worktreeId: run.workspaceId,
-        terminalSessionId: run.terminalSessionId,
-        startedAt: run.startedAt,
-        completedAt: collectedAt
-      })
-    }
-    return unavailable(
-      null,
-      'provider_unsupported',
-      'This agent does not report usage to Orca yet.'
-    )
   }
 
   private async evaluateDueRuns(): Promise<void> {
@@ -188,6 +166,16 @@ export class AutomationService {
     } finally {
       this.evaluating = false
     }
+  }
+
+  private getPrecheckCwd(automation: Automation): string | null {
+    if (automation.workspaceMode === 'existing') {
+      const parsed = automation.workspaceId
+        ? splitWorktreeIdForFilesystem(automation.workspaceId)
+        : null
+      return parsed?.worktreePath ?? null
+    }
+    return this.store.getRepo(automation.projectId)?.path ?? null
   }
 
   private async evaluateAutomation(automation: Automation, now: number): Promise<void> {
@@ -217,6 +205,35 @@ export class AutomationService {
     automation: Automation,
     run: AutomationRun
   ): Promise<AutomationRun> {
+    if (automation.target.type === 'pipeline') {
+      if (!this.pipelineService) {
+        return this.store.updateAutomationRun({
+          runId: run.id,
+          status: 'dispatch_failed',
+          workspaceId: null,
+          error: 'Pipeline service is unavailable.'
+        })
+      }
+      try {
+        const result = this.pipelineService.run(automation.target.pipelineInput, {
+          automationRunId: run.id
+        })
+        return this.store.updateAutomationRun({
+          runId: run.id,
+          status: 'dispatched',
+          workspaceId: null,
+          pipelineRunId: result.run.id,
+          error: null
+        })
+      } catch (err) {
+        return this.store.updateAutomationRun({
+          runId: run.id,
+          status: 'dispatch_failed',
+          workspaceId: null,
+          error: err instanceof Error ? err.message : 'Pipeline run dispatch failed.'
+        })
+      }
+    }
     const webContents = this.webContents
     if (!webContents || webContents.isDestroyed() || !this.rendererReady) {
       return this.store.updateAutomationRun({
@@ -242,6 +259,7 @@ function isFinalRunStatus(status: AutomationRunStatus): boolean {
   return (
     status === 'completed' ||
     status === 'dispatch_failed' ||
+    status === 'skipped_precheck' ||
     status === 'skipped_missed' ||
     status === 'skipped_unavailable' ||
     status === 'skipped_needs_interactive_auth'

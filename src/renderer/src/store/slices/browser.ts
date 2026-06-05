@@ -27,6 +27,7 @@ import {
   getActiveRuntimeTarget,
   type RuntimeClientTarget
 } from '@/runtime/runtime-rpc-client'
+import { toRuntimeWorktreeSelector } from '@/runtime/runtime-worktree-selector'
 import type {
   BrowserDetectProfilesResult,
   BrowserProfileClearDefaultCookiesResult,
@@ -109,6 +110,7 @@ export type BrowserSlice = {
     url: string,
     options?: CreateBrowserTabOptions
   ) => BrowserWorkspace
+  openNewBrowserTabInActiveWorkspace: (groupId: string) => Promise<void>
   closeBrowserTab: (tabId: string) => void
   shutdownWorktreeBrowsers: (worktreeId: string) => Promise<void>
   reopenClosedBrowserTab: (worktreeId: string) => BrowserWorkspace | null
@@ -230,7 +232,7 @@ function closeRemoteBrowserPageInOwningEnvironment(
   void callRuntimeRpc(
     target,
     'browser.tabClose',
-    { worktree: `id:${worktreeId}`, page: handle.remotePageId },
+    { worktree: toRuntimeWorktreeSelector(worktreeId), page: handle.remotePageId },
     { timeoutMs: 15_000 }
   ).catch(() => {})
 }
@@ -513,10 +515,39 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
       state.createUnifiedTab(worktreeId, 'browser', {
         entityId: workspaceId,
         label: browserTab.title,
-        targetGroupId: options?.targetGroupId
+        targetGroupId: options?.targetGroupId,
+        activate: options?.activate ?? true
       })
     }
     return browserTab
+  },
+
+  openNewBrowserTabInActiveWorkspace: async (groupId) => {
+    const state = get()
+    const worktreeId = state.activeWorktreeId
+    if (!worktreeId) {
+      return
+    }
+    const defaultUrl = state.browserDefaultUrl ?? 'about:blank'
+    const pairedWebRuntimeEnvironmentId = (globalThis as { __ORCA_WEB_CLIENT__?: boolean })
+      .__ORCA_WEB_CLIENT__
+      ? state.settings?.activeRuntimeEnvironmentId?.trim()
+      : null
+    if (pairedWebRuntimeEnvironmentId) {
+      const { createWebRuntimeSessionBrowserTab } = await import('@/runtime/web-runtime-session')
+      await createWebRuntimeSessionBrowserTab({
+        worktreeId,
+        environmentId: pairedWebRuntimeEnvironmentId,
+        url: defaultUrl,
+        targetGroupId: groupId
+      })
+      return
+    }
+    get().createBrowserTab(worktreeId, defaultUrl, {
+      title: 'New Browser Tab',
+      focusAddressBar: true,
+      targetGroupId: groupId
+    })
   },
 
   closeBrowserTab: (tabId) => {
@@ -730,13 +761,13 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
       })
     }
 
-    // Activate the originally-active page if it wasn't the first one
+    // Why: duplicate URLs are valid browser pages; restoring by URL can select
+    // the wrong copy. The restore path preserves page order, so map by index.
     const activePageId = snap.activePageId
     if (activePageId) {
       const restoredPages = get().browserPagesByWorkspace[restored.id] ?? []
-      const targetPage = restoredPages.find(
-        (p) => p.url === pages.find((orig) => orig.id === activePageId)?.url
-      )
+      const activePageIndex = pages.findIndex((orig) => orig.id === activePageId)
+      const targetPage = activePageIndex >= 0 ? restoredPages[activePageIndex] : null
       if (targetPage && targetPage.id !== restoredPages[0]?.id) {
         get().setActiveBrowserPage(restored.id, targetPage.id)
       }
@@ -1222,7 +1253,14 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
 
   setBrowserTabUrl: (pageId, url) => get().setBrowserPageUrl(pageId, url),
 
-  setBrowserPageUrl: (pageId, url) =>
+  setBrowserPageUrl: (pageId, url) => {
+    const nextUrl = normalizeUrl(url)
+    if (nextUrl !== 'about:blank' && nextUrl !== ORCA_BROWSER_BLANK_URL) {
+      const currentPage = findPage(get().browserPagesByWorkspace, pageId)
+      if (currentPage) {
+        get().recordFeatureInteraction?.('browser')
+      }
+    }
     set((s) => {
       const page = findPage(s.browserPagesByWorkspace, pageId)
       if (!page) {
@@ -1232,7 +1270,6 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
       if (!workspace) {
         return s
       }
-      const nextUrl = normalizeUrl(url)
       // Why: annotations point at DOM coordinates from one loaded document.
       // A real URL change invalidates those markers and copied context.
       const shouldClearAnnotations = normalizeUrl(page.url) !== nextUrl
@@ -1269,7 +1306,8 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
           ? { browserAnnotationsByPageId: nextBrowserAnnotationsByPageId }
           : {})
       }
-    }),
+    })
+  },
 
   setRemoteBrowserPageHandle: (pageId, handle) => {
     set((s) => ({
@@ -1538,7 +1576,8 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
         if (!exists) {
           state.createUnifiedTab(worktreeId, 'browser', {
             entityId: bt.id,
-            label: bt.title
+            label: bt.title,
+            recordInteraction: false
           })
         }
       }
@@ -1687,6 +1726,7 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
         profileId
       })) as BrowserCookieImportResult
       if (result.ok) {
+        get().recordFeatureInteraction?.('cookie-import')
         set({
           browserSessionImportState: {
             profileId,
@@ -1830,6 +1870,7 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
         browserProfile
       })) as BrowserCookieImportResult
       if (result.ok) {
+        get().recordFeatureInteraction?.('cookie-import')
         set({
           browserSessionImportState: {
             profileId,
@@ -1886,6 +1927,7 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
     try {
       const ok = await window.api.browser.sessionClearDefaultCookies()
       if (ok) {
+        get().recordFeatureInteraction?.('cookie-import')
         await get().fetchBrowserSessionProfiles()
       }
       return ok

@@ -63,11 +63,23 @@ function hydrateUnifiedFormat(
     const persistedArchitectureIds = new Set(
       (session.architectureTabsByWorktree?.[worktreeId] ?? []).map((tab) => tab.id)
     )
+    const generatedTitleByTerminalId = new Map(
+      (session.tabsByWorktree[worktreeId] ?? [])
+        .filter((tab) => tab.generatedTitle?.trim())
+        .map((tab) => [tab.id, tab.generatedTitle!.trim()])
+    )
     tabsByWorktree[worktreeId] = [...tabs]
       .map((tab) => ({
         ...tab,
         entityId: tab.entityId ?? tab.id
       }))
+      .map((tab) => {
+        if (tab.contentType !== 'terminal' || tab.generatedLabel?.trim()) {
+          return tab
+        }
+        const generatedLabel = generatedTitleByTerminalId.get(tab.entityId)
+        return generatedLabel ? { ...tab, generatedLabel } : tab
+      })
       .filter((tab) => {
         if (tab.contentType === 'terminal') {
           // Why: old web-client sessions could persist host surface ids
@@ -190,6 +202,7 @@ function hydrateLegacyFormat(
         worktreeId,
         contentType: 'terminal',
         label: tt.title,
+        ...(tt.generatedTitle?.trim() ? { generatedLabel: tt.generatedTitle.trim() } : {}),
         customLabel: tt.customTitle,
         color: tt.color,
         sortOrder: tt.sortOrder,

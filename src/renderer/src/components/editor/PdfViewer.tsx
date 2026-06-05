@@ -1,3 +1,4 @@
+/* oxlint-disable react-doctor/no-adjust-state-on-prop-change -- Why: PDF loading drives pdf.js document/viewer instances and decode errors through an external worker lifecycle. */
 import { type JSX, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Image as ImageIcon, RotateCcw, Search, ZoomIn, ZoomOut } from 'lucide-react'
 import * as pdfjsLib from 'pdfjs-dist'
@@ -86,11 +87,12 @@ export default function PdfViewer({ content, filePath }: PdfViewerProps): JSX.El
 
     linkService.setViewer(viewer)
 
-    eventBus.on('scalechanging', (evt: { scale: number }) => {
+    const handleScaleChanging = (evt: { scale: number }): void => {
       if (!cancelled) {
         setScale(evt.scale)
       }
-    })
+    }
+    eventBus.on('scalechanging', handleScaleChanging)
 
     const loadingTask = pdfjsLib.getDocument({ data: bytes })
 
@@ -128,6 +130,9 @@ export default function PdfViewer({ content, filePath }: PdfViewerProps): JSX.El
       // renders, clears the find controller, and dispatches pagesdestroy.
       // The runtime accepts null but the types only declare PDFDocumentProxy.
       viewer.setDocument(null as unknown as pdfjsLib.PDFDocumentProxy)
+      // Why: pdf.js EventBus retains callbacks by event name; unregister the
+      // scale listener so repeated PDF opens do not retain stale component state.
+      eventBus.off('scalechanging', handleScaleChanging)
       eventBusRef.current = null
       findControllerRef.current = null
       pdfViewerRef.current = null
@@ -135,6 +140,10 @@ export default function PdfViewer({ content, filePath }: PdfViewerProps): JSX.El
   }, [cleanedContent])
 
   const closeFindBar = useCallback(() => {
+    const eventBus = eventBusRef.current
+    if (eventBus) {
+      eventBus.dispatch('findbarclose', { source: null })
+    }
     setFindOpen(false)
   }, [])
 

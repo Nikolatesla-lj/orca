@@ -31,6 +31,8 @@ export type KeybindingActionId =
   | 'app.forceReload'
   | 'file.exportPdf'
   | 'workspace.create'
+  | 'workspace.rename'
+  | 'workspace.delete'
   | 'voice.dictation'
   | 'view.tasks'
   | 'sidebar.left.toggle'
@@ -50,7 +52,9 @@ export type KeybindingActionId =
   | 'tab.newTerminal'
   | 'tab.newBrowser'
   | 'tab.newMarkdown'
+  | 'tab.openMarkdown'
   | 'tab.close'
+  | 'tab.rename'
   | 'tab.reopenClosed'
   | 'tab.nextSameType'
   | 'tab.previousSameType'
@@ -68,10 +72,11 @@ export type KeybindingActionId =
   | 'editor.save'
   | 'editor.markdownPreview'
   | 'editor.copyContext'
+  | 'fileExplorer.undo'
+  | 'fileExplorer.redo'
   | 'fileExplorer.copyPath'
   | 'fileExplorer.copyRelativePath'
   | 'fileExplorer.delete'
-  | 'composer.addAttachment'
   | 'settings.search'
   | 'terminal.copySelection'
   | 'terminal.paste'
@@ -79,6 +84,7 @@ export type KeybindingActionId =
   | 'terminal.clear'
   | 'terminal.focusNextPane'
   | 'terminal.focusPreviousPane'
+  | 'terminal.equalizePaneSizes'
   | 'terminal.expandPane'
   | 'terminal.closePane'
   | 'terminal.splitRight'
@@ -227,6 +233,42 @@ export const KEYBINDING_DEFINITIONS: readonly KeybindingDefinition[] = [
     defaultBindings: platformBindings(['Mod+N', 'Mod+Shift+N'])
   },
   {
+    id: 'workspace.rename',
+    title: 'Rename worktree',
+    group: 'Global',
+    scope: 'global',
+    conflictGroup: 'workspace-shell',
+    searchKeywords: ['shortcut', 'global', 'worktree', 'rename', 'workspace', 'title'],
+    // Why: macOS only. On Windows/Linux Ctrl+Alt+R has no safe default, and the
+    // chord families there (Ctrl+R reverse-search, Ctrl+Shift+R reload) are
+    // taken, so users bind it explicitly in Settings.
+    defaultBindings: {
+      darwin: ['Mod+Alt+R'],
+      linux: [],
+      win32: []
+    }
+  },
+  {
+    id: 'workspace.delete',
+    title: 'Delete Workspace',
+    group: 'Global',
+    scope: 'global',
+    searchKeywords: [
+      'shortcut',
+      'global',
+      'workspace',
+      'current workspace',
+      'worktree',
+      'delete',
+      'remove',
+      'trash'
+    ],
+    // Why: ship the command now without claiming a default chord; user
+    // overrides still win automatically when a future default is assigned.
+    defaultBindings: platformBindings([]),
+    allowInTerminal: true
+  },
+  {
     id: 'voice.dictation',
     title: 'Dictation',
     group: 'Global',
@@ -316,7 +358,7 @@ export const KEYBINDING_DEFINITIONS: readonly KeybindingDefinition[] = [
     group: 'Global',
     scope: 'global',
     searchKeywords: ['shortcut', 'floating terminal', 'terminal'],
-    defaultBindings: platformBindings(['Mod+Alt+T']),
+    defaultBindings: platformBindings(['Mod+Alt+A']),
     allowInTerminal: true
   },
   {
@@ -386,12 +428,36 @@ export const KEYBINDING_DEFINITIONS: readonly KeybindingDefinition[] = [
     defaultBindings: platformBindings(['Mod+Shift+M'])
   },
   {
+    id: 'tab.openMarkdown',
+    title: 'Open markdown tab',
+    group: 'Tabs',
+    scope: 'tabs',
+    searchKeywords: ['shortcut', 'tab', 'markdown', 'file', 'open'],
+    defaultBindings: platformBindings(['Mod+Shift+O'])
+  },
+  {
     id: 'tab.close',
     title: 'Close active tab',
     group: 'Tabs',
     scope: 'tabs',
     searchKeywords: ['shortcut', 'close', 'tab', 'pane'],
     defaultBindings: platformBindings(['Mod+W'])
+  },
+  {
+    id: 'tab.rename',
+    title: 'Rename active tab',
+    group: 'Tabs',
+    scope: 'tabs',
+    conflictGroup: 'workspace-shell',
+    searchKeywords: ['shortcut', 'tab', 'rename', 'title', 'label'],
+    // Why: macOS only. Cmd+R is free in the app/terminal focus zone (the
+    // browser pane owns its own Cmd+R reload). On Windows/Linux Ctrl+R is the
+    // shell reverse-search, so it is left unbound for explicit user binding.
+    defaultBindings: {
+      darwin: ['Mod+R'],
+      linux: [],
+      win32: []
+    }
   },
   {
     id: 'tab.reopenClosed',
@@ -533,6 +599,26 @@ export const KEYBINDING_DEFINITIONS: readonly KeybindingDefinition[] = [
     defaultBindings: platformBindings(['Mod+Alt+C'])
   },
   {
+    id: 'fileExplorer.undo',
+    title: 'Undo file operation',
+    group: 'File Explorer',
+    scope: 'fileExplorer',
+    searchKeywords: ['shortcut', 'file explorer', 'undo'],
+    defaultBindings: platformBindings(['Mod+Z'])
+  },
+  {
+    id: 'fileExplorer.redo',
+    title: 'Redo file operation',
+    group: 'File Explorer',
+    scope: 'fileExplorer',
+    searchKeywords: ['shortcut', 'file explorer', 'redo'],
+    defaultBindings: {
+      darwin: ['Mod+Shift+Z'],
+      linux: ['Mod+Shift+Z', 'Ctrl+Y'],
+      win32: ['Mod+Shift+Z', 'Ctrl+Y']
+    }
+  },
+  {
     id: 'fileExplorer.copyPath',
     title: 'Copy file path',
     group: 'File Explorer',
@@ -564,14 +650,6 @@ export const KEYBINDING_DEFINITIONS: readonly KeybindingDefinition[] = [
       win32: ['Delete']
     },
     allowBareKeybindings: true
-  },
-  {
-    id: 'composer.addAttachment',
-    title: 'Add Attachment',
-    group: 'Composer',
-    scope: 'composer',
-    searchKeywords: ['shortcut', 'composer', 'attachment', 'upload'],
-    defaultBindings: platformBindings(['Mod+U'])
   },
   {
     id: 'settings.search',
@@ -632,6 +710,14 @@ export const KEYBINDING_DEFINITIONS: readonly KeybindingDefinition[] = [
     scope: 'terminal',
     searchKeywords: ['shortcut', 'pane', 'focus', 'previous'],
     defaultBindings: platformBindings(['Mod+BracketLeft'])
+  },
+  {
+    id: 'terminal.equalizePaneSizes',
+    title: 'Equalize pane sizes',
+    group: 'Terminal Panes',
+    scope: 'terminal',
+    searchKeywords: ['shortcut', 'pane', 'split', 'equalize', 'resize', 'balance', 'size'],
+    defaultBindings: platformBindings([])
   },
   {
     id: 'terminal.expandPane',
@@ -716,6 +802,9 @@ function hasModifier(
 }
 
 function normalizeKeyToken(token: string): string | null {
+  if (token === ' ') {
+    return 'Space'
+  }
   const trimmed = token.trim()
   if (!trimmed) {
     return null
@@ -776,6 +865,8 @@ function normalizeKeyToken(token: string): string | null {
     BRACKETRIGHT: 'BracketRight',
     NUMPADADD: 'NumpadAdd',
     NUMPADSUBTRACT: 'NumpadSubtract',
+    ADD: 'NumpadAdd',
+    SUBTRACT: 'NumpadSubtract',
     COMMA: 'Comma',
     PERIOD: 'Period',
     SLASH: 'Slash',
@@ -955,12 +1046,6 @@ function normalizeKeybindingArrayWithOptions(
   return normalized
 }
 
-export function normalizeKeybindingArray(
-  input: readonly string[]
-): KeybindingValidationResult | string[] {
-  return normalizeKeybindingArrayWithOptions(input)
-}
-
 function normalizeOptionsForAction(actionId: KeybindingActionId): NormalizeKeybindingOptions {
   return {
     allowBareKeybindings: DEFINITIONS_BY_ID.get(actionId)?.allowBareKeybindings === true
@@ -996,13 +1081,57 @@ const MODIFIER_KEYS = new Set([
   'SymbolLock'
 ])
 
-function keyTokenFromInput(input: KeybindingInput): string | null {
-  const code = input.code ?? ''
-  const key = input.key ?? ''
+const PUNCTUATION_KEY_TOKENS = new Set([
+  'BracketLeft',
+  'BracketRight',
+  'Minus',
+  'Underscore',
+  'Equal',
+  'Plus',
+  'Comma',
+  'Period',
+  'Slash',
+  'Backslash',
+  'Semicolon',
+  'Quote',
+  'Backquote'
+])
 
+const PHYSICAL_CODE_FALLBACK_KEYS = new Set(['', 'Dead', 'Unidentified'])
+
+const SHIFTED_PUNCTUATION_KEY_TOKENS: Record<string, string> = {
+  '<': 'Comma',
+  '>': 'Period',
+  '?': 'Slash',
+  '|': 'Backslash',
+  ':': 'Semicolon',
+  '"': 'Quote',
+  '~': 'Backquote'
+}
+
+function logicalKeyTokenFromInput(input: KeybindingInput): string | null {
+  const key = input.key ?? ''
   if (MODIFIER_KEYS.has(key)) {
     return null
   }
+  const normalizedKey = normalizeKeyToken(key)
+  if (normalizedKey) {
+    return normalizedKey
+  }
+  if (hasModifier(input, 'shift')) {
+    return SHIFTED_PUNCTUATION_KEY_TOKENS[key] ?? null
+  }
+  return null
+}
+
+function canUsePhysicalCodeFallback(input: KeybindingInput): boolean {
+  // Why: layout-aware shortcuts must trust real logical keys; physical code is
+  // only a fallback when the platform cannot report the produced key.
+  return PHYSICAL_CODE_FALLBACK_KEYS.has(input.key ?? '')
+}
+
+function physicalCodeKeyTokenFromInput(input: KeybindingInput): string | null {
+  const code = input.code ?? ''
   if (code.startsWith('Key') && code.length === 4) {
     return code.slice(3).toUpperCase()
   }
@@ -1010,7 +1139,27 @@ function keyTokenFromInput(input: KeybindingInput): string | null {
     return code.slice(5)
   }
 
-  return normalizeKeyToken(key) ?? normalizeKeyToken(code)
+  return normalizeKeyToken(code)
+}
+
+function numpadCodeKeyTokenFromInput(input: KeybindingInput): string | null {
+  const code = input.code ?? ''
+  return code === 'NumpadAdd' || code === 'NumpadSubtract' ? normalizeKeyToken(code) : null
+}
+
+function keyTokenFromInput(input: KeybindingInput): string | null {
+  const numpadKey = numpadCodeKeyTokenFromInput(input)
+  if (numpadKey) {
+    return numpadKey
+  }
+  const logicalKey = logicalKeyTokenFromInput(input)
+  if (logicalKey) {
+    return logicalKey
+  }
+  if (!canUsePhysicalCodeFallback(input)) {
+    return null
+  }
+  return physicalCodeKeyTokenFromInput(input)
 }
 
 function keybindingFromInputWithOptions(
@@ -1152,48 +1301,138 @@ function modifierStateMatches(
   )
 }
 
-function letterKeyMatches(input: KeybindingInput, letter: string): boolean {
-  const key = (input.key ?? '').toLowerCase()
-  if (key.length === 1 && key >= 'a' && key <= 'z') {
-    return key === letter.toLowerCase()
-  }
-  return input.code === `Key${letter.toUpperCase()}`
+function shouldUseMacOptionLetterPhysicalFallback(
+  parsed: ParsedKeybinding,
+  input: KeybindingInput,
+  platform: NodeJS.Platform
+): boolean {
+  // Why: macOS Option+letter can report composed characters (Option+A -> å),
+  // leaving no logical Latin key for app shortcuts that intentionally use Alt.
+  return (
+    getKeybindingPlatform(platform) === 'darwin' &&
+    parsed.alt &&
+    hasModifier(input, 'alt') &&
+    logicalKeyTokenFromInput(input) === null
+  )
 }
 
-function keyMatches(parsedKey: string, input: KeybindingInput): boolean {
+function shouldUseMacOptionPunctuationPhysicalFallback(
+  parsed: ParsedKeybinding,
+  input: KeybindingInput,
+  platform: NodeJS.Platform
+): boolean {
+  // Why: macOS Option+punctuation can report composed quote/dead-key values,
+  // leaving no logical bracket token for app shortcuts that intentionally use Alt.
+  return (
+    getKeybindingPlatform(platform) === 'darwin' &&
+    parsed.alt &&
+    hasModifier(input, 'alt') &&
+    logicalKeyTokenFromInput(input) === null
+  )
+}
+
+function letterKeyMatches(
+  input: KeybindingInput,
+  letter: string,
+  parsed: ParsedKeybinding,
+  platform: NodeJS.Platform
+): boolean {
+  const logicalKey = logicalKeyTokenFromInput(input)
+  if (logicalKey && logicalKey.length === 1 && logicalKey >= 'A' && logicalKey <= 'Z') {
+    return logicalKey === letter.toUpperCase()
+  }
+  return (
+    (canUsePhysicalCodeFallback(input) ||
+      shouldUseMacOptionLetterPhysicalFallback(parsed, input, platform)) &&
+    input.code === `Key${letter.toUpperCase()}`
+  )
+}
+
+function digitKeyMatches(input: KeybindingInput, digit: string): boolean {
+  const logicalKey = logicalKeyTokenFromInput(input)
+  if (logicalKey && logicalKey.length === 1 && logicalKey >= '0' && logicalKey <= '9') {
+    return logicalKey === digit
+  }
+  return canUsePhysicalCodeFallback(input) && input.code === `Digit${digit}`
+}
+
+function isPunctuationKeyToken(token: string | null): token is string {
+  return token !== null && PUNCTUATION_KEY_TOKENS.has(token)
+}
+
+function semanticPunctuationKey(input: KeybindingInput): string | null {
+  const logicalKey = logicalKeyTokenFromInput(input)
+  return isPunctuationKeyToken(logicalKey) ? logicalKey : null
+}
+
+function physicalPunctuationKey(input: KeybindingInput): string | null {
+  const physicalKey = physicalCodeKeyTokenFromInput(input)
+  return isPunctuationKeyToken(physicalKey) ? physicalKey : null
+}
+
+function shouldUseSemanticPunctuation(
+  parsed: ParsedKeybinding,
+  input: KeybindingInput,
+  platform: NodeJS.Platform
+): boolean {
+  // Why: Windows/Linux often expose AltGr as Ctrl+Alt. Do not turn ordinary
+  // international text input into Mod+Alt app shortcuts.
+  if (
+    getKeybindingPlatform(platform) !== 'darwin' &&
+    parsed.mod &&
+    parsed.alt &&
+    hasModifier(input, 'control') &&
+    hasModifier(input, 'alt') &&
+    !hasModifier(input, 'meta') &&
+    physicalPunctuationKey(input) === null
+  ) {
+    return false
+  }
+  return true
+}
+
+function keyMatches(
+  parsedKey: string,
+  input: KeybindingInput,
+  parsed: ParsedKeybinding,
+  platform: NodeJS.Platform
+): boolean {
   if (parsedKey.length === 1 && parsedKey >= 'A' && parsedKey <= 'Z') {
-    return letterKeyMatches(input, parsedKey)
+    return letterKeyMatches(input, parsedKey, parsed, platform)
   }
   if (parsedKey.length === 1 && parsedKey >= '0' && parsedKey <= '9') {
-    return input.key === parsedKey || input.code === `Digit${parsedKey}`
+    return digitKeyMatches(input, parsedKey)
   }
 
-  const key = input.key ?? ''
-  const code = input.code ?? ''
-  switch (parsedKey) {
-    case 'BracketLeft':
-      return code === 'BracketLeft'
-    case 'BracketRight':
-      return code === 'BracketRight'
-    case 'Minus':
-      // Why: shifted "_" is terminal undo/readline input. Users who want it
-      // as zoom-out can bind it explicitly instead of having the default steal it.
-      return key === '-' || key === 'Minus' || code === 'Minus'
-    case 'Underscore':
-      return key === '_' || key === 'Underscore'
-    case 'Equal':
-      return key === '=' || key === 'Equal' || code === 'Equal'
-    case 'Plus':
-      return key === '+' || key === 'Plus'
-    case 'NumpadAdd':
-      return code === 'NumpadAdd' || key === 'Add'
-    case 'NumpadSubtract':
-      return code === 'NumpadSubtract' || key === 'Subtract'
-    case 'Enter':
-      return key === 'Enter' && (code === 'Enter' || code === 'NumpadEnter' || code === '')
-    default:
-      return key === parsedKey || code === parsedKey
+  if (parsedKey === 'NumpadAdd' || parsedKey === 'NumpadSubtract') {
+    return (
+      numpadCodeKeyTokenFromInput(input) === parsedKey ||
+      logicalKeyTokenFromInput(input) === parsedKey
+    )
   }
+
+  if (isPunctuationKeyToken(parsedKey)) {
+    // Why: shortcut labels name logical punctuation, but international
+    // layouts can report the same character from different physical codes.
+    const semanticKey = semanticPunctuationKey(input)
+    if (semanticKey !== null) {
+      if (!shouldUseSemanticPunctuation(parsed, input, platform)) {
+        return false
+      }
+      return semanticKey === parsedKey
+    }
+    return (
+      (canUsePhysicalCodeFallback(input) ||
+        shouldUseMacOptionPunctuationPhysicalFallback(parsed, input, platform)) &&
+      physicalPunctuationKey(input) === parsedKey
+    )
+  }
+
+  const logicalKey = logicalKeyTokenFromInput(input)
+  if (logicalKey !== null) {
+    return logicalKey === parsedKey
+  }
+  return canUsePhysicalCodeFallback(input) && physicalCodeKeyTokenFromInput(input) === parsedKey
 }
 
 export function keybindingMatchesInput(
@@ -1205,7 +1444,9 @@ export function keybindingMatchesInput(
   if (!parsed) {
     return false
   }
-  return modifierStateMatches(parsed, input, platform) && keyMatches(parsed.key, input)
+  return (
+    modifierStateMatches(parsed, input, platform) && keyMatches(parsed.key, input, parsed, platform)
+  )
 }
 
 export function keybindingMatchesAction(
@@ -1265,31 +1506,6 @@ export function formatKeybindingList(
     .join(', ')
 }
 
-export function formatElectronAccelerator(binding: string): string | null {
-  const parsed = parseKeybinding(binding)
-  if (!parsed) {
-    return null
-  }
-  const parts: string[] = []
-  if (parsed.mod) {
-    parts.push('CmdOrCtrl')
-  }
-  if (parsed.meta) {
-    parts.push('Command')
-  }
-  if (parsed.control) {
-    parts.push('Control')
-  }
-  if (parsed.alt) {
-    parts.push('Alt')
-  }
-  if (parsed.shift) {
-    parts.push('Shift')
-  }
-  parts.push(formatElectronKeyToken(parsed.key))
-  return parts.join('+')
-}
-
 function formatKeyToken(token: string): string {
   const labels: Record<string, string> = {
     BracketLeft: '[',
@@ -1318,35 +1534,6 @@ function formatKeyToken(token: string): string {
     Delete: 'Delete',
     Insert: 'Insert',
     Tab: 'Tab',
-    Escape: 'Esc',
-    Space: 'Space'
-  }
-  return labels[token] ?? token
-}
-
-function formatElectronKeyToken(token: string): string {
-  const labels: Record<string, string> = {
-    BracketLeft: '[',
-    BracketRight: ']',
-    Minus: '-',
-    Underscore: '_',
-    Equal: '=',
-    Plus: 'Plus',
-    Comma: ',',
-    Period: '.',
-    Slash: '/',
-    Backslash: '\\',
-    Semicolon: ';',
-    Quote: "'",
-    Backquote: '`',
-    ArrowLeft: 'Left',
-    ArrowRight: 'Right',
-    ArrowUp: 'Up',
-    ArrowDown: 'Down',
-    PageUp: 'PageUp',
-    PageDown: 'PageDown',
-    NumpadAdd: 'numadd',
-    NumpadSubtract: 'numsub',
     Escape: 'Esc',
     Space: 'Space'
   }
@@ -1389,8 +1576,4 @@ export function findKeybindingConflicts(
       binding: conflictKey.slice(conflictKey.indexOf('\u0000') + 1),
       actionIds
     }))
-}
-
-export function getDefaultKeybindingOverrides(): KeybindingOverrides {
-  return {}
 }

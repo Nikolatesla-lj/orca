@@ -1,226 +1,21 @@
 import React, { useCallback, useMemo, useState } from 'react'
-import {
-  Plug,
-  ChevronDown,
-  ChevronRight,
-  Copy,
-  ExternalLink,
-  LoaderCircle,
-  Trash2
-} from 'lucide-react'
-import { toast } from 'sonner'
+import { Plug, ChevronDown, ChevronRight, LoaderCircle } from 'lucide-react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { Button } from '@/components/ui/button'
 import { useAppStore } from '@/store'
 import { getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import {
-  addressForPort,
-  canStopWorkspacePort,
-  killWorkspacePortForTarget,
-  openWorkspacePortInBrowser,
   scanWorkspacePortsForTarget,
   workspacePortRuntimeTargetKey
 } from '@/lib/workspace-port-actions'
-import {
-  getExternalWorkspacePorts,
-  getWorkspacePortGroups,
-  type WorkspacePortGroup
-} from '@/lib/workspace-port-groups'
+import { getExternalWorkspacePorts, getWorkspacePortGroups } from '@/lib/workspace-port-groups'
 import { SelectedTextCopyMenu } from '@/components/SelectedTextCopyMenu'
 import { STATUS_BAR_CONTEXT_MENU_EXEMPT_PROPS } from './status-bar-context-menu-policy'
-import type { WorkspacePort } from '../../../../shared/workspace-ports'
+import { PortRow, WorkspaceGroupRows } from './ports-status-popover-rows'
 
 type PortsStatusSegmentProps = {
   compact?: boolean
   iconOnly: boolean
-}
-
-function PortAction({
-  label,
-  onClick,
-  disabled,
-  children
-}: {
-  label: string
-  onClick: (event: React.MouseEvent<HTMLButtonElement>) => void
-  disabled?: boolean
-  children: React.ReactNode
-}): React.JSX.Element {
-  const handleClick = (event: React.MouseEvent<HTMLButtonElement>): void => {
-    onClick(event)
-    if (event.detail > 0) {
-      event.currentTarget.blur()
-    }
-  }
-
-  const button = (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon-xs"
-      className="size-5 text-muted-foreground hover:text-foreground disabled:pointer-events-none disabled:text-muted-foreground/35"
-      aria-label={label}
-      onClick={handleClick}
-      disabled={disabled}
-    >
-      {children}
-    </Button>
-  )
-
-  return (
-    <Tooltip delayDuration={200}>
-      <TooltipTrigger asChild>
-        {disabled ? <span className="inline-flex">{button}</span> : button}
-      </TooltipTrigger>
-      <TooltipContent side="top" sideOffset={4} className="z-[70]">
-        {label}
-      </TooltipContent>
-    </Tooltip>
-  )
-}
-
-function PortRow({
-  port,
-  activeWorktreeId,
-  external
-}: {
-  port: WorkspacePort
-  activeWorktreeId: string | null
-  external?: boolean
-}): React.JSX.Element {
-  const settings = useAppStore((s) => s.settings)
-  const createBrowserTab = useAppStore((s) => s.createBrowserTab)
-  const setRemoteBrowserPageHandle = useAppStore((s) => s.setRemoteBrowserPageHandle)
-  const setWorkspacePortScan = useAppStore((s) => s.setWorkspacePortScan)
-  const setWorkspacePortScanRefreshing = useAppStore((s) => s.setWorkspacePortScanRefreshing)
-  const runtimeTarget = useMemo(() => getActiveRuntimeTarget(settings), [settings])
-  const processLabel = port.processName ?? (port.pid ? `PID ${port.pid}` : 'Unknown process')
-  const canOpen = port.kind === 'workspace' || Boolean(activeWorktreeId)
-  const canStop = canStopWorkspacePort(port)
-
-  const handleOpen = useCallback(
-    (event: React.MouseEvent<HTMLButtonElement>) => {
-      event.stopPropagation()
-      void openWorkspacePortInBrowser({
-        port,
-        activeWorktreeId,
-        runtimeTarget,
-        createBrowserTab,
-        setRemoteBrowserPageHandle
-      }).then((result) => {
-        if (!result.ok) {
-          toast.error('Failed to open browser', { description: result.reason })
-        }
-      })
-    },
-    [activeWorktreeId, createBrowserTab, port, runtimeTarget, setRemoteBrowserPageHandle]
-  )
-
-  const handleCopy = useCallback(
-    (event: React.MouseEvent<HTMLButtonElement>) => {
-      event.stopPropagation()
-      const address = addressForPort(port)
-      void window.api.ui.writeClipboardText(address)
-      toast.success(`Copied ${address}`)
-    },
-    [port]
-  )
-
-  const handleStop = useCallback(
-    (event: React.MouseEvent<HTMLButtonElement>) => {
-      event.stopPropagation()
-      if (!canStopWorkspacePort(port)) {
-        return
-      }
-      const run = async (): Promise<void> => {
-        const result = await killWorkspacePortForTarget(runtimeTarget, {
-          repoId: port.owner.repoId,
-          pid: port.pid,
-          port: port.port
-        })
-        if (!result.ok) {
-          toast.error(result.reason)
-          return
-        }
-        toast.success(`Stopped process on ${port.port}`)
-        setWorkspacePortScanRefreshing(true)
-        try {
-          const scan = await scanWorkspacePortsForTarget(runtimeTarget)
-          setWorkspacePortScan({
-            key: `${workspacePortRuntimeTargetKey(runtimeTarget)}:all`,
-            result: scan
-          })
-        } finally {
-          setWorkspacePortScanRefreshing(false)
-        }
-      }
-      void run()
-    },
-    [port, runtimeTarget, setWorkspacePortScan, setWorkspacePortScanRefreshing]
-  )
-
-  return (
-    <div className="group/port grid min-w-0 grid-cols-[4.5rem_minmax(0,1fr)] items-start gap-2 rounded-md px-2 py-1.5 hover:bg-accent/50">
-      <span className="select-text font-mono text-[12px] font-semibold tabular-nums text-foreground">
-        {port.port}
-      </span>
-      <div className="min-w-0 space-y-0.5">
-        <div className="relative flex h-5 min-w-0 items-center">
-          <Tooltip delayDuration={200}>
-            <TooltipTrigger asChild>
-              <span className="block min-w-0 select-text truncate text-[11px] text-muted-foreground">
-                {processLabel}
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="top" sideOffset={4}>
-              {processLabel}
-            </TooltipContent>
-          </Tooltip>
-          <div className="absolute inset-y-0 right-0 flex items-center gap-0.5 rounded-md border border-border/40 bg-popover/95 px-0.5 opacity-0 shadow-xs transition-opacity group-hover/port:opacity-100 group-focus-within/port:opacity-100">
-            <PortAction label="Open in Orca Browser" onClick={handleOpen} disabled={!canOpen}>
-              <ExternalLink className="size-3" />
-            </PortAction>
-            <PortAction label={`Copy ${addressForPort(port)}`} onClick={handleCopy}>
-              <Copy className="size-3" />
-            </PortAction>
-            <PortAction label="Stop Process" disabled={!canStop} onClick={handleStop}>
-              <Trash2 className="size-3" />
-            </PortAction>
-          </div>
-        </div>
-        <div className="select-text truncate text-[10px] text-muted-foreground/70">
-          {external ? port.kind : addressForPort(port)}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function WorkspaceGroupRows({
-  group,
-  activeWorktreeId
-}: {
-  group: WorkspacePortGroup
-  activeWorktreeId: string | null
-}): React.JSX.Element {
-  return (
-    <section className="border-t border-border/40 first:border-t-0">
-      <div className="flex items-center justify-between gap-2 px-3 py-2">
-        <span className="min-w-0 truncate text-[12px] font-medium text-foreground">
-          {group.displayName}
-        </span>
-        <span className="shrink-0 font-mono text-[10px] text-muted-foreground/70">
-          {group.ports.length}
-        </span>
-      </div>
-      <div className="px-1 pb-1">
-        {group.ports.map((port) => (
-          <PortRow key={port.id} port={port} activeWorktreeId={activeWorktreeId} />
-        ))}
-      </div>
-    </section>
-  )
 }
 
 export function PortsStatusSegment({ iconOnly }: PortsStatusSegmentProps): React.JSX.Element {
@@ -229,6 +24,7 @@ export function PortsStatusSegment({ iconOnly }: PortsStatusSegmentProps): React
   const refreshing = useAppStore((s) => s.workspacePortScanRefreshing)
   const activeWorktreeId = useAppStore((s) => s.activeWorktreeId)
   const setWorkspacePortScan = useAppStore((s) => s.setWorkspacePortScan)
+  const recordFeatureInteraction = useAppStore((s) => s.recordFeatureInteraction)
   const [open, setOpen] = useState(false)
   const [externalOpen, setExternalOpen] = useState(false)
   const runtimeTarget = useMemo(() => getActiveRuntimeTarget(settings), [settings])
@@ -244,6 +40,7 @@ export function PortsStatusSegment({ iconOnly }: PortsStatusSegmentProps): React
       if (!nextOpen) {
         return
       }
+      recordFeatureInteraction('ports')
       // Why: the 30s background poll is intentionally quiet; opening the
       // popover should still collapse that stale window without flashing icons.
       void scanWorkspacePortsForTarget(runtimeTarget)
@@ -263,7 +60,7 @@ export function PortsStatusSegment({ iconOnly }: PortsStatusSegmentProps): React
           })
         })
     },
-    [runtimeTarget, scanKey, setWorkspacePortScan]
+    [recordFeatureInteraction, runtimeTarget, scanKey, setWorkspacePortScan]
   )
 
   return (
@@ -344,9 +141,12 @@ export function PortsStatusSegment({ iconOnly }: PortsStatusSegmentProps): React
               <section className="border-t border-border/60">
                 <button
                   type="button"
-                  className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[11px] font-medium uppercase tracking-[0.05em] text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                  className="sticky top-0 z-10 flex w-full items-center gap-1.5 border-b border-border/40 bg-popover px-3 py-2 text-left text-[11px] font-medium uppercase tracking-[0.05em] text-muted-foreground hover:bg-accent/50 hover:text-foreground"
                   aria-expanded={externalOpen}
-                  onClick={() => setExternalOpen((value) => !value)}
+                  onClick={() => {
+                    recordFeatureInteraction('ports')
+                    setExternalOpen((value) => !value)
+                  }}
                 >
                   {externalOpen ? (
                     <ChevronDown className="size-3" />

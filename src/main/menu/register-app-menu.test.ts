@@ -19,7 +19,7 @@ vi.mock('electron', () => ({
   }
 }))
 
-import { registerAppMenu } from './register-app-menu'
+import { getNextDefaultOnAppearanceSettingValue, registerAppMenu } from './register-app-menu'
 
 const isMac = process.platform === 'darwin'
 
@@ -27,6 +27,7 @@ function buildMenuOptions() {
   return {
     onCheckForUpdates: vi.fn(),
     onOpenSettings: vi.fn(),
+    onOpenSetupGuide: vi.fn(),
     onOpenFeatureTour: vi.fn(),
     onOpenCrashReport: vi.fn(),
     onBeforeReload: vi.fn(),
@@ -38,6 +39,8 @@ function buildMenuOptions() {
     onToggleAppearance: vi.fn(),
     getAppearanceState: vi.fn(() => ({
       showTasksButton: true,
+      showAutomationsButton: true,
+      showMobileButton: true,
       showTitlebarAppName: true,
       statusBarVisible: true
     }))
@@ -57,6 +60,12 @@ function getSubmenu(
 }
 
 describe('registerAppMenu', () => {
+  it('toggles missing default-on appearance settings from visible to hidden', () => {
+    expect(getNextDefaultOnAppearanceSettingValue(undefined)).toBe(false)
+    expect(getNextDefaultOnAppearanceSettingValue(true)).toBe(false)
+    expect(getNextDefaultOnAppearanceSettingValue(false)).toBe(true)
+  })
+
   beforeEach(() => {
     buildFromTemplateMock.mockReset()
     setApplicationMenuMock.mockReset()
@@ -190,7 +199,12 @@ describe('registerAppMenu', () => {
 
     const helpLabels = getSubmenu(template, 'Help').map((item) => item.label)
     expect(helpLabels).toEqual(
-      expect.arrayContaining(['Report Crash...', 'Feature tour', 'Check for Updates...'])
+      expect.arrayContaining([
+        'Report Crash...',
+        'Getting Started with Orca',
+        'Explore Orca',
+        'Check for Updates...'
+      ])
     )
   })
 
@@ -209,7 +223,28 @@ describe('registerAppMenu', () => {
     expect(fileLabels).not.toContain(`Settings\t${isMac ? '⌘,' : 'Ctrl+,'}`)
     expect(fileLabels).not.toContain('Exit')
     const helpLabels = getSubmenu(template, 'Help').map((item) => item.label)
-    expect(helpLabels).toEqual(['Report Crash...', undefined, 'Feature tour'])
+    expect(helpLabels).toEqual([
+      'Report Crash...',
+      undefined,
+      'Explore Orca',
+      'Getting Started with Orca'
+    ])
+  })
+
+  it('routes Getting Started with Orca through its callback', () => {
+    const options = buildMenuOptions()
+    registerAppMenu(options)
+
+    const setupGuideItem = getSubmenu(getTemplate(), 'Help').find(
+      (entry) => entry.label === 'Getting Started with Orca'
+    )
+    expect(setupGuideItem?.accelerator).toBeUndefined()
+
+    const targetWindow = {} as Electron.BaseWindow
+    setupGuideItem?.click?.({} as never, targetWindow, {} as Electron.KeyboardEvent)
+
+    expect(options.onOpenSetupGuide).toHaveBeenCalledTimes(1)
+    expect(options.onOpenSetupGuide).toHaveBeenCalledWith(targetWindow)
   })
 
   it('routes Feature tour through its callback', () => {
@@ -217,7 +252,7 @@ describe('registerAppMenu', () => {
     registerAppMenu(options)
 
     const featureTourItem = getSubmenu(getTemplate(), 'Help').find(
-      (entry) => entry.label === 'Feature tour'
+      (entry) => entry.label === 'Explore Orca'
     )
     expect(featureTourItem?.accelerator).toBeUndefined()
 
@@ -247,6 +282,8 @@ describe('registerAppMenu', () => {
     const options = buildMenuOptions()
     options.getAppearanceState.mockReturnValue({
       showTasksButton: false,
+      showAutomationsButton: false,
+      showMobileButton: true,
       showTitlebarAppName: true,
       statusBarVisible: true
     })
@@ -261,6 +298,16 @@ describe('registerAppMenu', () => {
     const tasksItem = appearanceSubmenu.find((item) => item.label === 'Show Tasks Button')
     expect(tasksItem?.type).toBe('checkbox')
     expect(tasksItem?.checked).toBe(false)
+
+    const automationsItem = appearanceSubmenu.find(
+      (item) => item.label === 'Show Automations Button'
+    )
+    expect(automationsItem?.type).toBe('checkbox')
+    expect(automationsItem?.checked).toBe(false)
+
+    const mobileItem = appearanceSubmenu.find((item) => item.label === 'Show Orca Mobile Button')
+    expect(mobileItem?.type).toBe('checkbox')
+    expect(mobileItem?.checked).toBe(true)
 
     const titlebarItem = appearanceSubmenu.find((item) => item.label === 'Show Titlebar App Name')
     expect(titlebarItem?.checked).toBe(true)
@@ -281,10 +328,18 @@ describe('registerAppMenu', () => {
       .find((item) => item.label === 'Show Tasks Button')
       ?.click?.({} as never, {} as never, {} as never)
     appearanceSubmenu
+      .find((item) => item.label === 'Show Automations Button')
+      ?.click?.({} as never, {} as never, {} as never)
+    appearanceSubmenu
+      .find((item) => item.label === 'Show Orca Mobile Button')
+      ?.click?.({} as never, {} as never, {} as never)
+    appearanceSubmenu
       .find((item) => item.label === 'Show Titlebar App Name')
       ?.click?.({} as never, {} as never, {} as never)
 
     expect(options.onToggleAppearance).toHaveBeenCalledWith('showTasksButton')
+    expect(options.onToggleAppearance).toHaveBeenCalledWith('showAutomationsButton')
+    expect(options.onToggleAppearance).toHaveBeenCalledWith('showMobileButton')
     expect(options.onToggleAppearance).toHaveBeenCalledWith('showTitlebarAppName')
   })
 

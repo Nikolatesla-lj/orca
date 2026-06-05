@@ -3,18 +3,35 @@ GitLab IPC handlers co-located keeps the repo-path validation pattern
 reviewable as one surface. */
 import { ipcMain } from 'electron'
 import { resolve } from 'path'
-import type { GitLabIssueUpdate, GitLabWorkItem, MRListState, Repo } from '../../shared/types'
+import type {
+  GitLabIssueUpdate,
+  GitLabMRInlineCommentInput,
+  GitLabMRUpdate,
+  GitLabWorkItem,
+  Repo
+} from '../../shared/types'
 import type { Store } from '../persistence'
 import {
+  normalizeGitLabIssueAssignee,
+  normalizeGitLabIssueListState,
+  normalizeGitLabMRListState,
+  normalizeGitLabPositiveInteger
+} from '../gitlab/gitlab-preload-args'
+import { recordGitLabProjectRecent } from '../gitlab/gitlab-project-recents'
+import {
   addIssueComment,
+  addMRInlineComment,
   addMRComment,
   closeMR,
   createIssue,
+  diagnoseAuth,
   getAuthenticatedViewer,
+  getJobTrace,
   getIssue,
   getMergeRequest,
   getMergeRequestForBranch,
   getProjectSlug,
+  getRateLimit,
   getWorkItemByProjectRef,
   listAssignableUsers,
   listIssues,
@@ -24,10 +41,13 @@ import {
   listWorkItems,
   mergeMR,
   reopenMR,
-  updateIssue
+  resolveMRDiscussion,
+  retryJob,
+  updateIssue,
+  updateMR,
+  updateMRReviewers
 } from '../gitlab/client'
 import { getWorkItemDetails } from '../gitlab/work-item-details'
-import { computeNextGitLabRecents } from '../../shared/gitlab-projects'
 import type { ProjectRef } from '../gitlab/gl-utils'
 
 // Why: mirror github.ts assertRegisteredRepo — main-process handlers
@@ -42,29 +62,6 @@ function assertRegisteredRepo(repoPath: string, store: Store): Repo {
   return repo
 }
 
-function normalizePositiveInteger(value: unknown, fallback: number, max: number): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return fallback
-  }
-  return Math.min(Math.max(1, Math.trunc(value)), max)
-}
-
-function normalizeMRListState(value: unknown): MRListState {
-  return value === 'merged' || value === 'closed' || value === 'all' ? value : 'opened'
-}
-
-type GitLabIssueListState = 'opened' | 'closed' | 'all'
-
-function normalizeIssueListState(value: unknown): GitLabIssueListState {
-  return value === 'closed' || value === 'all' ? value : 'opened'
-}
-
-function normalizeIssueAssignee(value: unknown): '@me' | undefined {
-  // Why: the renderer only exposes "Assigned to me"; accepting arbitrary
-  // values here would turn this IPC boundary into a generic glab flag surface.
-  return value === '@me' ? '@me' : undefined
-}
-
 function repoConnectionId(repo: Repo): string | null {
   return repo.connectionId ?? null
 }
@@ -73,6 +70,14 @@ export function registerGitLabHandlers(store: Store): void {
   ipcMain.handle('gitlab:viewer', async () => {
     return getAuthenticatedViewer()
   })
+
+  ipcMain.handle('gitlab:diagnoseAuth', async () => diagnoseAuth())
+
+  ipcMain.handle(
+    'gitlab:rateLimit',
+    async (_event, args?: { force?: boolean; host?: string | null }) =>
+      getRateLimit({ force: Boolean(args?.force), host: args?.host ?? null })
+  )
 
   ipcMain.handle('gitlab:projectSlug', async (_event, args: { repoPath: string }) => {
     const repo = assertRegisteredRepo(args.repoPath, store)
@@ -109,9 +114,9 @@ export function registerGitLabHandlers(store: Store): void {
       }
     ) => {
       const repo = assertRegisteredRepo(args.repoPath, store)
-      const state = normalizeMRListState(args.state)
-      const page = normalizePositiveInteger(args.page, 1, 10_000)
-      const perPage = normalizePositiveInteger(args.perPage, 20, 100)
+      const state = normalizeGitLabMRListState(args.state)
+      const page = normalizeGitLabPositiveInteger(args.page, 1, 10_000)
+      const perPage = normalizeGitLabPositiveInteger(args.perPage, 20, 100)
       return listMergeRequests(
         repo.path,
         state,
@@ -141,9 +146,9 @@ export function registerGitLabHandlers(store: Store): void {
       }
     ) => {
       const repo = assertRegisteredRepo(args.repoPath, store)
-      const limit = normalizePositiveInteger(args.limit, 20, 100)
-      const state = normalizeIssueListState(args.state)
-      const assignee = normalizeIssueAssignee(args.assignee)
+      const limit = normalizeGitLabPositiveInteger(args.limit, 20, 100)
+      const state = normalizeGitLabIssueListState(args.state)
+      const assignee = normalizeGitLabIssueAssignee(args.assignee)
       const result = await listIssues(
         repo.path,
         limit,
@@ -240,9 +245,9 @@ export function registerGitLabHandlers(store: Store): void {
       const repo = assertRegisteredRepo(args.repoPath, store)
       return listWorkItems(
         repo.path,
-        normalizeMRListState(args.state),
-        normalizePositiveInteger(args.page, 1, 10_000),
-        normalizePositiveInteger(args.perPage, 20, 100),
+        normalizeGitLabMRListState(args.state),
+        normalizeGitLabPositiveInteger(args.page, 1, 10_000),
+        normalizeGitLabPositiveInteger(args.perPage, 20, 100),
         repo.issueSourcePreference,
         undefined,
         repoConnectionId(repo)
@@ -294,6 +299,43 @@ export function registerGitLabHandlers(store: Store): void {
   )
 
   ipcMain.handle(
+    'gitlab:updateMR',
+    async (_event, args: { repoPath: string; iid: number; updates: GitLabMRUpdate }) => {
+      const repo = assertRegisteredRepo(args.repoPath, store)
+      return updateMR(
+        repo.path,
+        args.iid,
+        args.updates,
+        repo.issueSourcePreference,
+        repoConnectionId(repo)
+      )
+    }
+  )
+
+  ipcMain.handle(
+    'gitlab:updateMRReviewers',
+    async (
+      _event,
+      args: {
+        repoPath: string
+        iid: number
+        reviewerIds: number[]
+        projectRef?: ProjectRef | null
+      }
+    ) => {
+      const repo = assertRegisteredRepo(args.repoPath, store)
+      return updateMRReviewers(
+        repo.path,
+        args.iid,
+        args.reviewerIds,
+        repo.issueSourcePreference,
+        repoConnectionId(repo),
+        args.projectRef
+      )
+    }
+  )
+
+  ipcMain.handle(
     'gitlab:addMRComment',
     async (_event, args: { repoPath: string; iid: number; body: string }) => {
       const repo = assertRegisteredRepo(args.repoPath, store)
@@ -303,6 +345,75 @@ export function registerGitLabHandlers(store: Store): void {
         args.body,
         repo.issueSourcePreference,
         repoConnectionId(repo)
+      )
+    }
+  )
+
+  ipcMain.handle(
+    'gitlab:addMRInlineComment',
+    async (
+      _event,
+      args: {
+        repoPath: string
+        iid: number
+        input: GitLabMRInlineCommentInput
+        projectRef?: ProjectRef | null
+      }
+    ) => {
+      const repo = assertRegisteredRepo(args.repoPath, store)
+      return addMRInlineComment(
+        repo.path,
+        args.iid,
+        args.input,
+        repo.issueSourcePreference,
+        repoConnectionId(repo),
+        args.projectRef
+      )
+    }
+  )
+
+  ipcMain.handle(
+    'gitlab:resolveMRDiscussion',
+    async (
+      _event,
+      args: { repoPath: string; iid: number; discussionId: string; resolved: boolean }
+    ) => {
+      const repo = assertRegisteredRepo(args.repoPath, store)
+      return resolveMRDiscussion(
+        repo.path,
+        args.iid,
+        args.discussionId,
+        args.resolved,
+        repo.issueSourcePreference,
+        repoConnectionId(repo)
+      )
+    }
+  )
+
+  ipcMain.handle(
+    'gitlab:jobTrace',
+    async (_event, args: { repoPath: string; jobId: number; projectRef?: ProjectRef | null }) => {
+      const repo = assertRegisteredRepo(args.repoPath, store)
+      return getJobTrace(
+        repo.path,
+        args.jobId,
+        repo.issueSourcePreference,
+        repoConnectionId(repo),
+        args.projectRef
+      )
+    }
+  )
+
+  ipcMain.handle(
+    'gitlab:retryJob',
+    async (_event, args: { repoPath: string; jobId: number; projectRef?: ProjectRef | null }) => {
+      const repo = assertRegisteredRepo(args.repoPath, store)
+      return retryJob(
+        repo.path,
+        args.jobId,
+        repo.issueSourcePreference,
+        repoConnectionId(repo),
+        args.projectRef
       )
     }
   )
@@ -344,20 +455,9 @@ export function registerGitLabHandlers(store: Store): void {
       // produced an item. A 404 / auth failure shouldn't pollute the
       // user's recents list with project paths they can't read.
       if (result) {
-        addGitLabProjectToRecent(store, args.host, args.path)
+        recordGitLabProjectRecent(store, args.host, args.path)
       }
       return result
     }
   )
-}
-
-function addGitLabProjectToRecent(store: Store, host: string, path: string): void {
-  const settings = store.getSettings()
-  const existing = settings.gitlabProjects ?? { pinned: [], recent: [] }
-  store.updateSettings({
-    gitlabProjects: {
-      pinned: existing.pinned,
-      recent: computeNextGitLabRecents(existing.recent, host, path)
-    }
-  })
 }

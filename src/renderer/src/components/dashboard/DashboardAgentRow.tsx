@@ -1,11 +1,13 @@
 import React, { useState, useCallback } from 'react'
-import { X, Wrench, ChevronDown } from 'lucide-react'
+import { X, ChevronDown, Send } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { AgentStateDot, agentStateLabel, type AgentDotState } from '@/components/AgentStateDot'
 import { AgentIcon } from '@/lib/agent-catalog'
 import { agentTypeToIconAgent, formatAgentTypeLabel } from '@/lib/agent-status'
-import CommentMarkdown from '@/components/sidebar/CommentMarkdown'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { DashboardAgentChildDisclosure } from './DashboardAgentChildDisclosure'
+import { DashboardAgentRowMessage } from './DashboardAgentRowMessage'
+import { DashboardAgentRowToolStep } from './DashboardAgentRowToolStep'
 import type { AgentStatusState } from '../../../../shared/agent-status-types'
 import type { DashboardAgentRow as DashboardAgentRowData } from './useDashboardData'
 
@@ -20,9 +22,8 @@ function asDotState(state: AgentStatusState | 'idle'): AgentDotState {
     case 'done':
     case 'idle':
       return state
-    default:
-      return 'idle'
   }
+  return 'idle'
 }
 
 function formatTimeAgo(ts: number, now: number): string {
@@ -110,6 +111,21 @@ type Props = {
    */
   hideIdentityIcon?: boolean
   hideExpand?: boolean
+  /** Reuse the row's hover tint to show the focused terminal pane's agent. */
+  isFocusedPane?: boolean
+  // Why: inline-card orchestration rows fold children under a leading chevron.
+  childAgentCount?: number
+  childAgentsExpanded?: boolean
+  onToggleChildAgents?: () => void
+  // Why: leaf siblings reserve the chevron gutter so state dots align.
+  reserveDisclosureGutter?: boolean
+  // Why: chevron indentation replaces fixed-offset lineage connector art.
+  hideLineageConnectors?: boolean
+  // Why: send-popover target mode temporarily turns sidebar rows into the
+  // picker surface, so row clicks must send/no-op instead of navigating.
+  sendTargetStatus?: 'eligible' | 'disabled' | 'sending'
+  sendTargetDisabledReason?: string
+  onSendTargetClick?: (paneKey: string) => void
 }
 
 const DashboardAgentRow = React.memo(function DashboardAgentRow({
@@ -120,8 +136,21 @@ const DashboardAgentRow = React.memo(function DashboardAgentRow({
   isUnvisited = false,
   stateDotSize = 'md',
   hideIdentityIcon = false,
-  hideExpand = false
+  hideExpand = false,
+  isFocusedPane = false,
+  childAgentCount,
+  childAgentsExpanded = false,
+  onToggleChildAgents,
+  reserveDisclosureGutter = false,
+  hideLineageConnectors = false,
+  sendTargetStatus,
+  sendTargetDisabledReason,
+  onSendTargetClick
 }: Props) {
+  const hasChildDisclosure =
+    typeof childAgentCount === 'number' &&
+    childAgentCount > 0 &&
+    typeof onToggleChildAgents === 'function'
   const [expanded, setExpanded] = useState(false)
   // Why: stop propagation so clicking the X doesn't also fire the worktree
   // card's click handler (which navigates away from the dashboard).
@@ -165,6 +194,36 @@ const DashboardAgentRow = React.memo(function DashboardAgentRow({
     },
     [onActivate, agent.tab.id, agent.paneKey]
   )
+  const handleSendTargetClickCapture = useCallback(
+    (e: React.MouseEvent) => {
+      if (!sendTargetStatus) {
+        return
+      }
+      const target = e.target
+      if (
+        target instanceof Element &&
+        target.closest('button, a, input, textarea, select, [role="button"]')
+      ) {
+        return
+      }
+      e.preventDefault()
+      e.stopPropagation()
+      if (sendTargetStatus === 'eligible') {
+        onSendTargetClick?.(agent.paneKey)
+      }
+    },
+    [agent.paneKey, onSendTargetClick, sendTargetStatus]
+  )
+  const handleInlineSendTargetClick = useCallback(
+    (e: React.MouseEvent<HTMLButtonElement>) => {
+      e.preventDefault()
+      e.stopPropagation()
+      if (sendTargetStatus === 'eligible') {
+        onSendTargetClick?.(agent.paneKey)
+      }
+    },
+    [agent.paneKey, onSendTargetClick, sendTargetStatus]
+  )
   const startedAt = agent.startedAt > 0 ? agent.startedAt : null
   const doneAt = lastEnteredDoneAt(agent)
   const prompt = agent.entry.prompt.trim()
@@ -185,6 +244,16 @@ const DashboardAgentRow = React.memo(function DashboardAgentRow({
   const toolInput = isWorking ? (agent.entry.toolInput?.trim() ?? '') : ''
   const lastAssistantMessage = agent.entry.lastAssistantMessage?.trim() ?? ''
   const isInterrupted = agent.entry.interrupted === true
+  const lineage = agent.lineage
+  const isLineageChild = lineage?.depth === 1
+  const lineageChildCount = lineage?.childCount ?? 0
+  const participatesInLineage = isLineageChild || lineageChildCount > 0
+  const identityTitle =
+    lineageChildCount > 0
+      ? `${formatAgentTypeLabel(agent.agentType)} - dispatched ${lineageChildCount} ${
+          lineageChildCount === 1 ? 'agent' : 'agents'
+        }`
+      : formatAgentTypeLabel(agent.agentType)
   // Why: interrupted is a terminal outcome the user needs to scan in the
   // leading state column; the secondary-line text below provides the
   // explanation without competing with the prompt or timestamp.
@@ -205,6 +274,8 @@ const DashboardAgentRow = React.memo(function DashboardAgentRow({
     tsParts.push(`done ${formatTimeAgo(doneAt, now)}`)
   }
 
+  const titleParts = sendTargetDisabledReason ? [sendTargetDisabledReason, ...tsParts] : tsParts
+
   return (
     // Why: NOT role="button" / tabIndex={0}. The row contains real <button>
     // children (dismiss X, expand chevron) and tooltip triggers that forward
@@ -214,22 +285,62 @@ const DashboardAgentRow = React.memo(function DashboardAgentRow({
     // the agent via the child buttons and the tab switcher; the outer <div>
     // stays a plain clickable surface for pointer activation.
     <div
+      onClickCapture={handleSendTargetClickCapture}
       onClick={handleActivate}
       className={cn(
         // Why: this row owns the timestamp/X hover boundary; anonymous
         // ancestor groups from workspace cards must not reveal every row's X.
-        'group/agent-row relative flex flex-col -ml-2 px-2 py-1',
-        // Why: hover tints have to go in opposite directions per theme —
-        // dark mode adds light on dark (bg-accent/30), light mode needs to
-        // add *dark* on white. Alpha-on-accent in light mode collapses to
-        // near-nothing because accent (#f5f5f5) is already ~white. Use a
-        // black alpha overlay in light mode (mirrors WorktreeCard.tsx's
-        // active-state pattern) so the lift is symmetric across themes.
-        'cursor-pointer rounded-sm hover:bg-black/[0.06] dark:hover:bg-accent/30'
+        'group/agent-row relative flex flex-col -ml-2 py-1',
+        isLineageChild ? 'pl-5 pr-2' : 'px-2',
+        // Why: inline agent rows sit inside a hoverable workspace card, so
+        // their hover wash must stay softer than the parent card highlight.
+        // The focused-pane state reuses the same class via data attribute.
+        'cursor-pointer rounded-sm worktree-agent-row-hover',
+        hasChildDisclosure && 'worktree-agent-lineage-parent-row',
+        isLineageChild && 'worktree-agent-lineage-child-row',
+        sendTargetStatus === 'sending' && 'cursor-progress opacity-75',
+        sendTargetStatus === 'disabled' && 'cursor-default opacity-60'
       )}
-      title={tsParts.length > 0 ? tsParts.join(' • ') : undefined}
+      data-focused-agent-pane={isFocusedPane ? 'true' : undefined}
+      data-agent-send-target={sendTargetStatus}
+      title={titleParts.length > 0 ? titleParts.join(' • ') : undefined}
+      role={participatesInLineage ? 'treeitem' : undefined}
+      aria-level={participatesInLineage ? (lineage?.depth ?? 0) + 1 : undefined}
     >
+      {lineageChildCount > 0 && !hideLineageConnectors ? (
+        <span
+          aria-hidden
+          data-agent-lineage-parent-connector
+          className="pointer-events-none absolute bottom-[-0.75rem] left-[13px] top-[1.05rem] border-l-[1.5px] border-muted-foreground/45 dark:border-muted-foreground/35"
+        />
+      ) : null}
+      {isLineageChild && !hideLineageConnectors ? (
+        <span
+          aria-hidden
+          data-agent-lineage-connector={lineage?.isLastSibling === false ? 'branch' : 'last'}
+          className="pointer-events-none absolute bottom-[-1px] left-[13px] top-[-1px] w-3"
+        >
+          <span
+            className={cn(
+              'absolute left-0 border-l-[1.5px] border-muted-foreground/45 dark:border-muted-foreground/35',
+              lineage?.isFirstSibling ? 'top-[-0.9rem]' : 'top-[-1px]',
+              lineage?.isLastSibling
+                ? lineage?.isFirstSibling
+                  ? 'h-[1.6rem]'
+                  : 'h-[calc(0.7rem+1px)]'
+                : 'bottom-[-1px]'
+            )}
+          />
+          <span className="absolute left-0 top-[0.7rem] w-1.5 border-t-[1.5px] border-muted-foreground/45 dark:border-muted-foreground/35" />
+        </span>
+      ) : null}
       <div className="flex items-center gap-1.5">
+        <DashboardAgentChildDisclosure
+          childAgentCount={childAgentCount}
+          childAgentsExpanded={childAgentsExpanded}
+          onToggleChildAgents={onToggleChildAgents}
+          reserveDisclosureGutter={reserveDisclosureGutter}
+        />
         {/* Why: state indicator lives in the leading gutter so the user's
             eye can sweep one column and know which rows are working,
             waiting, or done at a glance — the list-view convention (Linear,
@@ -257,7 +368,7 @@ const DashboardAgentRow = React.memo(function DashboardAgentRow({
             them — keeping the icon only on the prompt row lets the sub-rows
             indent under the prompt text cleanly. */}
         {!hideIdentityIcon && (
-          <span className="inline-flex shrink-0" title={formatAgentTypeLabel(agent.agentType)}>
+          <span className="inline-flex shrink-0" title={identityTitle}>
             <AgentIcon agent={agentTypeToIconAgent(agent.agentType)} size={14} />
           </span>
         )}
@@ -283,16 +394,48 @@ const DashboardAgentRow = React.memo(function DashboardAgentRow({
             'block min-w-0 flex-1 overflow-hidden text-[11px] leading-snug',
             'transition-[height] duration-200 ease-out [interpolate-size:allow-keywords]',
             expanded ? 'h-auto whitespace-pre-wrap break-words' : 'h-[1lh] truncate',
-            isUnvisited ? 'font-semibold text-foreground' : 'font-normal text-muted-foreground'
+            isUnvisited ? 'font-semibold text-foreground' : 'font-normal text-muted-foreground',
+            // Why: the selected-row fill washes out muted text — keep it readable.
+            isFocusedPane && !isUnvisited && 'text-foreground/90'
           )}
           title={displayLabel}
         >
           {displayLabel}
         </span>
+        {/* Why: "+N" badge mirrors the leading chevron — without it the
+            parent row reads identical to a leaf row when collapsed, and the
+            child count is invisible. Hidden when expanded because the
+            children are visible directly below. */}
+        {hasChildDisclosure && !childAgentsExpanded && (
+          <span
+            className="shrink-0 text-[10px] font-normal leading-none text-muted-foreground/70 tabular-nums"
+            aria-hidden
+          >
+            +{childAgentCount}
+          </span>
+        )}
         {/* Why: right cluster keeps passive time and dismiss affordance in one
             place. State belongs in the leading gutter; repeating it here as
             text makes interrupted rows look like the old badge treatment. */}
-        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+        <span className="relative ml-auto flex h-3.5 w-12 shrink-0 items-center justify-end">
+          {(sendTargetStatus === 'eligible' || sendTargetStatus === 'sending') && (
+            <button
+              type="button"
+              onClick={handleInlineSendTargetClick}
+              onMouseDown={stopMouseDown}
+              onKeyDown={stopKeyDown}
+              disabled={sendTargetStatus === 'sending'}
+              className={cn(
+                'worktree-agent-send-target-button absolute right-0 top-1/2 z-10 inline-flex h-5 -translate-y-1/2 items-center gap-1 rounded-md border px-1.5 text-[10px] font-medium leading-none transition-[background-color,border-color,color,opacity]',
+                sendTargetStatus === 'sending' && 'cursor-progress opacity-75'
+              )}
+              aria-label="Send to this agent"
+              title="Send to this agent"
+            >
+              <Send className="size-3" />
+              <span>Send</span>
+            </button>
+          )}
           {/* Why: timestamp and dismiss-X share a single slot so passive
               rows show "time ago" and hovered rows swap in the X — no
               reserved-space gap, no competing columns. Grid stacks both
@@ -303,7 +446,7 @@ const DashboardAgentRow = React.memo(function DashboardAgentRow({
               fade the crossfade instead of snapping, and keyboard focus
               on the hidden X still activates it because `opacity-0`
               doesn't remove it from the tab order. */}
-          {(startedAt !== null || doneAt !== null) && (
+          {!sendTargetStatus && (startedAt !== null || doneAt !== null) && (
             <span className="relative grid grid-cols-1 grid-rows-1 shrink-0 items-center justify-items-end">
               <span
                 className={cn(
@@ -341,7 +484,7 @@ const DashboardAgentRow = React.memo(function DashboardAgentRow({
               as a standalone hover-only control so dismiss is still
               reachable. Rare path; most rows have a timestamp the moment
               they start. */}
-          {startedAt === null && doneAt === null && (
+          {!sendTargetStatus && startedAt === null && doneAt === null && (
             <button
               type="button"
               onClick={handleDismiss}
@@ -386,114 +529,17 @@ const DashboardAgentRow = React.memo(function DashboardAgentRow({
           )}
         </span>
       </div>
-      {/* Why: tool row and message row both carry different info — tool shows
-          the mechanical step (Bash: ...), message shows the agent's narration
-          ("let me verify the test ordering"). Rendering both together would
-          cause the row to jump whenever one appeared/disappeared mid-turn,
-          so instead we always render both slots and fall back to a single-line
-          placeholder when empty. Tool slot only reserves height while working,
-          since done/blocked rows shouldn't show a dangling wrench. */}
-      {isWorking && (
-        <div className="mt-0.5 min-w-0 pl-5 text-[10px] leading-snug text-muted-foreground/70">
-          {toolName ? (
-            <>
-              {/* Why: header (wrench + tool name) stays on one line. When
-                  collapsed, the input truncates inline next to the name. When
-                  expanded, the input moves to its own block below so long
-                  commands wrap to a consistent left margin instead of the
-                  jagged shape that flex-wrapping produces. */}
-              <div
-                className={cn('flex min-w-0 items-center gap-1', !expanded && 'overflow-hidden')}
-              >
-                <Wrench className="size-2.5 shrink-0" />
-                <code className="shrink-0 font-mono text-[10px]">{toolName}</code>
-                {!expanded && toolInput && (
-                  <span className="min-w-0 truncate text-muted-foreground/60" title={toolInput}>
-                    {toolInput}
-                  </span>
-                )}
-              </div>
-              {/* Why: grid-rows [0fr]→[1fr] is the CSS-only height animation
-                  pattern — outer grid track interpolates smoothly while the
-                  inner min-h-0 + overflow-hidden clips content during the
-                  transition. This avoids measuring heights in JS and still
-                  animates unknown content sizes. */}
-              {toolInput && (
-                <div
-                  className={cn(
-                    'grid transition-[grid-template-rows,margin-top] duration-200 ease-out',
-                    expanded ? 'mt-0.5 grid-rows-[1fr]' : 'grid-rows-[0fr]'
-                  )}
-                >
-                  <pre className="min-h-0 overflow-hidden whitespace-pre-wrap break-words font-mono text-[10px] text-muted-foreground/60">
-                    {toolInput}
-                  </pre>
-                </div>
-              )}
-            </>
-          ) : (
-            ' '
-          )}
-        </div>
-      )}
-      {/* Why: message slot is always reserved in collapsed view so the row
-          height stays fixed as lastAssistantMessage arrives/clears. The
-          expand animation lives on the CommentMarkdown itself (height +
-          interpolate-size) so the body reveals smoothly instead of snapping
-          open. When the message is empty we still render a placeholder in
-          the collapsed view to preserve the reserved line height.
-
-          Interrupted gets its visible text on this secondary line, where the
-          agent response normally appears. That keeps the prompt line clean
-          while making the red status dot's meaning visible without hover. */}
-      {isInterrupted || lastAssistantMessage ? (
-        <div className="mt-0.5 flex min-w-0 items-start gap-1.5 pl-5">
-          {isInterrupted && (
-            <span
-              className="shrink-0 text-[10px] leading-snug text-muted-foreground/80"
-              aria-label="Interrupted by user"
-            >
-              interrupted
-            </span>
-          )}
-          {lastAssistantMessage && (
-            <CommentMarkdown
-              content={lastAssistantMessage}
-              // Why: animate between a 1-line clipped height and the content's
-              // natural height using Chromium's `interpolate-size: allow-keywords`
-              // so the message body expands/collapses smoothly instead of
-              // snapping. Height transition + overflow-hidden keeps the inline-
-              // flattened preview clipped during the interpolation. Render the
-              // markdown in both states; in the collapsed view we force every
-              // nested element inline so `truncate` can ellipsize the whole
-              // thing on one line. The [&_*]:inline descendant selector flattens
-              // the markdown tree (lists, pre, headings, blockquotes) into inline
-              // flow; block margins and list markers are suppressed by
-              // [&_*]:!m-0 / [&_ul]:list-none so the preview reads as a single
-              // clean line.
-              className={cn(
-                'min-w-0 flex-1 overflow-hidden text-[10px] leading-snug text-muted-foreground/80',
-                'transition-[height] duration-200 ease-out [interpolate-size:allow-keywords]',
-                expanded ? 'h-auto' : 'h-[1lh]',
-                // Why: in collapsed mode we need a single truncated line. Markdown
-                // blocks (pre, lists, headings) are flattened inline and forced
-                // to inherit `white-space: nowrap` so <pre>/<code>'s preserved
-                // newlines don't break out of the truncation container. The
-                // `!` prefixes override CommentMarkdown's own layout styles so
-                // nothing (margins, list markers, block line-breaks) can push
-                // the preview onto a second line.
-                !expanded &&
-                  'truncate whitespace-nowrap [&_*]:inline [&_*]:!whitespace-nowrap [&_*]:!m-0 [&_*]:!p-0 [&_ul]:list-none [&_ol]:list-none [&_br]:hidden'
-              )}
-              title={!expanded ? lastAssistantMessage : undefined}
-            />
-          )}
-        </div>
-      ) : (
-        !expanded && (
-          <div className="mt-0.5 pl-5 text-[10px] leading-snug text-muted-foreground/70"> </div>
-        )
-      )}
+      <DashboardAgentRowToolStep
+        expanded={expanded}
+        isWorking={isWorking}
+        toolName={toolName}
+        toolInput={toolInput}
+      />
+      <DashboardAgentRowMessage
+        expanded={expanded}
+        isInterrupted={isInterrupted}
+        lastAssistantMessage={lastAssistantMessage}
+      />
     </div>
   )
 })

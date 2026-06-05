@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useMemo, useState } from 'react'
 import { SlidersHorizontal } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { Button } from '@/components/ui/button'
@@ -17,7 +17,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import type { WorktreeCardProperty } from '../../../../shared/types'
+import type { AgentActivityDisplayMode, WorktreeCardProperty } from '../../../../shared/types'
 import { DEFAULT_SHOW_SLEEPING_WORKSPACES } from '../../../../shared/constants'
 import SidebarRepositoryFilterSection from './SidebarRepositoryFilterSection'
 import SidebarWorkspaceFilterSection from './SidebarWorkspaceFilterSection'
@@ -31,25 +31,40 @@ const GROUP_BY_OPTIONS = [
   { id: 'none', label: 'None' },
   { id: 'workspace-status', label: 'Status' },
   { id: 'pr-status', label: 'PR' },
-  { id: 'repo', label: 'Repo' }
+  { id: 'repo', label: 'Project' }
+] as const
+
+const CARD_LAYOUT_OPTIONS = [
+  { id: 'detailed', label: 'Detailed' },
+  { id: 'compact', label: 'Compact' }
 ] as const
 
 const PROPERTY_OPTIONS: { id: WorktreeCardProperty; label: string }[] = [
+  { id: 'issue', label: 'GitHub ticket' },
+  { id: 'linear-issue', label: 'Linear issue' },
+  { id: 'pr', label: 'PR/MR link' },
+  { id: 'comment', label: 'Notes' },
+  { id: 'ports', label: 'Ports' },
   // Why: toggles the inline "Agent activity" list rendered below each
   // workspace card body (see WorktreeCard -> WorktreeCardAgents). Off hides
   // the list; there is no alternate surface.
   { id: 'inline-agents', label: 'Agent activity' }
 ]
 
+const AGENT_ACTIVITY_DISPLAY_OPTIONS: { id: AgentActivityDisplayMode; label: string }[] = [
+  { id: 'compact', label: 'Compact' },
+  { id: 'full', label: 'Full list' }
+]
+
 const SORT_OPTIONS = [
   { id: 'name', label: 'Name', description: null },
   {
     id: 'smart',
-    label: 'Smart',
+    label: 'Agent Activity',
     description: 'Agents that need attention, then most recent activity.'
   },
   { id: 'recent', label: 'Recent', description: null },
-  { id: 'repo', label: 'Repo', description: null },
+  { id: 'repo', label: 'Project', description: null },
   {
     id: 'manual',
     label: 'Manual',
@@ -67,6 +82,10 @@ const SidebarWorkspaceOptionsMenu = React.memo(function SidebarWorkspaceOptionsM
   const repos = useAppStore((s) => s.repos)
   const worktreeCardProperties = useAppStore((s) => s.worktreeCardProperties)
   const toggleWorktreeCardProperty = useAppStore((s) => s.toggleWorktreeCardProperty)
+  const settings = useAppStore((s) => s.settings)
+  const updateSettings = useAppStore((s) => s.updateSettings)
+  const agentActivityDisplayMode = useAppStore((s) => s.agentActivityDisplayMode)
+  const setAgentActivityDisplayMode = useAppStore((s) => s.setAgentActivityDisplayMode)
   const sortBy = useAppStore((s) => s.sortBy)
   const setSortBy = useAppStore((s) => s.setSortBy)
   const groupBy = useAppStore((s) => s.groupBy)
@@ -81,12 +100,6 @@ const SidebarWorkspaceOptionsMenu = React.memo(function SidebarWorkspaceOptionsM
     },
     [onMenuOpenChange]
   )
-
-  useEffect(() => {
-    return () => {
-      onMenuOpenChange?.(false)
-    }
-  }, [onMenuOpenChange])
 
   // Why: derive from current repos so stale ids (e.g. lingering after a repo
   // is removed) don't inflate counts or falsely signal an applied filter.
@@ -106,6 +119,9 @@ const SidebarWorkspaceOptionsMenu = React.memo(function SidebarWorkspaceOptionsM
     (hasSleepingFilter ? 1 : 0) + (hideDefaultBranchWorkspace ? 1 : 0) + selectedCount
   const activeFilterLabel = `${activeFilterCount} ${activeFilterCount === 1 ? 'filter' : 'filters'}`
   const sortLabel = SORT_OPTIONS.find((opt) => opt.id === sortBy)?.label ?? 'Sort'
+  const cardLayout = settings?.experimentalCompactWorktreeCards ? 'compact' : 'detailed'
+  const cardLayoutLabel =
+    CARD_LAYOUT_OPTIONS.find((opt) => opt.id === cardLayout)?.label ?? 'Detailed'
   const visiblePropertyCount = PROPERTY_OPTIONS.filter((opt) =>
     worktreeCardProperties.includes(opt.id)
   ).length
@@ -222,19 +238,51 @@ const SidebarWorkspaceOptionsMenu = React.memo(function SidebarWorkspaceOptionsM
           </DropdownMenuSubContent>
         </DropdownMenuSub>
 
-        <DropdownMenuSeparator />
-        <SidebarWorkspaceFilterSection />
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <span className="flex flex-1 items-center justify-between">
+              <span>Card layout</span>
+              <span className="text-[11px] font-medium text-muted-foreground">
+                {cardLayoutLabel}
+              </span>
+            </span>
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent
+            className="w-44"
+            data-workspace-board-preserve-open={preserveWorkspaceBoardOpen ? '' : undefined}
+          >
+            <DropdownMenuRadioGroup
+              value={cardLayout}
+              onValueChange={(value) => {
+                void updateSettings({
+                  experimentalCompactWorktreeCards: value === 'compact'
+                })
+              }}
+            >
+              {CARD_LAYOUT_OPTIONS.map((opt) => (
+                <DropdownMenuRadioItem
+                  key={opt.id}
+                  value={opt.id}
+                  onSelect={(e) => e.preventDefault()}
+                >
+                  {opt.label}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
 
-        <DropdownMenuSeparator />
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>
             <span className="flex flex-1 items-center justify-between">
               <span>Show properties</span>
-              {visiblePropertyCount > 0 && (
+              {cardLayout === 'compact' ? (
+                <span className="text-[11px] font-medium text-muted-foreground">Hover</span>
+              ) : visiblePropertyCount > 0 ? (
                 <span className="text-[11px] font-medium text-muted-foreground">
                   {visiblePropertyCount}
                 </span>
-              )}
+              ) : null}
             </span>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent
@@ -251,8 +299,31 @@ const SidebarWorkspaceOptionsMenu = React.memo(function SidebarWorkspaceOptionsM
                 {opt.label}
               </DropdownMenuCheckboxItem>
             ))}
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="px-2 py-1 text-[11px] font-medium text-muted-foreground">
+              Agent activity layout
+            </DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              value={agentActivityDisplayMode}
+              onValueChange={(value) =>
+                setAgentActivityDisplayMode(value as AgentActivityDisplayMode)
+              }
+            >
+              {AGENT_ACTIVITY_DISPLAY_OPTIONS.map((opt) => (
+                <DropdownMenuRadioItem
+                  key={opt.id}
+                  value={opt.id}
+                  onSelect={(e) => e.preventDefault()}
+                >
+                  {opt.label}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
           </DropdownMenuSubContent>
         </DropdownMenuSub>
+
+        <DropdownMenuSeparator />
+        <SidebarWorkspaceFilterSection />
 
         <DropdownMenuSeparator />
         <SidebarRepositoryFilterSection />

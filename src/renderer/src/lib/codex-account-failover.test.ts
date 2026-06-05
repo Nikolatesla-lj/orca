@@ -51,8 +51,8 @@ describe('chooseCodexFailoverAccount', () => {
 
     const accounts = [account('account-a', 3), account('account-b', 2), account('account-c', 1)]
     const inactiveCodexAccounts: InactiveAccountUsage[] = [
-      { accountId: 'account-b', claude: codexLimits(8, 22), updatedAt: 2, isFetching: false },
-      { accountId: 'account-c', claude: codexLimits(90, 90), updatedAt: 1, isFetching: false }
+      { accountId: 'account-b', rateLimits: codexLimits(8, 22), updatedAt: 2, isFetching: false },
+      { accountId: 'account-c', rateLimits: codexLimits(90, 90), updatedAt: 1, isFetching: false }
     ]
 
     expect(
@@ -69,7 +69,7 @@ describe('chooseCodexFailoverAccount', () => {
     const active = codexLimits(8, 22)
     const accounts = [account('account-a', 3), account('account-b', 2)]
     const inactiveCodexAccounts: InactiveAccountUsage[] = [
-      { accountId: 'account-b', claude: codexLimits(20, 30), updatedAt: 2, isFetching: false }
+      { accountId: 'account-b', rateLimits: codexLimits(20, 30), updatedAt: 2, isFetching: false }
     ]
 
     expect(

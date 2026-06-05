@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react'
-import { Ban, Keyboard, RotateCcw, Terminal } from 'lucide-react'
+import { Ban, Plus, RotateCcw, Terminal } from 'lucide-react'
 import {
   formatKeybinding,
   type KeybindingActionId,
@@ -36,29 +36,6 @@ export type ShortcutTerminalStatus = {
   description: string
 }
 
-function BindingPreview({
-  bindings,
-  platform
-}: {
-  bindings: readonly string[]
-  platform: NodeJS.Platform
-}): React.JSX.Element {
-  if (bindings.length === 0) {
-    return (
-      <div className="flex min-h-7 items-center">
-        <span className="text-xs text-muted-foreground">Unassigned</span>
-      </div>
-    )
-  }
-  return (
-    <div className="flex min-h-7 flex-wrap items-center justify-start gap-1.5">
-      {bindings.map((binding) => (
-        <ShortcutKeyCombo key={binding} keys={formatKeybinding(binding, platform)} />
-      ))}
-    </div>
-  )
-}
-
 export function ShortcutBindingRow({
   item,
   groupTitle,
@@ -89,6 +66,7 @@ export function ShortcutBindingRow({
   const statusMessage = error ?? (warnings.length > 0 ? warnings.join(' ') : '')
   const recordingMessage = recording ? 'Listening for shortcut. Esc cancels recording.' : ''
   const helperMessage = statusMessage || recordingMessage
+  const hasBinding = effective.length > 0
 
   const handleRecordKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>): void => {
     if (!recording) {
@@ -119,14 +97,23 @@ export function ShortcutBindingRow({
     })
   }
 
+  // Why: the recorder is the row's primary control — clicking the keys (or the
+  // "Add shortcut" placeholder) records a new binding in place, so the whole
+  // affordance lives inline rather than in a detached popover.
+  const recorderLabel = recording
+    ? `Press shortcut keys for ${item.title}. Escape cancels.`
+    : hasBinding
+      ? `Change shortcut for ${item.title}`
+      : `Add shortcut for ${item.title}`
+
   return (
     <SearchableSetting
       title={item.title}
       description={`${groupTitle} shortcut`}
       keywords={[...item.searchKeywords]}
-      className="grid min-h-[54px] grid-cols-1 gap-x-3 rounded-md px-2 py-1.5 transition-colors hover:bg-accent/40 lg:grid-cols-[minmax(0,1.1fr)_minmax(10rem,0.8fr)_10rem_4rem] lg:items-center"
+      className="group/shortcut relative flex min-h-[44px] max-w-none items-center gap-3 rounded-md px-2 py-1.5 transition-colors hover:bg-accent/40 focus-within:bg-accent/40"
     >
-      <div className="min-w-0">
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate text-sm text-foreground">{item.title}</span>
           {modified ? (
@@ -151,77 +138,106 @@ export function ShortcutBindingRow({
             </Tooltip>
           ) : null}
         </div>
-        <div
-          className={cn(
-            'h-[16px] overflow-hidden text-[11px] leading-4',
-            error ? 'text-destructive' : 'text-muted-foreground'
-          )}
-          aria-live="polite"
-        >
-          {helperMessage ? <span className="block truncate">{helperMessage}</span> : null}
-        </div>
+        {helperMessage ? (
+          <span
+            className={cn(
+              'block truncate text-[11px] leading-4',
+              error ? 'text-destructive' : 'text-muted-foreground'
+            )}
+            aria-live="polite"
+          >
+            {helperMessage}
+          </span>
+        ) : null}
       </div>
 
-      <div className="mt-1 min-w-0 lg:mt-0">
-        <BindingPreview bindings={effective} platform={platform} />
-      </div>
+      <div className="flex shrink-0 items-center gap-1">
+        {/* Reset/Disable reveal on hover or keyboard focus to keep the row calm;
+            they stay reachable via focus-within for keyboard users. */}
+        {hasBinding ? (
+          <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover/shortcut:opacity-100 group-focus-within/shortcut:opacity-100">
+            {modified ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="text-muted-foreground hover:text-foreground"
+                    aria-label={`Reset ${item.title} to default`}
+                    onClick={() => onReset(item.id)}
+                  >
+                    <RotateCcw className="size-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top" sideOffset={4}>
+                  Reset to default
+                </TooltipContent>
+              </Tooltip>
+            ) : null}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  className="text-muted-foreground hover:text-destructive"
+                  aria-label={`Disable ${item.title}`}
+                  onClick={() => onDisable(item.id)}
+                >
+                  <Ban className="size-3" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top" sideOffset={4}>
+                Disable shortcut
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        ) : null}
 
-      <Button
-        ref={recordButtonRef}
-        type="button"
-        variant={recording ? 'secondary' : 'outline'}
-        size="sm"
-        aria-invalid={Boolean(error)}
-        aria-pressed={recording}
-        data-shortcut-recorder=""
-        data-shortcut-recorder-active={recording ? '' : undefined}
-        onClick={() => {
-          if (recording) {
-            return
-          }
-          onStartRecording(item.id)
-        }}
-        onKeyDown={handleRecordKeyDown}
-        className={cn(
-          'mt-2 h-8 w-full justify-start px-2.5 text-xs lg:mt-0 lg:w-40',
-          recording && 'border-ring bg-accent text-accent-foreground ring-[3px] ring-ring/30'
-        )}
-      >
-        <Keyboard className="size-3.5" />
-        <span className="truncate">{recording ? 'Press keys...' : 'Change shortcut'}</span>
-      </Button>
-
-      <div className="mt-2 flex items-center gap-1 lg:mt-0 lg:justify-end">
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button
+            <button
+              ref={recordButtonRef}
               type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label={`Disable ${item.title}`}
-              onClick={() => onDisable(item.id)}
+              aria-label={recorderLabel}
+              aria-invalid={Boolean(error)}
+              aria-pressed={recording}
+              data-shortcut-recorder=""
+              data-shortcut-recorder-active={recording ? '' : undefined}
+              onClick={() => {
+                if (!recording) {
+                  onStartRecording(item.id)
+                }
+              }}
+              onKeyDown={handleRecordKeyDown}
+              className={cn(
+                'flex min-h-7 min-w-[5.5rem] items-center justify-center gap-1.5 rounded-md border px-2 py-1 text-xs outline-none transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50',
+                recording
+                  ? 'border-ring bg-accent text-accent-foreground ring-[3px] ring-ring/30'
+                  : hasBinding
+                    ? 'border-transparent hover:border-border/70 hover:bg-background'
+                    : 'border-dashed border-border/70 text-muted-foreground hover:border-border hover:text-foreground'
+              )}
             >
-              <Ban className="size-3" />
-            </Button>
+              {recording ? (
+                <span className="px-1 text-muted-foreground">Press keys…</span>
+              ) : hasBinding ? (
+                <span className="flex flex-wrap items-center justify-end gap-1.5">
+                  {effective.map((binding) => (
+                    <ShortcutKeyCombo key={binding} keys={formatKeybinding(binding, platform)} />
+                  ))}
+                </span>
+              ) : (
+                <span className="flex items-center gap-1">
+                  <Plus className="size-3" />
+                  Add shortcut
+                </span>
+              )}
+            </button>
           </TooltipTrigger>
           <TooltipContent side="top" sideOffset={4}>
-            Disable
-          </TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label={`Reset ${item.title}`}
-              onClick={() => onReset(item.id)}
-            >
-              <RotateCcw className="size-3" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top" sideOffset={4}>
-            Reset
+            {recording ? 'Listening for shortcut' : hasBinding ? 'Change shortcut' : 'Add shortcut'}
           </TooltipContent>
         </Tooltip>
       </div>

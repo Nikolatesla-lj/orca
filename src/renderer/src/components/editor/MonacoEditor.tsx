@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- Why: MonacoEditor centralizes Monaco setup,
 source-mode markdown annotations, persistence-safe content sync, reveal
 handling, and editor-local UI overlays so split-pane state remains coherent. */
+/* oxlint-disable react-doctor/no-adjust-state-on-prop-change -- Why: selection annotations are synchronized from Monaco editor selection and layout APIs, not derived React props. */
 import React, { useRef, useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import Editor, { type OnMount } from '@monaco-editor/react'
 import type { editor } from 'monaco-editor'
@@ -14,6 +15,7 @@ import { registerFileSearchSelectedTextProvider } from '@/lib/file-search-select
 import { useContextualCopySetup } from './useContextualCopySetup'
 import { MAX_REVEAL_CONTENT_WAIT_FRAMES, performReveal } from './monaco-reveal'
 import { syncContentOnMount, syncContentUpdate } from './monaco-content-sync'
+import { getMonacoCodebaseSearchQuery } from './monaco-codebase-search'
 import {
   beginProgrammaticContentSync,
   endProgrammaticContentSync,
@@ -33,11 +35,20 @@ import { buildGitConflictDecorations, hasGitConflictMarkers } from './monaco-con
 import { findWorktreeById } from '@/store/slices/worktree-helpers'
 import type { DiffComment } from '../../../../shared/types'
 import { isMarkdownComment } from '@/lib/diff-comment-compat'
+import { formatMarkdownReviewNotes, type MarkdownReviewNote } from '@/lib/markdown-review-notes'
 import { useDiffCommentDecorator } from '../diff-comments/useDiffCommentDecorator'
 import { DiffCommentPopover } from '../diff-comments/DiffCommentPopover'
-import { getDiffCommentPopoverLeft } from '../diff-comments/diff-comment-popover-position'
+import {
+  getDiffCommentPopoverLeft,
+  getDiffCommentPopoverTop
+} from '../diff-comments/diff-comment-popover-position'
 import { isLinuxUserAgent } from '../terminal-pane/pane-helpers'
 import { installEditorSaveShortcut } from './editor-shortcuts'
+import { Plus } from 'lucide-react'
+import {
+  getMonacoMarkdownSelectionAnnotationTarget,
+  type MonacoMarkdownSelectionAnnotationTarget
+} from './monaco-markdown-selection-annotation'
 
 type MonacoEditorProps = {
   fileId: string
@@ -57,6 +68,10 @@ type MonacoEditorProps = {
   conflictDecorationsEnabled?: boolean
   readOnly?: boolean
   autoHeight?: boolean
+}
+
+type MarkdownCommentPopoverState = Omit<MonacoMarkdownSelectionAnnotationTarget, 'selectedText'> & {
+  selectedText?: string
 }
 
 export default function MonacoEditor({
@@ -156,12 +171,9 @@ export default function MonacoEditor({
   const [gutterMenuOpen, setGutterMenuOpen] = useState(false)
   const [gutterMenuPoint, setGutterMenuPoint] = useState({ x: 0, y: 0 })
   const [gutterMenuLine, setGutterMenuLine] = useState(1)
-  const [commentPopover, setCommentPopover] = useState<{
-    lineNumber: number
-    startLine?: number
-    top: number
-    left?: number
-  } | null>(null)
+  const [commentPopover, setCommentPopover] = useState<MarkdownCommentPopoverState | null>(null)
+  const [selectionAnnotationTarget, setSelectionAnnotationTarget] =
+    useState<MonacoMarkdownSelectionAnnotationTarget | null>(null)
   const isDark =
     settings?.theme === 'dark' ||
     (settings?.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
@@ -193,13 +205,18 @@ export default function MonacoEditor({
       ? scrollToDiffCommentId
       : null
   }, [markdownComments, scrollToDiffCommentId, shouldShowMarkdownAnnotations])
+  const formatMarkdownCommentPrompt = useCallback(
+    (comment: DiffComment) => formatMarkdownReviewNotes([comment as MarkdownReviewNote], content),
+    [content]
+  )
 
   useDiffCommentDecorator({
     editor: shouldShowMarkdownAnnotations ? mountedEditor : null,
     filePath: relativePath,
     worktreeId: worktreeId ?? '',
     comments: shouldShowMarkdownAnnotations ? markdownComments : [],
-    onAddCommentClick: ({ lineNumber, startLine, top }) =>
+    onAddCommentClick: ({ lineNumber, startLine, top }) => {
+      setSelectionAnnotationTarget(null)
       setCommentPopover({
         lineNumber,
         startLine,
@@ -207,13 +224,15 @@ export default function MonacoEditor({
         left: mountedEditor
           ? (getDiffCommentPopoverLeft(mountedEditor, editorContainerRef.current) ?? undefined)
           : undefined
-      }),
+      })
+    },
     onDeleteComment: (id) => {
       if (worktreeId) {
         void deleteDiffComment(worktreeId, id)
       }
     },
     onUpdateComment: worktreeId ? (id, body) => updateDiffComment(worktreeId, id, body) : undefined,
+    formatCommentPrompt: formatMarkdownCommentPrompt,
     pendingScrollCommentId: pendingScrollForThisEditor,
     onPendingScrollConsumed: () => setScrollToDiffCommentId(null)
   })
@@ -360,13 +379,36 @@ export default function MonacoEditor({
           propsRef.current.onSave(value)
         }
       )
+      const searchInFilesAction = editorInstance.addAction({
+        id: 'orca.searchInFiles',
+        label: 'Search in Files',
+        contextMenuGroupId: 'navigation',
+        contextMenuOrder: 2,
+        run: () => {
+          if (!worktreeId) {
+            return
+          }
+          const query = getMonacoCodebaseSearchQuery(
+            editorInstance.getModel(),
+            editorInstance.getSelection(),
+            editorInstance.getPosition()
+          )
+          if (!query) {
+            return
+          }
+          const state = useAppStore.getState()
+          state.seedFileSearchQuery(worktreeId, query)
+          state.setRightSidebarTab('search')
+          state.setRightSidebarOpen(true)
+        }
+      })
 
       // Track cursor line for "copy path to line" feature
       const pos = editorInstance.getPosition()
       if (pos) {
         setEditorCursorLine(filePath, pos.lineNumber)
       }
-      editorInstance.onDidChangeCursorPosition((e) => {
+      const cursorPositionSub = editorInstance.onDidChangeCursorPosition((e) => {
         setEditorCursorLine(filePath, e.position.lineNumber)
         setWithLRU(cursorPositionCache, viewStateKey, {
           lineNumber: e.position.lineNumber,
@@ -374,25 +416,11 @@ export default function MonacoEditor({
         })
       })
 
-      editorInstance.onDidDispose(() => {
-        cleanupSaveShortcut()
-        autoHeightSub?.dispose()
-        if (autoHeightFrame !== null) {
-          window.cancelAnimationFrame(autoHeightFrame)
-          autoHeightFrame = null
-        }
-        conflictDecorationsRef.current?.clear()
-        conflictDecorationsRef.current = null
-        editorRef.current = null
-        setMountedEditor(null)
-        setCommentPopover(null)
-      })
-
       // Why: Writing to the Map at 60fps (every scroll frame) is unnecessary since
       // we only need the final position when the user stops scrolling or switches
       // tabs. A trailing throttle of ~150ms captures the resting position while
       // avoiding excessive writes.
-      editorInstance.onDidScrollChange((e) => {
+      const scrollStateSub = editorInstance.onDidScrollChange((e) => {
         if (scrollThrottleTimerRef.current !== null) {
           clearTimeout(scrollThrottleTimerRef.current)
         }
@@ -404,7 +432,7 @@ export default function MonacoEditor({
 
       // Intercept right-click on line number gutter to show Radix context menu
       // (same approach as VSCode: custom menu instead of Monaco's built-in one)
-      editorInstance.onMouseDown((e) => {
+      const gutterMouseDownSub = editorInstance.onMouseDown((e) => {
         if (
           e.event.rightButton &&
           e.target.type === monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS
@@ -417,6 +445,26 @@ export default function MonacoEditor({
           setGutterMenuPoint({ x: e.event.posx, y: e.event.posy })
           setGutterMenuOpen(true)
         }
+      })
+
+      editorInstance.onDidDispose(() => {
+        // Why: keep editor-owned UI subscriptions symmetrical with the
+        // shortcut/decorator cleanup when Monaco tears this instance down.
+        cursorPositionSub.dispose()
+        scrollStateSub.dispose()
+        gutterMouseDownSub.dispose()
+        cleanupSaveShortcut()
+        searchInFilesAction.dispose()
+        autoHeightSub?.dispose()
+        if (autoHeightFrame !== null) {
+          window.cancelAnimationFrame(autoHeightFrame)
+          autoHeightFrame = null
+        }
+        conflictDecorationsRef.current?.clear()
+        conflictDecorationsRef.current = null
+        editorRef.current = null
+        setMountedEditor(null)
+        setCommentPopover(null)
       })
 
       // If there's a pending reveal at mount time, execute it now
@@ -462,7 +510,8 @@ export default function MonacoEditor({
       setEditorCursorLine,
       updateMarkdownCompletionDocuments,
       viewStateKey,
-      autoHeight
+      autoHeight,
+      worktreeId
     ]
   )
 
@@ -471,11 +520,10 @@ export default function MonacoEditor({
       return
     }
     const update = (): void => {
-      const top =
-        mountedEditor.getTopForLineNumber(commentPopover.lineNumber) - mountedEditor.getScrollTop()
+      const top = getDiffCommentPopoverTop(mountedEditor, commentPopover.lineNumber, undefined)
       const left = getDiffCommentPopoverLeft(mountedEditor, editorContainerRef.current)
       setCommentPopover((prev) =>
-        prev ? { ...prev, top, left: left == null ? prev.left : left } : prev
+        prev ? { ...prev, top: top ?? prev.top, left: left == null ? prev.left : left } : prev
       )
     }
     const scrollSub = mountedEditor.onDidScrollChange(update)
@@ -489,6 +537,32 @@ export default function MonacoEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- match DiffViewer: don't resubscribe on top updates.
   }, [mountedEditor, commentPopover?.lineNumber])
 
+  useEffect(() => {
+    if (!mountedEditor || !shouldShowMarkdownAnnotations || commentPopover) {
+      setSelectionAnnotationTarget(null)
+      return
+    }
+    const update = (): void => {
+      const left = getDiffCommentPopoverLeft(mountedEditor, editorContainerRef.current)
+      setSelectionAnnotationTarget(
+        getMonacoMarkdownSelectionAnnotationTarget(
+          mountedEditor,
+          mountedEditor.getSelection(),
+          left ?? undefined
+        )
+      )
+    }
+    update()
+    const selectionSub = mountedEditor.onDidChangeCursorSelection(update)
+    const scrollSub = mountedEditor.onDidScrollChange(update)
+    const layoutSub = mountedEditor.onDidLayoutChange(update)
+    return () => {
+      selectionSub.dispose()
+      scrollSub.dispose()
+      layoutSub.dispose()
+    }
+  }, [commentPopover, mountedEditor, shouldShowMarkdownAnnotations])
+
   const handleSubmitMarkdownComment = async (body: string): Promise<void> => {
     if (!commentPopover || !worktreeId) {
       return
@@ -499,6 +573,7 @@ export default function MonacoEditor({
       source: 'markdown',
       startLine: commentPopover.startLine,
       lineNumber: commentPopover.lineNumber,
+      selectedText: commentPopover.selectedText,
       body,
       side: 'modified'
     })
@@ -666,6 +741,31 @@ export default function MonacoEditor({
           onSubmit={handleSubmitMarkdownComment}
         />
       )}
+      {selectionAnnotationTarget && shouldShowMarkdownAnnotations && !commentPopover ? (
+        <button
+          type="button"
+          className="orca-diff-comment-add-btn"
+          style={{
+            display: 'flex',
+            top: Math.max(4, selectionAnnotationTarget.top - 22),
+            left: selectionAnnotationTarget.left ?? 4
+          }}
+          title="Add note on selected text"
+          aria-label="Add note on selected text"
+          onMouseDown={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+          }}
+          onClick={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            setCommentPopover(selectionAnnotationTarget)
+            setSelectionAnnotationTarget(null)
+          }}
+        >
+          <Plus className="size-3" />
+        </button>
+      ) : null}
       <Editor
         height={renderedEditorHeight === null ? '100%' : `${renderedEditorHeight}px`}
         language={language}

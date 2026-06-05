@@ -4,7 +4,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import NewWorkspaceComposerCard from '@/components/NewWorkspaceComposerCard'
 import AgentSettingsDialog from '@/components/agent/AgentSettingsDialog'
 import { useComposerState } from '@/hooks/useComposerState'
-import { AGENT_CATALOG } from '@/lib/agent-catalog'
+import {
+  pickQuickWorkspaceAgent,
+  resolveQuickWorkspaceAgentSelection
+} from '@/lib/quick-workspace-agent-selection'
 import type { LinkedWorkItemSummary } from '@/lib/new-workspace'
 import { shouldAllowComposerEnterSubmitTarget } from '@/lib/new-workspace-enter-guard'
 import { isScreenSubmitShortcut } from '@/lib/screen-submit-shortcut'
@@ -25,6 +28,8 @@ type ComposerModalData = {
    *  `workspace_created.source` carries the right value. Falls back to
    *  `unknown` when omitted. */
   telemetrySource?: WorkspaceCreateTelemetrySource
+  contextualTourSource?: string
+  setupGuideTourRequestId?: string
 }
 
 export default function NewWorkspaceComposerModal(): React.JSX.Element | null {
@@ -83,10 +88,6 @@ function ComposerModalBody({
           trigger?.focus({ preventScroll: true })
         }}
       >
-        <DialogHeader className="gap-1">
-          <DialogTitle className="text-base font-semibold">Create Workspace</DialogTitle>
-        </DialogHeader>
-
         <QuickTabBody modalData={modalData} onClose={onClose} active />
       </DialogContent>
     </Dialog>
@@ -103,7 +104,14 @@ function QuickTabBody({
   active: boolean
 }): React.JSX.Element {
   const settings = useAppStore((s) => s.settings)
-  const { cardProps, composerRef, nameInputRef, submitQuick, createDisabled } = useComposerState({
+  const {
+    cardProps,
+    composerRef,
+    onComposerNodeChange,
+    nameInputRef,
+    submitQuick,
+    createDisabled
+  } = useComposerState({
     initialName: modalData.prefilledName ?? '',
     // Why: the modal is quick-create only now, so prompt-prefill state is
     // intentionally ignored even if older callers still send it.
@@ -135,18 +143,22 @@ function QuickTabBody({
   )
   const preferredQuickAgent = useMemo<TuiAgent | null>(() => {
     const pref = settings?.defaultTuiAgent
-    if (pref === 'blank') {
-      // Why: 'blank' is the explicit "no agent" preference — the quick agent
-      // model already uses null to mean "blank terminal", so translate here.
-      return null
-    }
-    if (pref) {
-      return pref
-    }
-    const detected = cardProps.detectedAgentIds
-    return AGENT_CATALOG.find((agent) => detected === null || detected.has(agent.id))?.id ?? null
-  }, [cardProps.detectedAgentIds, settings?.defaultTuiAgent])
-  const quickAgent = quickAgentOverride === undefined ? preferredQuickAgent : quickAgentOverride
+    // Why: detection can still be pending when quick-create submits; keep the
+    // prior catalog fallback while filtering disabled agents out of that choice.
+    return pickQuickWorkspaceAgent(pref, cardProps.detectedAgentIds, settings?.disabledTuiAgents)
+  }, [cardProps.detectedAgentIds, settings?.defaultTuiAgent, settings?.disabledTuiAgents])
+  const resolvedQuickAgentSelection = resolveQuickWorkspaceAgentSelection({
+    quickAgentOverride,
+    preferredQuickAgent,
+    detectedAgentIds: cardProps.detectedAgentIds,
+    disabledTuiAgents: settings?.disabledTuiAgents
+  })
+  if (resolvedQuickAgentSelection.quickAgentOverride !== quickAgentOverride) {
+    // Why: detection/settings changes can invalidate a user-picked agent; repair
+    // before the child selector renders an unavailable option for one commit.
+    setQuickAgentOverride(resolvedQuickAgentSelection.quickAgentOverride)
+  }
+  const quickAgent = resolvedQuickAgentSelection.quickAgent
 
   const handleQuickAgentChange = useCallback((agent: TuiAgent | null) => {
     setQuickAgentOverride(agent)
@@ -155,6 +167,7 @@ function QuickTabBody({
   const handleCreate = useCallback(async (): Promise<void> => {
     await submitQuick(quickAgent)
   }, [quickAgent, submitQuick])
+  const primaryActionLabel = cardProps.selectedRepoIsGit ? 'Create Worktree' : 'Create Workspace'
 
   // Cmd/Ctrl+Enter submits, Esc first blurs the focused input (like the full page).
   useEffect(() => {
@@ -206,12 +219,18 @@ function QuickTabBody({
 
   return (
     <>
+      <DialogHeader className="gap-1">
+        <DialogTitle className="text-base font-semibold">{primaryActionLabel}</DialogTitle>
+      </DialogHeader>
       <NewWorkspaceComposerCard
+        contextualTourSource={modalData.contextualTourSource}
         composerRef={composerRef}
+        onComposerNodeChange={onComposerNodeChange}
         nameInputRef={nameInputRef}
         quickAgent={quickAgent}
         onQuickAgentChange={handleQuickAgentChange}
         {...cardProps}
+        primaryActionLabel={primaryActionLabel}
         onOpenAgentSettings={() => setAgentSettingsOpen(true)}
         onCreate={() => void handleCreate()}
       />

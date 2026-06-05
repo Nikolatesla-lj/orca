@@ -1,5 +1,9 @@
 import { z } from 'zod'
 import { isValidAutomationSchedule } from '../../../../shared/automation-schedules'
+import {
+  MAX_AUTOMATION_PRECHECK_TIMEOUT_SECONDS,
+  normalizeAutomationPrecheckTimeoutSeconds
+} from '../../../../shared/automation-precheck'
 import { isTuiAgent } from '../../../../shared/tui-agent-config'
 import { defineMethod, type RpcMethod } from '../core'
 import {
@@ -7,9 +11,11 @@ import {
   OptionalPlainString,
   OptionalPositiveInt,
   OptionalString,
+  requiredStringAllowingEmpty,
   requiredNumber,
   requiredString
 } from '../schemas'
+import { PipelineRunParams } from './pipelines'
 
 const TuiAgent = requiredString('Missing provider').refine(isTuiAgent, {
   message: 'Unknown provider'
@@ -20,6 +26,18 @@ const AutomationWorkspaceMode = z.enum(['existing', 'new_per_run']).optional()
 const AutomationSchedule = requiredString('Missing trigger').refine(isValidAutomationSchedule, {
   message: 'Invalid automation trigger'
 })
+
+const AutomationPrecheck = z
+  .object({
+    command: requiredString('Missing precheck command'),
+    timeoutSeconds: OptionalPositiveInt.transform((value) =>
+      normalizeAutomationPrecheckTimeoutSeconds(value)
+    ).refine((value) => value <= MAX_AUTOMATION_PRECHECK_TIMEOUT_SECONDS, {
+      message: 'Precheck timeout is too large'
+    })
+  })
+  .nullable()
+  .optional()
 
 const OptionalNullablePlainString = z
   .unknown()
@@ -35,9 +53,23 @@ const AutomationRuns = z.object({
   automationId: OptionalString
 })
 
+const AutomationTarget = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('prompt'),
+    prompt: requiredString('Missing automation prompt')
+  }),
+  z.object({
+    type: z.literal('pipeline'),
+    pipelineTemplateId: requiredString('Missing pipeline template id'),
+    pipelineInput: PipelineRunParams
+  })
+])
+
 const AutomationCreate = z.object({
   name: requiredString('Missing automation name'),
-  prompt: requiredString('Missing automation prompt'),
+  prompt: requiredStringAllowingEmpty('Missing automation prompt'),
+  target: AutomationTarget.optional(),
+  precheck: AutomationPrecheck,
   agentId: TuiAgent,
   repo: OptionalString,
   workspace: OptionalString,
@@ -54,6 +86,8 @@ const AutomationCreate = z.object({
 const AutomationUpdateFields = z.object({
   name: OptionalString,
   prompt: OptionalString,
+  target: AutomationTarget.optional(),
+  precheck: AutomationPrecheck,
   agentId: TuiAgent.optional(),
   repo: OptionalString,
   workspace: OptionalString,

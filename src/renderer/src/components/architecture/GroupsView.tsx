@@ -80,6 +80,7 @@ const KIND_ICON: Record<C4Kind, LucideIcon> = {
 }
 
 const GroupsDndContext = createContext<GroupsDndValue | null>(null)
+const NOOP_SELECTED_GROUP_CHANGE = (): void => {}
 
 function useGroupsDnd(): GroupsDndValue {
   const value = useContext(GroupsDndContext)
@@ -120,7 +121,7 @@ export function GroupsDndProvider({
   currentParentId,
   onNavigateToNode,
   selectedGroupId = null,
-  onSelectedGroupChange = () => {},
+  onSelectedGroupChange = NOOP_SELECTED_GROUP_CHANGE,
   children
 }: GroupsDndProviderProps): React.JSX.Element {
   const parentNode = currentParentId
@@ -324,23 +325,42 @@ export function GroupsDndProvider({
     [moveMember, onUpdateGroups, patchGroup, removeMember, wouldCycle]
   )
 
-  const value: GroupsDndValue = {
-    groups,
-    onNavigateToNode,
-    parentNode,
-    outOfScope,
-    visibleGroups,
-    nodeById,
-    childrenOf,
-    ungroupedNodes,
-    active,
-    selectedGroupId,
-    onSelectedGroupChange,
-    patchGroup,
-    deleteGroup,
-    createEmptyGroup,
-    removeMember
-  }
+  const value = useMemo<GroupsDndValue>(
+    () => ({
+      groups,
+      onNavigateToNode,
+      parentNode,
+      outOfScope,
+      visibleGroups,
+      nodeById,
+      childrenOf,
+      ungroupedNodes,
+      active,
+      selectedGroupId,
+      onSelectedGroupChange,
+      patchGroup,
+      deleteGroup,
+      createEmptyGroup,
+      removeMember
+    }),
+    [
+      active,
+      childrenOf,
+      createEmptyGroup,
+      deleteGroup,
+      groups,
+      nodeById,
+      onNavigateToNode,
+      onSelectedGroupChange,
+      outOfScope,
+      parentNode,
+      patchGroup,
+      removeMember,
+      selectedGroupId,
+      ungroupedNodes,
+      visibleGroups
+    ]
+  )
 
   return (
     <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>

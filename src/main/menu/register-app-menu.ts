@@ -8,14 +8,21 @@ import {
 
 export type AppearanceMenuState = {
   showTasksButton: boolean
+  showAutomationsButton: boolean
+  showMobileButton: boolean
   showTitlebarAppName: boolean
   statusBarVisible: boolean
 }
 
 export type AppearanceMenuKey = keyof AppearanceMenuState
 
+export function getNextDefaultOnAppearanceSettingValue(current: boolean | undefined): boolean {
+  return !(current !== false)
+}
+
 type RegisterAppMenuOptions = {
   onOpenSettings: () => void
+  onOpenSetupGuide: (window?: Electron.BaseWindow | null) => void
   onOpenFeatureTour: (window?: Electron.BaseWindow | null) => void
   onOpenCrashReport: (window?: Electron.BaseWindow | null) => void
   onCheckForUpdates: (options: { includePrerelease: boolean }) => void
@@ -33,6 +40,7 @@ type RegisterAppMenuOptions = {
 function buildAndApplyMenu(options: RegisterAppMenuOptions): void {
   const {
     onOpenSettings,
+    onOpenSetupGuide,
     onOpenFeatureTour,
     onOpenCrashReport,
     onCheckForUpdates,
@@ -97,8 +105,13 @@ function buildAndApplyMenu(options: RegisterAppMenuOptions): void {
   }
 
   const featureTourItem: Electron.MenuItemConstructorOptions = {
-    label: 'Feature tour',
+    label: 'Explore Orca',
     click: (_menuItem, window) => onOpenFeatureTour(window)
+  }
+
+  const setupGuideItem: Electron.MenuItemConstructorOptions = {
+    label: 'Getting Started with Orca',
+    click: (_menuItem, window) => onOpenSetupGuide(window)
   }
 
   const crashReportItem: Electron.MenuItemConstructorOptions = {
@@ -213,6 +226,18 @@ function buildAndApplyMenu(options: RegisterAppMenuOptions): void {
         click: () => onToggleAppearance('showTasksButton')
       },
       {
+        label: 'Show Automations Button',
+        type: 'checkbox',
+        checked: appearance.showAutomationsButton,
+        click: () => onToggleAppearance('showAutomationsButton')
+      },
+      {
+        label: 'Show Orca Mobile Button',
+        type: 'checkbox',
+        checked: appearance.showMobileButton,
+        click: () => onToggleAppearance('showMobileButton')
+      },
+      {
         label: 'Show Titlebar App Name',
         type: 'checkbox',
         checked: appearance.showTitlebarAppName,
@@ -267,15 +292,13 @@ function buildAndApplyMenu(options: RegisterAppMenuOptions): void {
     submenu: [{ role: 'minimize' }, { role: 'zoom' }]
   }
 
-  // Why: the feature tour is product education, so it belongs under Help on
-  // every platform. macOS still keeps About/Updates in the app menu, while
-  // Windows/Linux keep those entries here because they have no app menu.
   const helpMenu: Electron.MenuItemConstructorOptions = {
     label: 'Help',
     submenu: [
       crashReportItem,
       { type: 'separator' },
       featureTourItem,
+      setupGuideItem,
       ...(isMac
         ? []
         : ([

@@ -5,6 +5,7 @@ import { useAppStore } from '@/store'
 import { getShortcutPlatform } from '@/lib/shortcut-platform'
 import type { InlineInput } from './FileExplorerRow'
 import type { TreeNode } from './file-explorer-types'
+import type { FileExplorerRowProjection } from './file-explorer-row-projection'
 import { formatFileExplorerPathsForClipboard } from './file-explorer-selection'
 import {
   fileExplorerHasRedo,
@@ -14,38 +15,6 @@ import {
 } from './fileExplorerUndoRedo'
 import { keybindingMatchesAction } from '../../../../shared/keybindings'
 
-function isCmdZRedo(e: KeyboardEvent): boolean {
-  const isMac = navigator.userAgent.includes('Mac')
-  const mod = isMac ? e.metaKey : e.ctrlKey
-  if (!mod || e.altKey) {
-    return false
-  }
-  if (isMac) {
-    return e.code === 'KeyZ' && e.shiftKey
-  }
-  // Windows/Linux: Ctrl+Shift+Z or Ctrl+Y
-  return (e.code === 'KeyZ' && e.shiftKey) || (e.code === 'KeyY' && !e.shiftKey)
-}
-
-function isCmdZUndo(e: KeyboardEvent): boolean {
-  const isMac = navigator.userAgent.includes('Mac')
-  const mod = isMac ? e.metaKey : e.ctrlKey
-  if (!mod || e.altKey || e.shiftKey) {
-    return false
-  }
-  // Prefer code (layout-independent); fall back to key for edge IME/layout cases.
-  return e.code === 'KeyZ' || e.key.toLowerCase() === 'z'
-}
-
-function matchesLegacyFileDeleteShortcut(e: KeyboardEvent): boolean {
-  const isMac = navigator.userAgent.includes('Mac')
-  return (
-    (isMac && e.key === 'Backspace' && e.metaKey) ||
-    (isMac && e.key === 'Delete' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) ||
-    (!isMac && e.key === 'Delete' && !e.metaKey && !e.ctrlKey)
-  )
-}
-
 /**
  * Keyboard shortcuts for the file explorer.
  *
@@ -54,19 +23,20 @@ function matchesLegacyFileDeleteShortcut(e: KeyboardEvent): boolean {
  */
 export function useFileExplorerKeys(opts: {
   containerRef: React.RefObject<HTMLDivElement | null>
-  flatRows: TreeNode[]
+  rowProjection: FileExplorerRowProjection
   inlineInput: InlineInput | null
   selectedPaths: Set<string>
   selectedNode: TreeNode | null
   startRename: (node: TreeNode) => void
   requestDelete: (node: TreeNode) => void
+  requestDeleteAll: (nodes: TreeNode[]) => void
 }): void {
   const rightSidebarOpen = useAppStore((s) => s.rightSidebarOpen)
   const rightSidebarTab = useAppStore((s) => s.rightSidebarTab)
   const keybindings = useAppStore((s) => s.keybindings)
 
-  const flatRowsRef = useRef(opts.flatRows)
-  flatRowsRef.current = opts.flatRows
+  const rowProjectionRef = useRef(opts.rowProjection)
+  rowProjectionRef.current = opts.rowProjection
   const inlineInputRef = useRef(opts.inlineInput)
   inlineInputRef.current = opts.inlineInput
   const selectedPathsRef = useRef(opts.selectedPaths)
@@ -77,6 +47,8 @@ export function useFileExplorerKeys(opts: {
   startRenameRef.current = opts.startRename
   const requestDeleteRef = useRef(opts.requestDelete)
   requestDeleteRef.current = opts.requestDelete
+  const requestDeleteAllRef = useRef(opts.requestDeleteAll)
+  requestDeleteAllRef.current = opts.requestDeleteAll
 
   useEffect(() => {
     // Find the node that the focused button represents (for bare-key shortcuts).
@@ -91,7 +63,7 @@ export function useFileExplorerKeys(opts: {
         return null
       }
       const idx = Number(wrapper.dataset.index)
-      return flatRowsRef.current[idx] ?? null
+      return rowProjectionRef.current.getRowAtIndex(idx)
     }
 
     const focusInExplorer = (): boolean => {
@@ -121,8 +93,13 @@ export function useFileExplorerKeys(opts: {
       // Why: require focus inside the explorer shell (includes the scrollbar, not just
       // the viewport — Radix renders the scrollbar as a sibling of the viewport).
       const inExplorer = focusInExplorer()
-      const wantUndo = isCmdZUndo(e) && fileExplorerHasUndo()
-      const wantRedo = isCmdZRedo(e) && fileExplorerHasRedo()
+      const platform = getShortcutPlatform()
+      const wantUndo =
+        keybindingMatchesAction('fileExplorer.undo', e, platform, keybindings) &&
+        fileExplorerHasUndo()
+      const wantRedo =
+        keybindingMatchesAction('fileExplorer.redo', e, platform, keybindings) &&
+        fileExplorerHasRedo()
       if (inExplorer && (wantUndo || wantRedo)) {
         e.preventDefault()
         const run = wantRedo ? redoFileExplorer() : undoFileExplorer()
@@ -141,17 +118,16 @@ export function useFileExplorerKeys(opts: {
             startRenameRef.current(node)
             return
           }
-          const platform = getShortcutPlatform()
-          const hasDeleteOverride = Object.prototype.hasOwnProperty.call(
-            keybindings,
-            'fileExplorer.delete'
+          const wantsDelete = keybindingMatchesAction(
+            'fileExplorer.delete',
+            e,
+            platform,
+            keybindings
           )
-          const wantsDelete = hasDeleteOverride
-            ? keybindingMatchesAction('fileExplorer.delete', e, platform, keybindings)
-            : matchesLegacyFileDeleteShortcut(e)
           if (wantsDelete) {
             e.preventDefault()
-            requestDeleteRef.current(node)
+            const selectedNodes = rowProjectionRef.current.getRowsByPaths(selectedPathsRef.current)
+            requestDeleteAllRef.current(selectedNodes.length > 1 ? selectedNodes : [node])
             return
           }
         }
@@ -162,7 +138,6 @@ export function useFileExplorerKeys(opts: {
       if (!focusInExplorer()) {
         return
       }
-      const platform = getShortcutPlatform()
       const wantsCopyRelativePath = keybindingMatchesAction(
         'fileExplorer.copyRelativePath',
         e,
@@ -180,9 +155,7 @@ export function useFileExplorerKeys(opts: {
       }
 
       const node = selectedNodeRef.current ?? findFocusedNode()
-      const selectedNodes = flatRowsRef.current.filter((row) =>
-        selectedPathsRef.current.has(row.path)
-      )
+      const selectedNodes = rowProjectionRef.current.getRowsByPaths(selectedPathsRef.current)
       const fallbackNodes = selectedNodes.length > 0 ? selectedNodes : node ? [node] : []
       if (fallbackNodes.length === 0) {
         return

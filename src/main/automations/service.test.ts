@@ -124,6 +124,58 @@ describe('AutomationService', () => {
     )
   })
 
+  it('creates a Pipeline run for pipeline target automations without renderer dispatch', async () => {
+    vi.setSystemTime(new Date('2026-05-13T08:00:00Z'))
+    const store = await createStore()
+    store.addRepo(makeRepo())
+    const pipelineInput = {
+      templateId: 'parallel-planner-with-review',
+      repoId: 'r1',
+      sourceBranch: 'main',
+      targetBranch: 'pipeline-output',
+      taskSource: { type: 'manual' as const, tasks: [] },
+      maxConcurrent: 1,
+      plannerAgentId: 'codex' as const,
+      implementerAgentId: 'codex' as const,
+      mergerAgentId: 'codex' as const,
+      executionTargetType: 'local' as const
+    }
+    const automation = store.createAutomation({
+      name: 'Pipeline check',
+      prompt: '',
+      target: {
+        type: 'pipeline',
+        pipelineTemplateId: 'parallel-planner-with-review',
+        pipelineInput
+      },
+      agentId: 'codex',
+      projectId: 'r1',
+      workspaceMode: 'new_per_run',
+      timezone: 'UTC',
+      rrule: 'FREQ=DAILY;BYHOUR=9;BYMINUTE=0',
+      dtstart: new Date('2026-05-14T00:00:00Z').getTime()
+    })
+    const send = vi.fn()
+    const pipelineRun = vi.fn().mockReturnValue({ run: { id: 'pipe_run_1' } })
+    const service = new AutomationService(store, {
+      tickMs: 60_000,
+      pipelineService: { run: pipelineRun } as never
+    })
+    service.setWebContents({
+      isDestroyed: () => false,
+      send
+    } as never)
+    service.setRendererReady()
+
+    const run = await service.runNow(automation.id)
+
+    expect(pipelineRun).toHaveBeenCalledWith(pipelineInput, { automationRunId: run.id })
+    expect(send).not.toHaveBeenCalled()
+    expect(run.status).toBe('dispatched')
+    expect(run.pipelineRunId).toBe('pipe_run_1')
+    expect(store.listAutomationRuns(automation.id)[0]?.pipelineRunId).toBe('pipe_run_1')
+  })
+
   it('attaches provider usage when a completed run can be attributed', async () => {
     vi.setSystemTime(new Date('2026-05-13T10:00:00'))
     const store = await createStore()

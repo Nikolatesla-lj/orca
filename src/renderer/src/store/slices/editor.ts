@@ -23,6 +23,7 @@ import type {
   Tab,
   TabGroup,
   GitUpstreamStatus,
+  RightSidebarTab,
   SearchResult,
   WorkspaceSessionState,
   WorkspaceVisibleTabType
@@ -32,6 +33,7 @@ import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../../shared/constants'
 import type { RemoteOpKind } from '@/components/right-sidebar/source-control-primary-action'
 import { shouldForcePushWithLeaseForUpstream } from '../../../../shared/git-upstream-status'
 import {
+  fastForwardRuntimeGit,
   fetchRuntimeGit,
   getRuntimeGitUpstreamStatus,
   pullRuntimeGit,
@@ -45,6 +47,10 @@ import {
 } from '@/runtime/runtime-file-client'
 import { settingsForRuntimeOwner } from '@/runtime/runtime-rpc-client'
 import { findWorktreeById, getRepoIdFromWorktreeId } from './worktree-helpers'
+import { createUntitledMarkdownFileWithTemplateSelection } from '@/lib/create-untitled-markdown'
+import { extractIpcErrorMessage } from '@/lib/ipc-error'
+
+export type { RightSidebarTab } from '../../../../shared/types'
 
 export type DiffSource =
   | 'unstaged'
@@ -167,6 +173,9 @@ export type OpenFile = {
   conflictReview?: ConflictReviewState
   isPreview?: boolean // preview tabs are replaced when another file is single-clicked
   isUntitled?: boolean // true for files created via "New Markdown" that haven't been renamed yet
+  // Why: templated New Markdown files contain real user-visible content at
+  // creation time, unlike blank placeholder files that can be discarded.
+  deleteUntouchedOnClose?: boolean
   // Why: when an external process (e.g. `git mv`, `rm`) removes the file on
   // disk while it's open, we keep the tab around so the user can still see
   // (and potentially save) their in-memory content. The tab surfaces this as
@@ -176,7 +185,6 @@ export type OpenFile = {
   mode: 'edit' | 'diff' | 'conflict-review' | 'markdown-preview'
 }
 
-export type RightSidebarTab = 'explorer' | 'search' | 'source-control' | 'checks' | 'ports'
 export type ActivityBarPosition = 'top' | 'side'
 
 export type MarkdownViewMode = 'source' | 'rich' | 'preview'
@@ -193,12 +201,48 @@ export type ClosedEditorTabSnapshot = Omit<OpenFile, 'id' | 'isDirty'>
 
 const MAX_RECENT_CLOSED_EDITOR_TABS = 10
 
+type EditorOpenTargetOptions = {
+  targetGroupId?: string
+  preview?: boolean
+  runtimeEnvironmentId?: string | null
+}
+
 export type PendingEditorReveal = {
   filePath: string
   fileId?: string
   line: number
   column: number
   matchLength: number
+}
+
+const pendingEditorLineRevealFrameIds = new Set<number>()
+
+function cancelPendingEditorLineRevealFrames(): void {
+  if (typeof cancelAnimationFrame === 'function') {
+    for (const frameId of pendingEditorLineRevealFrameIds) {
+      cancelAnimationFrame(frameId)
+    }
+  }
+  pendingEditorLineRevealFrameIds.clear()
+}
+
+function trackEditorLineRevealFrameId(frameId: number): void {
+  pendingEditorLineRevealFrameIds.add(frameId)
+}
+
+function requestTrackedEditorLineRevealFrame(callback: FrameRequestCallback): void {
+  let completed = false
+  let frameId: number | undefined
+  frameId = requestAnimationFrame((timestamp) => {
+    completed = true
+    if (frameId !== undefined) {
+      pendingEditorLineRevealFrameIds.delete(frameId)
+    }
+    callback(timestamp)
+  })
+  if (!completed) {
+    trackEditorLineRevealFrameId(frameId)
+  }
 }
 
 function scheduleEditorLineReveal(
@@ -210,9 +254,10 @@ function scheduleEditorLineReveal(
 ): void {
   // Why: openFile can replace a preview and remount Monaco asynchronously; the
   // reveal must land after that remount or the old editor can clear it.
+  cancelPendingEditorLineRevealFrames()
   get().setPendingEditorReveal(null)
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
+  requestTrackedEditorLineRevealFrame(() => {
+    requestTrackedEditorLineRevealFrame(() => {
       get().setPendingEditorReveal({
         filePath,
         fileId,
@@ -243,6 +288,12 @@ export type EditorSlice = {
   // means 'edit'.
   editorViewMode: Record<string, EditorViewMode>
   setEditorViewMode: (fileId: string, mode: EditorViewMode) => void
+
+  // Per-file opt-in to render front matter in the markdown preview (#4468).
+  // Default is hidden; absent entry means hidden. Storing only the explicit
+  // true values keeps the record minimal and the default implicit.
+  markdownFrontmatterVisible: Record<string, boolean>
+  setMarkdownFrontmatterVisible: (fileId: string, visible: boolean) => void
 
   // Right sidebar
   rightSidebarOpen: boolean
@@ -286,6 +337,7 @@ export type EditorSlice = {
       suppressActiveRuntimeFallback?: boolean
     }
   ) => void
+  openNewMarkdownInActiveWorkspace: (groupId: string) => Promise<void>
   // Why: dispatcher for markdown link activation. Lives on the slice because it
   // sequences openFile, setMarkdownViewMode, and setPendingEditorReveal around
   // an async Monaco remount — all reading/writing state in this slice. See
@@ -306,6 +358,7 @@ export type EditorSlice = {
     >,
     options?: { anchor?: string | null; targetGroupId?: string; sourceFileId?: string }
   ) => void
+  makePreviewFilePermanent: (fileId: string, tabId?: string) => void
   pinFile: (fileId: string, tabId?: string) => void
   closeFile: (fileId: string) => void
   closeAllFiles: () => void
@@ -322,21 +375,24 @@ export type EditorSlice = {
     filePath: string,
     relativePath: string,
     language: string,
-    staged: boolean
+    staged: boolean,
+    options?: EditorOpenTargetOptions
   ) => void
   openBranchDiff: (
     worktreeId: string,
     worktreePath: string,
     entry: GitBranchChangeEntry,
     compare: BranchCompareLike,
-    language: string
+    language: string,
+    options?: EditorOpenTargetOptions
   ) => void
   openCommitDiff: (
     worktreeId: string,
     worktreePath: string,
     entry: GitBranchChangeEntry,
     compare: CommitCompareLike,
-    language: string
+    language: string,
+    options?: EditorOpenTargetOptions
   ) => void
   openAllDiffs: (
     worktreeId: string,
@@ -348,7 +404,8 @@ export type EditorSlice = {
     worktreeId: string,
     worktreePath: string,
     entry: GitStatusEntry,
-    language: string
+    language: string,
+    options?: EditorOpenTargetOptions
   ) => void
   openConflictReviewFile: (
     reviewFileId: string,
@@ -430,6 +487,12 @@ export type EditorSlice = {
     connectionId?: string,
     pushTarget?: GitPushTarget
   ) => Promise<void>
+  fastForwardBranch: (
+    worktreeId: string,
+    worktreePath: string,
+    connectionId?: string,
+    pushTarget?: GitPushTarget
+  ) => Promise<void>
   syncBranch: (
     worktreeId: string,
     worktreePath: string,
@@ -502,10 +565,7 @@ function openWorkspaceEditorItem(
   isPreview?: boolean,
   targetGroupId?: string
 ): string {
-  const resolvedGroupId =
-    targetGroupId ??
-    state.activeGroupIdByWorktree?.[worktreeId] ??
-    state.groupsByWorktree?.[worktreeId]?.[0]?.id
+  const resolvedGroupId = resolveEditorOpenTargetGroupId(state, worktreeId, targetGroupId)
   if (resolvedGroupId) {
     const existing = state.findTabForEntityInGroup?.(
       worktreeId,
@@ -514,7 +574,9 @@ function openWorkspaceEditorItem(
       contentType
     )
     if (existing) {
-      state.activateTab?.(existing.id)
+      // Why: sidebar preview reopens should focus the tab without making it
+      // permanent; explicit tab activation still promotes previews by default.
+      state.activateTab?.(existing.id, { preservePreview: isPreview })
       return existing.id
     }
   }
@@ -525,6 +587,152 @@ function openWorkspaceEditorItem(
     ...(resolvedGroupId ? { targetGroupId: resolvedGroupId } : {})
   })
   return created?.id ?? fileId
+}
+
+function isEditorTabContentType(contentType: Tab['contentType']): boolean {
+  return contentType === 'editor' || contentType === 'diff' || contentType === 'conflict-review'
+}
+
+function getReplaceablePreviewFileId(
+  state: Pick<AppState, 'openFiles' | 'unifiedTabsByWorktree'>,
+  worktreeId: string,
+  targetGroupId: string | undefined
+): string | null {
+  const tabsForWorktree = state.unifiedTabsByWorktree?.[worktreeId] ?? []
+  if (targetGroupId) {
+    const previewTab = tabsForWorktree.find(
+      (tab) =>
+        tab.groupId === targetGroupId && tab.isPreview && isEditorTabContentType(tab.contentType)
+    )
+    if (!previewTab) {
+      return null
+    }
+    // Why: split groups may hold separate tabs for the same editor entity. A
+    // group-scoped preview replacement must not mutate the shared OpenFile out
+    // from under another group's tab.
+    const isSharedEntity = tabsForWorktree.some(
+      (tab) =>
+        tab.id !== previewTab.id &&
+        tab.entityId === previewTab.entityId &&
+        isEditorTabContentType(tab.contentType)
+    )
+    if (isSharedEntity) {
+      return null
+    }
+    return (
+      state.openFiles.find(
+        (file) =>
+          file.id === previewTab.entityId && file.worktreeId === worktreeId && file.isPreview
+      )?.id ?? null
+    )
+  }
+  return (
+    state.openFiles.find((file) => file.worktreeId === worktreeId && file.isPreview)?.id ?? null
+  )
+}
+
+function removeEditorStateForReplacedPreview(
+  state: Pick<
+    EditorSlice,
+    'editorDrafts' | 'editorCursorLine' | 'markdownViewMode' | 'editorViewMode'
+  >,
+  replacedFileId: string,
+  nextFileId: string
+): Pick<EditorSlice, 'editorDrafts' | 'editorCursorLine' | 'markdownViewMode' | 'editorViewMode'> {
+  if (replacedFileId === nextFileId) {
+    return {
+      editorDrafts: state.editorDrafts,
+      editorCursorLine: state.editorCursorLine,
+      markdownViewMode: state.markdownViewMode,
+      editorViewMode: state.editorViewMode
+    }
+  }
+  return {
+    editorDrafts: Object.fromEntries(
+      Object.entries(state.editorDrafts).filter(([fileId]) => fileId !== replacedFileId)
+    ),
+    editorCursorLine: Object.fromEntries(
+      Object.entries(state.editorCursorLine).filter(([fileId]) => fileId !== replacedFileId)
+    ),
+    markdownViewMode: Object.fromEntries(
+      Object.entries(state.markdownViewMode).filter(([fileId]) => fileId !== replacedFileId)
+    ),
+    editorViewMode: Object.fromEntries(
+      Object.entries(state.editorViewMode).filter(([fileId]) => fileId !== replacedFileId)
+    )
+  }
+}
+
+function getGroupActiveTab(group: TabGroup, tabsById: Map<string, Tab>): Tab | null {
+  return group.activeTabId ? (tabsById.get(group.activeTabId) ?? null) : null
+}
+
+function getMostRecentEditorTabForGroup(group: TabGroup, tabsById: Map<string, Tab>): Tab | null {
+  const seen = new Set<string>()
+  const candidateIdLists = [group.recentTabIds ?? [], group.tabOrder]
+  for (const candidateIds of candidateIdLists) {
+    for (let index = candidateIds.length - 1; index >= 0; index -= 1) {
+      const tabId = candidateIds[index]
+      if (!tabId || seen.has(tabId)) {
+        continue
+      }
+      seen.add(tabId)
+      const tab = tabsById.get(tabId)
+      if (tab?.groupId === group.id && isEditorTabContentType(tab.contentType)) {
+        return tab
+      }
+    }
+  }
+  return null
+}
+
+function resolveEditorOpenTargetGroupId(
+  state: Pick<AppState, 'activeGroupIdByWorktree' | 'groupsByWorktree' | 'unifiedTabsByWorktree'>,
+  worktreeId: string,
+  explicitTargetGroupId?: string
+): string | undefined {
+  if (explicitTargetGroupId) {
+    return explicitTargetGroupId
+  }
+
+  const groups = state.groupsByWorktree?.[worktreeId] ?? []
+  if (groups.length === 0) {
+    return undefined
+  }
+
+  const fallbackGroup = groups[0]
+  if (!fallbackGroup) {
+    return undefined
+  }
+  const tabsById = new Map(
+    (state.unifiedTabsByWorktree?.[worktreeId] ?? []).map((tab) => [tab.id, tab])
+  )
+  const activeGroup =
+    groups.find((group) => group.id === state.activeGroupIdByWorktree?.[worktreeId]) ??
+    fallbackGroup
+  const activeTab = getGroupActiveTab(activeGroup, tabsById)
+  if (!activeTab || isEditorTabContentType(activeTab.contentType)) {
+    return activeGroup.id
+  }
+
+  // Why: file explorer opens should reuse an existing editor pane when the
+  // focused pane is an agent terminal, instead of turning that terminal pane
+  // into an editor tab.
+  const visibleEditorGroup = groups.find((group) => {
+    if (group.id === activeGroup.id) {
+      return false
+    }
+    const groupActiveTab = getGroupActiveTab(group, tabsById)
+    return groupActiveTab ? isEditorTabContentType(groupActiveTab.contentType) : false
+  })
+  if (visibleEditorGroup) {
+    return visibleEditorGroup.id
+  }
+
+  const recentEditorGroup = groups.find(
+    (group) => group.id !== activeGroup.id && getMostRecentEditorTabForGroup(group, tabsById)
+  )
+  return recentEditorGroup?.id ?? activeGroup.id
 }
 
 function buildEditorActiveResult(
@@ -571,6 +779,19 @@ function buildOwnedEditorFileId(
 ): string {
   const runtimeKey = runtimeOwnerKey(runtimeEnvironmentId) ?? 'local'
   return `editor:${encodeURIComponent(worktreeId)}:${encodeURIComponent(runtimeKey)}:${encodeURIComponent(filePath)}`
+}
+
+function buildDiffEditorFileId(
+  worktreeId: string,
+  diffSource: DiffSource,
+  relativePath: string,
+  runtimeEnvironmentId: string | null | undefined
+): string {
+  const legacyId = `${worktreeId}::diff::${diffSource}::${relativePath}`
+  const runtimeKey = runtimeOwnerKey(runtimeEnvironmentId)
+  return runtimeKey
+    ? `editor-diff:${encodeURIComponent(worktreeId)}:${encodeURIComponent(runtimeKey)}:${encodeURIComponent(diffSource)}:${encodeURIComponent(relativePath)}`
+    : legacyId
 }
 
 function isEditorFileIdOccupiedByOtherOwner(
@@ -859,6 +1080,7 @@ export function resolveRemoteOperationErrorMessage(
     isPush?: boolean
     isSync?: boolean
     isFetch?: boolean
+    isFastForward?: boolean
     isRebase?: boolean
   }
 ): string {
@@ -913,7 +1135,30 @@ export function resolveRemoteOperationErrorMessage(
     if (options?.isRebase) {
       return 'Rebase blocked — commit or stash your local changes first.'
     }
+    if (options?.isFastForward) {
+      return 'Fast-forward blocked — commit or stash your local changes first.'
+    }
     return 'Pull blocked — commit or stash your local changes first.'
+  }
+
+  if (/Pull would overwrite local changes/i.test(error.message)) {
+    if (options?.isRebase) {
+      return 'Rebase blocked — commit or stash your local changes first.'
+    }
+    if (options?.isFastForward) {
+      return 'Fast-forward blocked — commit or stash your local changes first.'
+    }
+    return 'Pull blocked — commit or stash your local changes first.'
+  }
+
+  if (/Pull would overwrite untracked files/i.test(error.message)) {
+    if (options?.isRebase) {
+      return 'Rebase blocked — move, remove, or add untracked files first.'
+    }
+    if (options?.isFastForward) {
+      return 'Fast-forward blocked — move, remove, or add untracked files first.'
+    }
+    return 'Pull blocked — move, remove, or add untracked files first.'
   }
 
   if (options?.publish) {
@@ -955,6 +1200,13 @@ export function resolveRemoteOperationErrorMessage(
     return `Fetch failed. ${detail}`
   }
 
+  if (options?.isFastForward) {
+    const detail =
+      extractPublishFailureDetail(error.message) ??
+      truncateDetail(stripCredentialsFromMessage(error.message))
+    return `Fast-forward failed. ${detail}`
+  }
+
   if (options?.isRebase) {
     const detail =
       extractPublishFailureDetail(error.message) ??
@@ -986,6 +1238,12 @@ function deleteUntouchedUntitledFile(state: AppState, file: OpenFile): void {
       return undefined
     })
     .catch(() => {})
+}
+
+function shouldDeleteUntouchedUntitledFile(file: OpenFile | undefined, hasDraft: boolean): boolean {
+  return (
+    file?.isUntitled === true && !file.isDirty && !hasDraft && file.deleteUntouchedOnClose !== false
+  )
 }
 
 function getWorktreeConnectionId(state: AppState, worktreeId: string): string | undefined {
@@ -1051,6 +1309,26 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
       return { editorViewMode: { ...s.editorViewMode, [fileId]: mode } }
     }),
 
+  // Markdown preview front-matter visibility (#4468). Default is hidden; the
+  // preview only renders the front-matter card when the user opts in per file.
+  markdownFrontmatterVisible: {},
+  setMarkdownFrontmatterVisible: (fileId, visible) =>
+    set((s) => {
+      // Why: default is hidden. Writing `false` explicitly when no entry exists
+      // would grow the record unnecessarily; delete instead so the shape stays
+      // minimal and hydration round-trips cleanly — same trade-off as
+      // setEditorViewMode above.
+      if (!visible) {
+        if (!(fileId in s.markdownFrontmatterVisible)) {
+          return s
+        }
+        const next = { ...s.markdownFrontmatterVisible }
+        delete next[fileId]
+        return { markdownFrontmatterVisible: next }
+      }
+      return { markdownFrontmatterVisible: { ...s.markdownFrontmatterVisible, [fileId]: true } }
+    }),
+
   // Right sidebar
   rightSidebarOpen: false,
   rightSidebarWidth: 280,
@@ -1060,13 +1338,7 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
   toggleRightSidebar: () => set((s) => ({ rightSidebarOpen: !s.rightSidebarOpen })),
   setRightSidebarOpen: (open) => set({ rightSidebarOpen: open }),
   setRightSidebarWidth: (width) => set({ rightSidebarWidth: width }),
-  setRightSidebarTab: (tab) =>
-    set((s) => ({
-      rightSidebarTab: tab,
-      rightSidebarTabByWorktree: s.activeWorktreeId
-        ? { ...s.rightSidebarTabByWorktree, [s.activeWorktreeId]: tab }
-        : s.rightSidebarTabByWorktree
-    })),
+  setRightSidebarTab: (tab) => set({ rightSidebarTab: tab }),
   setActivityBarPosition: (position) => set({ activityBarPosition: position }),
 
   // File explorer
@@ -1111,15 +1383,11 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
     }),
   pendingExplorerReveal: null,
   revealInExplorer: (worktreeId, filePath) =>
-    set((s) => ({
+    set({
       rightSidebarOpen: true,
       rightSidebarTab: 'explorer',
-      rightSidebarTabByWorktree: {
-        ...s.rightSidebarTabByWorktree,
-        [worktreeId]: 'explorer'
-      },
       pendingExplorerReveal: { worktreeId, filePath, requestId: Date.now() }
-    })),
+    }),
   clearPendingExplorerReveal: () => set({ pendingExplorerReveal: null }),
 
   // Open files
@@ -1168,20 +1436,8 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
       // scoped to that group. Opening as preview in group B must not evict a
       // preview tab belonging to group A (split tab groups).
       const targetGroupId =
-        options?.targetGroupId ??
-        s.activeGroupIdByWorktree?.[worktreeId] ??
-        s.groupsByWorktree?.[worktreeId]?.[0]?.id ??
-        undefined
-      const previewTabByEntity = new Map<string, string>()
-      if (targetGroupId) {
-        const tabsForWorktree = s.unifiedTabsByWorktree?.[worktreeId] ?? []
-        for (const tab of tabsForWorktree) {
-          if (tab.groupId === targetGroupId && tab.isPreview && tab.contentType === 'editor') {
-            previewTabByEntity.set(tab.entityId, tab.id)
-          }
-        }
-      }
-
+        resolveEditorOpenTargetGroupId(s, worktreeId, options?.targetGroupId) ?? undefined
+      editorItemTargetGroupId = targetGroupId
       const activeResult = buildEditorActiveResult(s, worktreeId, id)
 
       if (existing) {
@@ -1240,15 +1496,8 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
       // prior behavior.
       let newFiles = s.openFiles
       if (isPreview) {
-        const existingPreviewIdx = s.openFiles.findIndex((f) => {
-          if (f.worktreeId !== worktreeId || !f.isPreview) {
-            return false
-          }
-          if (previewTabByEntity.size === 0) {
-            return true
-          }
-          return previewTabByEntity.has(f.id)
-        })
+        const replaceablePreviewId = getReplaceablePreviewFileId(s, worktreeId, targetGroupId)
+        const existingPreviewIdx = s.openFiles.findIndex((f) => f.id === replaceablePreviewId)
         if (existingPreviewIdx !== -1) {
           const replacedPreview = s.openFiles[existingPreviewIdx]
           const nextEditorDrafts =
@@ -1271,6 +1520,27 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
               : Object.fromEntries(
                   Object.entries(s.editorViewMode).filter(
                     ([fileId]) => fileId !== replacedPreview.id
+                  )
+                )
+          const frontmatterVisibilityKeys = new Set([replacedPreview.id])
+          if (replacedPreview.markdownPreviewSourceFileId) {
+            frontmatterVisibilityKeys.add(replacedPreview.markdownPreviewSourceFileId)
+          }
+          const frontmatterKeysToRemove = [...frontmatterVisibilityKeys].filter(
+            (key) =>
+              key in s.markdownFrontmatterVisible &&
+              !s.openFiles.some(
+                (file, index) =>
+                  index !== existingPreviewIdx &&
+                  (file.id === key || file.markdownPreviewSourceFileId === key)
+              )
+          )
+          const nextMarkdownFrontmatterVisible =
+            replacedPreview.id === id || frontmatterKeysToRemove.length === 0
+              ? s.markdownFrontmatterVisible
+              : Object.fromEntries(
+                  Object.entries(s.markdownFrontmatterVisible).filter(
+                    ([fileId]) => !frontmatterKeysToRemove.includes(fileId)
                   )
                 )
           // Why: editorCursorLine entries accumulate per file; clean up the
@@ -1322,6 +1592,7 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
             editorCursorLine: nextEditorCursorLine,
             markdownViewMode: nextMarkdownViewMode,
             editorViewMode: nextEditorViewMode,
+            markdownFrontmatterVisible: nextMarkdownFrontmatterVisible,
             recentlyClosedEditorTabsByWorktree: nextRecentlyClosed,
             ...previewTabBarUpdate,
             ...activeResult
@@ -1378,6 +1649,34 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
       options?.preview ?? false,
       editorItemTargetGroupId
     )
+  },
+
+  openNewMarkdownInActiveWorkspace: async (groupId) => {
+    const state = get()
+    const worktreeId = state.activeWorktreeId
+    if (!worktreeId) {
+      return
+    }
+    const worktree = state.getKnownWorktreeById(worktreeId)
+    if (!worktree) {
+      return
+    }
+    try {
+      const connectionId =
+        state.repos.find((entry) => entry.id === worktree.repoId)?.connectionId ?? undefined
+      const fileInfo = await createUntitledMarkdownFileWithTemplateSelection(
+        worktree.path,
+        worktreeId,
+        connectionId,
+        get().settings
+      )
+      if (!fileInfo) {
+        return
+      }
+      get().openFile(fileInfo, { preview: false, targetGroupId: groupId })
+    } catch (err) {
+      toast.error(extractIpcErrorMessage(err, 'Failed to create untitled markdown file.'))
+    }
   },
 
   openMarkdownPreview: (file, options) => {
@@ -1464,16 +1763,32 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
     )
   },
 
-  pinFile: (fileId, tabId) => {
+  makePreviewFilePermanent: (fileId, tabId) => {
     set((s) => {
-      const file = s.openFiles.find((f) => f.id === fileId)
-      if (!file?.isPreview) {
-        return s
+      let changed = false
+      const openFiles = s.openFiles.map((file) => {
+        if (file.id !== fileId || !file.isPreview) {
+          return file
+        }
+        changed = true
+        return { ...file, isPreview: undefined }
+      })
+      const unifiedTabsByWorktree: typeof s.unifiedTabsByWorktree = {}
+      for (const [worktreeId, tabs] of Object.entries(s.unifiedTabsByWorktree ?? {})) {
+        unifiedTabsByWorktree[worktreeId] = tabs.map((tab) => {
+          if (tab.entityId !== fileId || (tabId && tab.id !== tabId) || !tab.isPreview) {
+            return tab
+          }
+          changed = true
+          return { ...tab, isPreview: false }
+        })
       }
-      return {
-        openFiles: s.openFiles.map((f) => (f.id === fileId ? { ...f, isPreview: undefined } : f))
-      }
+      return changed ? { openFiles, unifiedTabsByWorktree } : s
     })
+  },
+
+  pinFile: (fileId, tabId) => {
+    get().makePreviewFilePermanent(fileId, tabId)
     const state = get()
     for (const tabs of Object.values(state.unifiedTabsByWorktree ?? {})) {
       for (const item of tabs) {
@@ -1500,7 +1815,7 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
     // content exists but isDirty hasn't flushed yet. A draft means the user
     // typed something, so the file should be kept.
     const hasDraft = !!get().editorDrafts[fileId]
-    const shouldDeleteFromDisk = preClose?.isUntitled === true && !preClose.isDirty && !hasDraft
+    const shouldDeleteFromDisk = shouldDeleteUntouchedUntitledFile(preClose, hasDraft)
 
     set((s) => {
       const closedFile = s.openFiles.find((f) => f.id === fileId)
@@ -1512,6 +1827,25 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
       delete newMarkdownViewMode[fileId]
       const newEditorViewMode = { ...s.editorViewMode }
       delete newEditorViewMode[fileId]
+      const frontmatterVisibilityKeys = new Set([fileId])
+      if (closedFile?.markdownPreviewSourceFileId) {
+        frontmatterVisibilityKeys.add(closedFile.markdownPreviewSourceFileId)
+      }
+      const keysToRemove = [...frontmatterVisibilityKeys].filter(
+        (key) =>
+          key in s.markdownFrontmatterVisible &&
+          !newFiles.some((file) => file.id === key || file.markdownPreviewSourceFileId === key)
+      )
+      const newMarkdownFrontmatterVisible =
+        keysToRemove.length > 0
+          ? (() => {
+              const next = { ...s.markdownFrontmatterVisible }
+              for (const key of keysToRemove) {
+                delete next[key]
+              }
+              return next
+            })()
+          : s.markdownFrontmatterVisible
       // Why: editorCursorLine entries are keyed by fileId and accumulate on
       // every cursor move. Without cleanup they grow without bound across a
       // long session as files are opened and closed.
@@ -1637,6 +1971,7 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
         activeTabTypeByWorktree: newActiveTabTypeByWorktree,
         markdownViewMode: newMarkdownViewMode,
         editorViewMode: newEditorViewMode,
+        markdownFrontmatterVisible: newMarkdownFrontmatterVisible,
         tabBarOrderByWorktree: nextTabBarOrderByWorktree,
         pendingEditorReveal: null,
         recentlyClosedEditorTabsByWorktree: nextRecentlyClosed
@@ -1697,9 +2032,7 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
     // are empty placeholders that should not survive a "close all" operation.
     const untitledToDelete = state.openFiles.filter(
       (f) =>
-        f.isUntitled === true &&
-        !f.isDirty &&
-        !state.editorDrafts[f.id] &&
+        shouldDeleteUntouchedUntitledFile(f, !!state.editorDrafts[f.id]) &&
         (!activeWorktreeId || f.worktreeId === activeWorktreeId)
     )
 
@@ -1724,6 +2057,7 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
           activeTabType: 'terminal',
           markdownViewMode: {},
           editorViewMode: {},
+          markdownFrontmatterVisible: {},
           pendingEditorReveal: null
         }
       }
@@ -1738,6 +2072,11 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
       )
       const newEditorViewMode = Object.fromEntries(
         Object.entries(s.editorViewMode).filter(([fileId]) => remainingFileIds.has(fileId))
+      )
+      const newMarkdownFrontmatterVisible = Object.fromEntries(
+        Object.entries(s.markdownFrontmatterVisible).filter(([fileId]) =>
+          remainingFileIds.has(fileId)
+        )
       )
       const newEditorCursorLine = Object.fromEntries(
         Object.entries(s.editorCursorLine).filter(([fileId]) => remainingFileIds.has(fileId))
@@ -1772,7 +2111,10 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
         // Why: untitled non-dirty files are deleted from disk after close —
         // skip them so the reopen stack doesn't reference vanished paths.
         // Preview tabs are ephemeral views that shouldn't pollute the stack.
-        if ((f.isUntitled && !f.isDirty) || f.mode === 'markdown-preview') {
+        if (
+          shouldDeleteUntouchedUntitledFile(f, !!s.editorDrafts[f.id]) ||
+          f.mode === 'markdown-preview'
+        ) {
           continue
         }
         const { id: _id, isDirty: _dirty, ...snap } = f
@@ -1801,6 +2143,7 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
         activeTabType: browserTabsForWorktree.length > 0 ? 'browser' : 'terminal',
         markdownViewMode: newMarkdownViewMode,
         editorViewMode: newEditorViewMode,
+        markdownFrontmatterVisible: newMarkdownFrontmatterVisible,
         activeFileIdByWorktree: newActiveFileIdByWorktree,
         activeTabTypeByWorktree: newActiveTabTypeByWorktree,
         tabBarOrderByWorktree: nextTabBarOrderByWorktree,
@@ -1889,12 +2232,27 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
       if (file.isDirty === dirty && !needsPreviewClear) {
         return s
       }
+      const nextOpenFiles = s.openFiles.map((f) =>
+        f.id === fileId
+          ? { ...f, isDirty: dirty, ...(needsPreviewClear ? { isPreview: undefined } : {}) }
+          : f
+      )
       return {
-        openFiles: s.openFiles.map((f) =>
-          f.id === fileId
-            ? { ...f, isDirty: dirty, ...(needsPreviewClear ? { isPreview: undefined } : {}) }
-            : f
-        )
+        openFiles: nextOpenFiles,
+        ...(needsPreviewClear
+          ? {
+              unifiedTabsByWorktree: Object.fromEntries(
+                Object.entries(s.unifiedTabsByWorktree ?? {}).map(([worktreeId, tabs]) => [
+                  worktreeId,
+                  tabs.map((tab) =>
+                    tab.entityId === fileId && isEditorTabContentType(tab.contentType)
+                      ? { ...tab, isPreview: false }
+                      : tab
+                  )
+                ])
+              )
+            }
+          : {})
       }
     }),
 
@@ -1918,13 +2276,26 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
       openFiles: s.openFiles.map((f) => (f.id === fileId ? { ...f, isUntitled: undefined } : f))
     })),
 
-  openDiff: (worktreeId, filePath, relativePath, language, staged) => {
+  openDiff: (worktreeId, filePath, relativePath, language, staged, options) => {
+    const isPreview = options?.preview ?? false
+    const runtimeEnvironmentId = options?.runtimeEnvironmentId
+    let editorItemTargetGroupId = options?.targetGroupId
+    let editorItemFileId = ''
     set((s) => {
       const diffSource: DiffSource = staged ? 'staged' : 'unstaged'
-      const id = `${worktreeId}::diff::${diffSource}::${relativePath}`
+      const id = buildDiffEditorFileId(worktreeId, diffSource, relativePath, runtimeEnvironmentId)
+      editorItemFileId = id
+      const targetGroupId =
+        resolveEditorOpenTargetGroupId(s, worktreeId, options?.targetGroupId) ?? undefined
+      editorItemTargetGroupId = targetGroupId
       const existing = s.openFiles.find((f) => f.id === id)
       if (existing) {
-        const needsUpdate = existing.mode !== 'diff' || existing.diffSource !== diffSource
+        const updatedPreview = isPreview ? existing.isPreview : false
+        const needsUpdate =
+          existing.mode !== 'diff' ||
+          existing.diffSource !== diffSource ||
+          existing.isPreview !== updatedPreview ||
+          existing.runtimeEnvironmentId !== runtimeEnvironmentId
         return {
           openFiles: needsUpdate
             ? s.openFiles.map((f) =>
@@ -1935,7 +2306,9 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
                       diffSource,
                       conflict: undefined,
                       skippedConflicts: undefined,
-                      conflictReview: undefined
+                      conflictReview: undefined,
+                      isPreview: updatedPreview,
+                      runtimeEnvironmentId
                     }
                   : f
               )
@@ -1957,7 +2330,27 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
         diffSource,
         conflict: undefined,
         skippedConflicts: undefined,
-        conflictReview: undefined
+        conflictReview: undefined,
+        isPreview: isPreview || undefined,
+        runtimeEnvironmentId: options?.runtimeEnvironmentId
+      }
+      if (isPreview) {
+        const replaceablePreviewId = getReplaceablePreviewFileId(s, worktreeId, targetGroupId)
+        const replaceablePreviewIndex = s.openFiles.findIndex(
+          (file) => file.id === replaceablePreviewId
+        )
+        if (replaceablePreviewIndex !== -1) {
+          return {
+            openFiles: s.openFiles.map((file, index) =>
+              index === replaceablePreviewIndex ? newFile : file
+            ),
+            ...removeEditorStateForReplacedPreview(s, s.openFiles[replaceablePreviewIndex].id, id),
+            activeFileId: id,
+            activeTabType: 'editor',
+            activeFileIdByWorktree: { ...s.activeFileIdByWorktree, [worktreeId]: id },
+            activeTabTypeByWorktree: { ...s.activeTabTypeByWorktree, [worktreeId]: 'editor' }
+          }
+        }
       }
       return {
         openFiles: [...s.openFiles, newFile],
@@ -1969,19 +2362,27 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
     })
     void openWorkspaceEditorItem(
       get(),
-      `${worktreeId}::diff::${staged ? 'staged' : 'unstaged'}::${relativePath}`,
+      editorItemFileId,
       worktreeId,
       relativePath,
-      'diff'
+      'diff',
+      isPreview,
+      editorItemTargetGroupId
     )
   },
 
-  openBranchDiff: (worktreeId, worktreePath, entry, compare, language) => {
+  openBranchDiff: (worktreeId, worktreePath, entry, compare, language, options) => {
     const branchCompare = toBranchCompareSnapshot(compare)
     const id = `${worktreeId}::diff::branch::${compare.baseRef}::${branchCompare.compareVersion}::${entry.path}`
+    const isPreview = options?.preview ?? false
+    let editorItemTargetGroupId = options?.targetGroupId
     set((s) => {
+      const targetGroupId =
+        resolveEditorOpenTargetGroupId(s, worktreeId, options?.targetGroupId) ?? undefined
+      editorItemTargetGroupId = targetGroupId
       const existing = s.openFiles.find((f) => f.id === id)
       if (existing) {
+        const updatedPreview = isPreview ? existing.isPreview : false
         return {
           openFiles: s.openFiles.map((f) =>
             f.id === id
@@ -1993,7 +2394,8 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
                   branchOldPath: entry.oldPath,
                   conflict: undefined,
                   skippedConflicts: undefined,
-                  conflictReview: undefined
+                  conflictReview: undefined,
+                  isPreview: updatedPreview
                 }
               : f
           ),
@@ -2016,7 +2418,26 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
         branchOldPath: entry.oldPath,
         conflict: undefined,
         skippedConflicts: undefined,
-        conflictReview: undefined
+        conflictReview: undefined,
+        isPreview: isPreview || undefined
+      }
+      if (isPreview) {
+        const replaceablePreviewId = getReplaceablePreviewFileId(s, worktreeId, targetGroupId)
+        const replaceablePreviewIndex = s.openFiles.findIndex(
+          (file) => file.id === replaceablePreviewId
+        )
+        if (replaceablePreviewIndex !== -1) {
+          return {
+            openFiles: s.openFiles.map((file, index) =>
+              index === replaceablePreviewIndex ? newFile : file
+            ),
+            ...removeEditorStateForReplacedPreview(s, s.openFiles[replaceablePreviewIndex].id, id),
+            activeFileId: id,
+            activeTabType: 'editor',
+            activeFileIdByWorktree: { ...s.activeFileIdByWorktree, [worktreeId]: id },
+            activeTabTypeByWorktree: { ...s.activeTabTypeByWorktree, [worktreeId]: 'editor' }
+          }
+        }
       }
       return {
         openFiles: [...s.openFiles, newFile],
@@ -2026,15 +2447,29 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
         activeTabTypeByWorktree: { ...s.activeTabTypeByWorktree, [worktreeId]: 'editor' }
       }
     })
-    void openWorkspaceEditorItem(get(), id, worktreeId, entry.path, 'diff')
+    void openWorkspaceEditorItem(
+      get(),
+      id,
+      worktreeId,
+      entry.path,
+      'diff',
+      isPreview,
+      editorItemTargetGroupId
+    )
   },
 
-  openCommitDiff: (worktreeId, worktreePath, entry, compare, language) => {
+  openCommitDiff: (worktreeId, worktreePath, entry, compare, language, options) => {
     const commitCompare = toCommitCompareSnapshot(compare)
     const id = `${worktreeId}::diff::commit::${commitCompare.compareVersion}::${entry.path}`
+    const isPreview = options?.preview ?? false
+    let editorItemTargetGroupId = options?.targetGroupId
     set((s) => {
+      const targetGroupId =
+        resolveEditorOpenTargetGroupId(s, worktreeId, options?.targetGroupId) ?? undefined
+      editorItemTargetGroupId = targetGroupId
       const existing = s.openFiles.find((f) => f.id === id)
       if (existing) {
+        const updatedPreview = isPreview ? existing.isPreview : false
         return {
           openFiles: s.openFiles.map((f) =>
             f.id === id
@@ -2046,7 +2481,8 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
                   branchOldPath: entry.oldPath,
                   conflict: undefined,
                   skippedConflicts: undefined,
-                  conflictReview: undefined
+                  conflictReview: undefined,
+                  isPreview: updatedPreview
                 }
               : f
           ),
@@ -2069,7 +2505,26 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
         branchOldPath: entry.oldPath,
         conflict: undefined,
         skippedConflicts: undefined,
-        conflictReview: undefined
+        conflictReview: undefined,
+        isPreview: isPreview || undefined
+      }
+      if (isPreview) {
+        const replaceablePreviewId = getReplaceablePreviewFileId(s, worktreeId, targetGroupId)
+        const replaceablePreviewIndex = s.openFiles.findIndex(
+          (file) => file.id === replaceablePreviewId
+        )
+        if (replaceablePreviewIndex !== -1) {
+          return {
+            openFiles: s.openFiles.map((file, index) =>
+              index === replaceablePreviewIndex ? newFile : file
+            ),
+            ...removeEditorStateForReplacedPreview(s, s.openFiles[replaceablePreviewIndex].id, id),
+            activeFileId: id,
+            activeTabType: 'editor',
+            activeFileIdByWorktree: { ...s.activeFileIdByWorktree, [worktreeId]: id },
+            activeTabTypeByWorktree: { ...s.activeTabTypeByWorktree, [worktreeId]: 'editor' }
+          }
+        }
       }
       return {
         openFiles: [...s.openFiles, newFile],
@@ -2079,7 +2534,15 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
         activeTabTypeByWorktree: { ...s.activeTabTypeByWorktree, [worktreeId]: 'editor' }
       }
     })
-    void openWorkspaceEditorItem(get(), id, worktreeId, entry.path, 'diff')
+    void openWorkspaceEditorItem(
+      get(),
+      id,
+      worktreeId,
+      entry.path,
+      'diff',
+      isPreview,
+      editorItemTargetGroupId
+    )
   },
 
   openAllDiffs: (worktreeId, worktreePath, alternate, areaFilter) => {
@@ -2162,11 +2625,16 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
     void openWorkspaceEditorItem(get(), id, worktreeId, label, 'diff')
   },
 
-  openConflictFile: (worktreeId, worktreePath, entry, language) => {
+  openConflictFile: (worktreeId, worktreePath, entry, language, options) => {
     const absolutePath = joinPath(worktreePath, entry.path)
+    const isPreview = options?.preview ?? false
+    let editorItemTargetGroupId = options?.targetGroupId
     set((s) => {
       const id = absolutePath
       const conflict = toOpenConflictMetadata(entry)
+      const targetGroupId =
+        resolveEditorOpenTargetGroupId(s, worktreeId, options?.targetGroupId) ?? undefined
+      editorItemTargetGroupId = targetGroupId
       const existing = s.openFiles.find((f) => f.id === id)
       const nextTracked =
         entry.conflictStatus === 'unresolved' && entry.conflictKind
@@ -2181,6 +2649,7 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
       }
 
       if (existing) {
+        const updatedPreview = isPreview ? existing.isPreview : false
         return {
           openFiles: s.openFiles.map((f) =>
             f.id === id
@@ -2193,7 +2662,8 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
                   conflict,
                   diffSource: undefined,
                   skippedConflicts: undefined,
-                  conflictReview: undefined
+                  conflictReview: undefined,
+                  isPreview: updatedPreview
                 }
               : f
           ),
@@ -2216,7 +2686,31 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
         language,
         isDirty: false,
         mode: 'edit',
-        conflict
+        conflict,
+        isPreview: isPreview || undefined
+      }
+
+      if (isPreview) {
+        const replaceablePreviewId = getReplaceablePreviewFileId(s, worktreeId, targetGroupId)
+        const replaceablePreviewIndex = s.openFiles.findIndex(
+          (file) => file.id === replaceablePreviewId
+        )
+        if (replaceablePreviewIndex !== -1) {
+          return {
+            openFiles: s.openFiles.map((file, index) =>
+              index === replaceablePreviewIndex ? newFile : file
+            ),
+            ...removeEditorStateForReplacedPreview(s, s.openFiles[replaceablePreviewIndex].id, id),
+            activeFileId: id,
+            activeTabType: 'editor',
+            activeFileIdByWorktree: { ...s.activeFileIdByWorktree, [worktreeId]: id },
+            activeTabTypeByWorktree: { ...s.activeTabTypeByWorktree, [worktreeId]: 'editor' },
+            trackedConflictPathsByWorktree:
+              nextTracked === s.trackedConflictPathsByWorktree[worktreeId]
+                ? s.trackedConflictPathsByWorktree
+                : { ...s.trackedConflictPathsByWorktree, [worktreeId]: nextTracked }
+          }
+        }
       }
 
       return {
@@ -2231,7 +2725,15 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
             : { ...s.trackedConflictPathsByWorktree, [worktreeId]: nextTracked }
       }
     })
-    void openWorkspaceEditorItem(get(), absolutePath, worktreeId, entry.path, 'editor')
+    void openWorkspaceEditorItem(
+      get(),
+      absolutePath,
+      worktreeId,
+      entry.path,
+      'editor',
+      isPreview,
+      editorItemTargetGroupId
+    )
   },
 
   openConflictReviewFile: (reviewFileId, worktreeId, worktreePath, entry, language) => {
@@ -2794,6 +3296,25 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
       refreshGitHubForWorktree(worktreeId)
     }
   },
+  fastForwardBranch: async (worktreeId, worktreePath, connectionId, pushTarget) => {
+    get().beginRemoteOperation('fast_forward')
+    try {
+      await fastForwardRuntimeGit(
+        { settings: get().settings, worktreeId, worktreePath, connectionId },
+        pushTarget
+      )
+    } catch (error) {
+      toast.error(resolveRemoteOperationErrorMessage(error, { isFastForward: true }))
+      throw error
+    } finally {
+      get().endRemoteOperation()
+    }
+    void get().fetchUpstreamStatus(worktreeId, worktreePath, connectionId, pushTarget)
+    const refreshGitHubForWorktree = get().refreshGitHubForWorktree
+    if (typeof refreshGitHubForWorktree === 'function') {
+      refreshGitHubForWorktree(worktreeId)
+    }
+  },
   syncBranch: async (worktreeId, worktreePath, connectionId, pushTarget) => {
     // Why: same shape as pushBranch / pullBranch — fire-and-forget the
     // post-op upstream refresh after the busy flag clears so the primary
@@ -3214,6 +3735,7 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
       const openFilesByWorktree = session.openFilesByWorktree ?? {}
       const persistedActiveFileIdByWorktree = session.activeFileIdByWorktree ?? {}
       const persistedActiveTabTypeByWorktree = session.activeTabTypeByWorktree ?? {}
+      const persistedMarkdownFrontmatterVisible = session.markdownFrontmatterVisible ?? {}
 
       // Why: worktrees may have been deleted between sessions. Filter out
       // files for worktrees that no longer exist, mirroring the validation
@@ -3226,6 +3748,7 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
       validWorktreeIds.add(FLOATING_TERMINAL_WORKTREE_ID)
 
       const openFiles: OpenFile[] = []
+      const editorDrafts: Record<string, string> = {}
       const usedOpenFileIds = new Set<string>()
       const legacyHydratedOpenFiles: LegacyHydratedEditorFile[] = []
       const editorFileIdMigrationsByWorktree: Record<string, Map<string, string>> = {}
@@ -3259,6 +3782,9 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
             worktreeId,
             runtimeEnvironmentId: pf.runtimeEnvironmentId
           })
+          if (pf.dirtyDraftContent !== undefined) {
+            editorDrafts[id] = pf.dirtyDraftContent
+          }
           openFiles.push({
             id,
             filePath: pf.filePath,
@@ -3268,7 +3794,7 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
             // Re-detect on hydrate so newly-supported extensions like .ipynb
             // stop reopening as raw JSON/plain text after the upgrade.
             language: detectLanguage(pf.relativePath || pf.filePath),
-            isDirty: false,
+            isDirty: pf.dirtyDraftContent !== undefined,
             isPreview: pf.isPreview,
             runtimeEnvironmentId: pf.runtimeEnvironmentId,
             mode: 'edit'
@@ -3346,9 +3872,30 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
       // browser or terminal instead of showing an empty editor surface.
       const nextActiveTabType =
         nextActiveFileId || activeTabType !== 'editor' ? activeTabType : 'terminal'
+      const openFileIds = new Set(openFiles.map((file) => file.id))
+      const visibleFrontmatterEntries = new Map<string, boolean>()
+      for (const [persistedFileId, visible] of Object.entries(
+        persistedMarkdownFrontmatterVisible
+      )) {
+        if (!visible) {
+          continue
+        }
+        if (openFileIds.has(persistedFileId)) {
+          visibleFrontmatterEntries.set(persistedFileId, true)
+        }
+        for (const migrations of Object.values(editorFileIdMigrationsByWorktree)) {
+          const migratedFileId = migrations.get(persistedFileId)
+          if (migratedFileId && openFileIds.has(migratedFileId)) {
+            visibleFrontmatterEntries.set(migratedFileId, true)
+          }
+        }
+      }
+      const markdownFrontmatterVisible = Object.fromEntries(visibleFrontmatterEntries)
 
       return {
         openFiles,
+        editorDrafts,
+        markdownFrontmatterVisible,
         activeFileId: nextActiveFileId,
         activeFileIdByWorktree: filteredActiveFileIdByWorktree,
         activeTabType: nextActiveTabType,
@@ -3438,7 +3985,9 @@ function areGitStatusEntriesEqual(prev: GitStatusEntry[], next: GitStatusEntry[]
         entry.oldPath === next[index].oldPath &&
         entry.conflictKind === next[index].conflictKind &&
         entry.conflictStatus === next[index].conflictStatus &&
-        entry.conflictStatusSource === next[index].conflictStatusSource
+        entry.conflictStatusSource === next[index].conflictStatusSource &&
+        entry.added === next[index].added &&
+        entry.removed === next[index].removed
     )
   )
 }

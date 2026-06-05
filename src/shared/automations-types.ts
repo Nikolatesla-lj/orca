@@ -1,4 +1,5 @@
 import type { TuiAgent } from './types'
+import type { PipelineRunInput } from './pipelines-types'
 
 export type AutomationWorkspaceMode = 'existing' | 'new_per_run'
 export type AutomationExecutionTargetType = 'local' | 'ssh'
@@ -9,6 +10,7 @@ export type AutomationRunStatus =
   | 'dispatching'
   | 'dispatched'
   | 'completed'
+  | 'skipped_precheck'
   | 'skipped_missed'
   | 'skipped_unavailable'
   | 'skipped_needs_interactive_auth'
@@ -54,10 +56,42 @@ export type AutomationRunOutputSnapshot = {
   truncated: boolean
 }
 
+export type AutomationPrecheck = {
+  command: string
+  timeoutSeconds: number
+}
+
+export type AutomationPrecheckResult = {
+  command: string
+  exitCode: number | null
+  timedOut: boolean
+  durationMs: number
+  stdout: string
+  stderr: string
+  stdoutTruncated: boolean
+  stderrTruncated: boolean
+  error: string | null
+  startedAt: number
+  completedAt: number
+}
+
+export type AutomationTarget =
+  | {
+      type: 'prompt'
+      prompt: string
+    }
+  | {
+      type: 'pipeline'
+      pipelineTemplateId: string
+      pipelineInput: PipelineRunInput
+    }
+
 export type Automation = {
   id: string
   name: string
   prompt: string
+  target: AutomationTarget
+  precheck: AutomationPrecheck | null
   agentId: TuiAgent
   projectId: string
   executionTargetType: AutomationExecutionTargetType
@@ -93,7 +127,9 @@ export type AutomationRun = {
   sessionKind: 'terminal'
   chatSessionId: string | null
   terminalSessionId: string | null
+  pipelineRunId: string | null
   outputSnapshot: AutomationRunOutputSnapshot | null
+  precheckResult: AutomationPrecheckResult | null
   usage: AutomationRunUsage | null
   error: string | null
   startedAt: number | null
@@ -104,6 +140,8 @@ export type AutomationRun = {
 export type AutomationCreateInput = {
   name: string
   prompt: string
+  target?: AutomationTarget
+  precheck?: AutomationPrecheck | null
   agentId: TuiAgent
   projectId: string
   workspaceMode: AutomationWorkspaceMode
@@ -122,6 +160,8 @@ export type AutomationUpdateInput = Partial<
     Automation,
     | 'name'
     | 'prompt'
+    | 'target'
+    | 'precheck'
     | 'agentId'
     | 'projectId'
     | 'workspaceMode'
@@ -147,7 +187,9 @@ export type AutomationDispatchResult = {
   workspaceId?: string | null
   workspaceDisplayName?: string | null
   terminalSessionId?: string | null
+  pipelineRunId?: string | null
   outputSnapshot?: AutomationRunOutputSnapshot | null
+  precheckResult?: AutomationPrecheckResult | null
   usage?: AutomationRunUsage | null
   error?: string | null
 }

@@ -6,12 +6,12 @@ import type { GitFileStatus } from '../../../../shared/types'
 import { FileExplorerRow, InlineInputRow, type InlineInput } from './FileExplorerRow'
 import { shouldShowIgnoredDecoration, STATUS_COLORS } from './status-display'
 import type { DirCache, TreeNode } from './file-explorer-types'
-import { countVisibleFileExplorerSelections } from './file-explorer-selection'
+import type { FileExplorerRowProjection } from './file-explorer-row-projection'
 
 type FileExplorerVirtualRowsProps = {
   virtualizer: Virtualizer<HTMLDivElement, Element>
   inlineInputIndex: number
-  flatRows: TreeNode[]
+  rowProjection: FileExplorerRowProjection
   inlineInput: InlineInput | null
   handleInlineSubmit: (value: string) => void
   dismissInlineInput: () => void
@@ -31,6 +31,8 @@ type FileExplorerVirtualRowsProps = {
   onStartNew: (type: 'file' | 'folder', parentPath: string, depth: number) => void
   onStartRename: (node: TreeNode) => void
   onDuplicate: (node: TreeNode) => void
+  onAddFolderAsProject: (node: TreeNode) => void
+  canAddFolderAsProject: (node: TreeNode) => boolean
   onRequestDelete: (node: TreeNode) => void
   onCollapseFolderSubtree: (node: TreeNode) => void
   onFindInFolder: (node: TreeNode) => void
@@ -49,7 +51,7 @@ export function FileExplorerVirtualRows(props: FileExplorerVirtualRowsProps): Re
   const {
     virtualizer,
     inlineInputIndex,
-    flatRows,
+    rowProjection,
     inlineInput,
     handleInlineSubmit,
     dismissInlineInput,
@@ -69,6 +71,8 @@ export function FileExplorerVirtualRows(props: FileExplorerVirtualRowsProps): Re
     onStartNew,
     onStartRename,
     onDuplicate,
+    onAddFolderAsProject,
+    canAddFolderAsProject,
     onRequestDelete,
     onCollapseFolderSubtree,
     onFindInFolder,
@@ -83,7 +87,7 @@ export function FileExplorerVirtualRows(props: FileExplorerVirtualRowsProps): Re
     nativeDropTargetDir
   } = props
 
-  const visibleSelectionCount = countVisibleFileExplorerSelections(flatRows, selectedPaths)
+  const visibleSelectionCount = rowProjection.countVisiblePaths(selectedPaths)
 
   return (
     <div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>
@@ -93,7 +97,7 @@ export function FileExplorerVirtualRows(props: FileExplorerVirtualRowsProps): Re
           !isInlineRow && inlineInputIndex >= 0 && vItem.index > inlineInputIndex
             ? vItem.index - 1
             : vItem.index
-        const node = isInlineRow ? null : flatRows[rowIndex]
+        const node = isInlineRow ? null : rowProjection.getRowAtIndex(rowIndex)
         if (!isInlineRow && !node) {
           return null
         }
@@ -153,6 +157,7 @@ export function FileExplorerVirtualRows(props: FileExplorerVirtualRowsProps): Re
               isExpanded={expanded.has(n.path)}
               isLoading={n.isDirectory && Boolean(dirCache[n.path]?.loading)}
               isSelected={selectedPaths.has(n.path) || activeFileId === n.path}
+              selectedPaths={selectedPaths}
               isFlashing={flashingPath === n.path}
               nodeStatus={nodeStatus}
               statusColor={nodeStatus ? STATUS_COLORS[nodeStatus] : null}
@@ -168,6 +173,8 @@ export function FileExplorerVirtualRows(props: FileExplorerVirtualRowsProps): Re
               onStartNew={onStartNew}
               onStartRename={onStartRename}
               onDuplicate={onDuplicate}
+              onAddFolderAsProject={() => onAddFolderAsProject(n)}
+              canAddAsProject={canAddFolderAsProject(n)}
               onRequestDelete={() => onRequestDelete(n)}
               onCollapseFolderSubtree={() => onCollapseFolderSubtree(n)}
               onFindInFolder={() => onFindInFolder(n)}

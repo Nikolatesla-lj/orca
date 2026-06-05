@@ -2,11 +2,16 @@
 import type {
   Automation,
   AutomationCreateInput,
+  AutomationPrecheck,
   AutomationRun,
   AutomationSchedulePreset,
   AutomationUpdateInput
 } from '../../shared/automations-types'
 import type { TuiAgent } from '../../shared/types'
+import {
+  DEFAULT_AUTOMATION_PRECHECK_TIMEOUT_SECONDS,
+  MAX_AUTOMATION_PRECHECK_TIMEOUT_SECONDS
+} from '../../shared/automation-precheck'
 import { buildAutomationRrule, isValidAutomationSchedule } from '../../shared/automation-schedules'
 import { isTuiAgent } from '../../shared/tui-agent-config'
 import type { CommandHandler } from '../dispatch'
@@ -25,6 +30,7 @@ import {
 } from '../flags'
 import { RuntimeClientError } from '../runtime-client'
 import { getOptionalWorktreeSelector, resolveCurrentWorktreeSelector } from '../selectors'
+import { buildPipelineRunInput } from './pipelines'
 
 type AutomationCreateParams = Omit<AutomationCreateInput, 'projectId' | 'timezone'> & {
   repo?: string
@@ -234,6 +240,37 @@ function getReuseSessionFlag(flags: Map<string, string | boolean>): boolean | un
   return undefined
 }
 
+function getPrecheckFlag(
+  flags: Map<string, string | boolean>
+): AutomationPrecheck | null | undefined {
+  const hasPrecheck = flags.has('precheck')
+  const timeoutSeconds = getOptionalPositiveIntegerFlag(flags, 'precheck-timeout')
+  if (!hasPrecheck) {
+    if (timeoutSeconds !== undefined) {
+      throw new RuntimeClientError('invalid_argument', '--precheck-timeout requires --precheck')
+    }
+    return undefined
+  }
+  const value = flags.get('precheck')
+  if (typeof value !== 'string') {
+    throw new RuntimeClientError('invalid_argument', '--precheck requires a command')
+  }
+  const command = value.trim()
+  if (!command) {
+    return null
+  }
+  if (timeoutSeconds !== undefined && timeoutSeconds > MAX_AUTOMATION_PRECHECK_TIMEOUT_SECONDS) {
+    throw new RuntimeClientError(
+      'invalid_argument',
+      `--precheck-timeout must be at most ${MAX_AUTOMATION_PRECHECK_TIMEOUT_SECONDS} seconds`
+    )
+  }
+  return {
+    command,
+    timeoutSeconds: timeoutSeconds ?? DEFAULT_AUTOMATION_PRECHECK_TIMEOUT_SECONDS
+  }
+}
+
 function getWorkspaceModeFlag(
   flags: Map<string, string | boolean>
 ): 'existing' | 'new_per_run' | undefined {
@@ -251,6 +288,39 @@ function getWorkspaceModeFlag(
     'invalid_argument',
     '--workspace-mode must be existing or new-per-run'
   )
+}
+
+function getAutomationTargetFlag(flags: Map<string, string | boolean>): 'prompt' | 'pipeline' {
+  const target = getOptionalStringFlag(flags, 'target') ?? 'prompt'
+  if (target === 'prompt' || target === 'pipeline') {
+    return target
+  }
+  throw new RuntimeClientError('invalid_argument', '--target must be prompt or pipeline')
+}
+
+function buildAutomationTarget(
+  flags: Map<string, string | boolean>,
+  target: 'prompt' | 'pipeline'
+): AutomationCreateInput['target'] | undefined {
+  if (target === 'prompt') {
+    return undefined
+  }
+  const pipelineInput = buildPipelineRunInput(flags)
+  return {
+    type: 'pipeline',
+    pipelineTemplateId: pipelineInput.templateId,
+    pipelineInput
+  }
+}
+
+function getAutomationPromptFlag(
+  flags: Map<string, string | boolean>,
+  target: 'prompt' | 'pipeline'
+): string {
+  if (target === 'pipeline') {
+    return getOptionalStringFlag(flags, 'prompt') ?? ''
+  }
+  return getRequiredStringFlag(flags, 'prompt')
 }
 
 async function resolveDefaultTarget(
@@ -305,12 +375,16 @@ export const AUTOMATION_HANDLERS: Record<string, CommandHandler> = {
     if (!schedule) {
       throw new RuntimeClientError('invalid_argument', 'Missing required --trigger')
     }
+    const targetKind = getAutomationTargetFlag(flags)
+    const automationTarget = buildAutomationTarget(flags, targetKind)
     const target = await resolveDefaultTarget(flags, cwd, client)
     const workspaceMode =
       getWorkspaceModeFlag(flags) ?? (target.workspace ? 'existing' : 'new_per_run')
     const result = await client.call<{ automation: Automation }>('automation.create', {
       name: getRequiredStringFlag(flags, 'name'),
-      prompt: getRequiredStringFlag(flags, 'prompt'),
+      prompt: getAutomationPromptFlag(flags, targetKind),
+      target: automationTarget,
+      precheck: getPrecheckFlag(flags),
       agentId: getProviderFlag(flags),
       repo: target.repo,
       workspace: target.workspace,
@@ -332,6 +406,7 @@ export const AUTOMATION_HANDLERS: Record<string, CommandHandler> = {
       updates: {
         name: getOptionalStringFlag(flags, 'name'),
         prompt: getOptionalStringFlag(flags, 'prompt'),
+        precheck: getPrecheckFlag(flags),
         agentId: getOptionalProviderFlag(flags),
         repo: target.repo,
         workspace: target.workspace,

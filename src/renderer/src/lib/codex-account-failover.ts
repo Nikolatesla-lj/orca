@@ -55,7 +55,7 @@ export function chooseCodexFailoverAccount(args: CodexFailoverInput): string | n
   }
 
   const inactiveUsageByAccountId = new Map(
-    args.inactiveCodexAccounts.map((entry) => [entry.accountId, entry.claude] as const)
+    args.inactiveCodexAccounts.map((entry) => [entry.accountId, entry.rateLimits] as const)
   )
 
   let bestAccountId: string | null = null

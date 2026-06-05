@@ -15,18 +15,20 @@
 
 import {
   test as base,
+  expect as playwrightExpect,
   _electron as electron,
   type Page,
   type ElectronApplication,
   type TestInfo
 } from '@stablyai/playwright-test'
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
-import { execSync } from 'child_process'
 import os from 'os'
 import path from 'path'
 import { TEST_REPO_PATH_FILE } from '../global-setup'
 import { cleanupE2EDaemons, closeElectronAppForE2E } from './electron-process-shutdown'
+import { getOrcaElectronLaunchArgs } from './electron-launch-args'
 import { getE2ECompletedOnboardingProfile } from './e2e-completed-onboarding-profile'
+import { createSeededTestRepo, isValidGitRepo, removeTree } from './orca-test-repo'
 
 type OrcaTestFixtures = {
   electronApp: ElectronApplication
@@ -38,16 +40,14 @@ type OrcaTestFixtures = {
   // events for every other test. Dismiss it by default; onboarding.spec.ts
   // opts out via `test.use({ dismissOnboarding: false })`.
   dismissOnboarding: boolean
+  // Why: most E2E specs need a ready project before assertions start. Golden
+  // first-run specs opt out so they can prove the zero-project onboarding path.
+  seedTestRepo: boolean
 }
 
 type OrcaWorkerFixtures = {
   /** Absolute path to the test git repo created by globalSetup. */
   testRepoPath: string
-}
-
-type SeededRepo = {
-  repoPath: string
-  worktreePath: string
 }
 
 type TestRepoFixture = {
@@ -70,6 +70,22 @@ const ORCA_E2E_SLOWMO_MS = ((): number => {
   }
   return Math.max(parsed, 0)
 })()
+
+async function removeUserDataDirAfterShutdown(userDataDir: string): Promise<void> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      rmSync(userDataDir, { recursive: true, force: true })
+      return
+    } catch (error) {
+      if (attempt === 4) {
+        throw error
+      }
+      // Why: Windows can briefly keep Electron profile files locked after the
+      // process exits; retrying avoids turning a passed flow into teardown noise.
+      await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)))
+    }
+  }
+}
 
 function shouldLaunchHeadful(testInfo: TestInfo): boolean {
   // Why: ORCA_E2E_FORCE_HEADFUL lets a developer watch any spec in a real
@@ -98,78 +114,8 @@ function forwardElectronProcessLogs(app: ElectronApplication, testInfo: TestInfo
   })
 }
 
-function isValidGitRepo(repoPath: string): boolean {
-  if (!repoPath || !existsSync(repoPath)) {
-    return false
-  }
-
-  try {
-    return (
-      execSync('git rev-parse --is-inside-work-tree', {
-        cwd: repoPath,
-        stdio: 'pipe',
-        encoding: 'utf8'
-      }).trim() === 'true'
-    )
-  } catch {
-    return false
-  }
-}
-
-function createSeededTestRepo(options?: {
-  persistPathFile?: boolean
-  repoPrefix?: string
-  worktreePrefix?: string
-}): SeededRepo {
-  const uniqueId = `${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2)}`
-  const testRepoDir = path.join(
-    os.tmpdir(),
-    `${options?.repoPrefix ?? 'orca-e2e-repo'}-${uniqueId}`
-  )
-  mkdirSync(testRepoDir, { recursive: true })
-
-  execSync('git init', { cwd: testRepoDir, stdio: 'pipe' })
-  execSync('git config user.email "e2e@test.local"', { cwd: testRepoDir, stdio: 'pipe' })
-  execSync('git config user.name "E2E Test"', { cwd: testRepoDir, stdio: 'pipe' })
-
-  writeFileSync(
-    path.join(testRepoDir, 'README.md'),
-    '# Orca E2E Test Repo\n\nThis repo was created automatically for Playwright tests.\n'
-  )
-  writeFileSync(path.join(testRepoDir, 'CLAUDE.md'), '# CLAUDE.md\n\nTest instructions for E2E.\n')
-  writeFileSync(
-    path.join(testRepoDir, 'package.json'),
-    `${JSON.stringify({ name: 'orca-e2e-test', version: '0.0.0', private: true }, null, 2)}\n`
-  )
-  writeFileSync(path.join(testRepoDir, '.gitignore'), 'node_modules/\n')
-  mkdirSync(path.join(testRepoDir, 'src'), { recursive: true })
-  writeFileSync(path.join(testRepoDir, 'src', 'index.ts'), 'export const hello = "world"\n')
-
-  execSync('git add -A', { cwd: testRepoDir, stdio: 'pipe' })
-  execSync('git commit -m "Initial commit for E2E tests"', { cwd: testRepoDir, stdio: 'pipe' })
-
-  const worktreeDir = path.join(
-    testRepoDir,
-    '..',
-    `${options?.worktreePrefix ?? 'orca-e2e-worktree'}-${uniqueId}`
-  )
-  execSync(`git worktree add "${worktreeDir}" -b e2e-secondary`, {
-    cwd: testRepoDir,
-    stdio: 'pipe'
-  })
-
-  if (options?.persistPathFile !== false) {
-    writeFileSync(TEST_REPO_PATH_FILE, testRepoDir)
-  }
-  return { repoPath: testRepoDir, worktreePath: worktreeDir }
-}
-
 function shouldUseIsolatedArchitectureRepo(testInfo: TestInfo): boolean {
   return path.basename(testInfo.file).startsWith('architecture-')
-}
-
-function removeTree(pathToRemove: string): void {
-  rmSync(pathToRemove, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
 }
 
 /**
@@ -259,7 +205,7 @@ export const test = base.extend<OrcaTestFixtures, OrcaWorkerFixtures>({
       mkdirSync(recordVideoDir, { recursive: true })
     }
     const app = await electron.launch({
-      args: [mainPath],
+      args: getOrcaElectronLaunchArgs(mainPath, headful),
       ...(slowMo > 0 ? { slowMo } : {}),
       ...(recordVideoDir ? { recordVideo: { dir: recordVideoDir } } : {}),
       // Why: keep NODE_ENV=development so window.__store is exposed and
@@ -290,15 +236,16 @@ export const test = base.extend<OrcaTestFixtures, OrcaWorkerFixtures>({
     // descendants are gone in CI; worker teardown then hangs on open handles.
     await closeElectronAppForE2E(app)
     await cleanupE2EDaemons(userDataDir)
-    removeTree(userDataDir)
+    await removeUserDataDirAfterShutdown(userDataDir)
   },
 
   // Default: dismiss the onboarding overlay so it doesn't intercept clicks.
   dismissOnboarding: [true, { option: true }],
+  seedTestRepo: [true, { option: true }],
 
   // Test-scoped: grab the first BrowserWindow, add the test repo, and wait
   // until the session is fully ready with a worktree active.
-  sharedPage: async ({ activeTestRepo, electronApp }, provideFixture) => {
+  sharedPage: async ({ activeTestRepo, electronApp, seedTestRepo }, provideFixture) => {
     // Why: the Electron app may take a while to create the first window,
     // especially on cold start with no prior dev userData. Isolated per-test
     // profiles make late-suite launches slower, so use the full test budget.
@@ -307,6 +254,16 @@ export const test = base.extend<OrcaTestFixtures, OrcaWorkerFixtures>({
 
     // Wait for the store to be available
     await page.waitForFunction(() => Boolean(window.__store), null, { timeout: 30_000 })
+
+    if (!seedTestRepo) {
+      await page.waitForFunction(
+        () => window.__store?.getState().workspaceSessionReady === true,
+        null,
+        { timeout: 30_000 }
+      )
+      await provideFixture(page)
+      return
+    }
 
     const repoPath = activeTestRepo.repoPath
 
@@ -319,14 +276,22 @@ export const test = base.extend<OrcaTestFixtures, OrcaWorkerFixtures>({
     }, repoPath)
 
     // Fetch repos in the renderer store so it picks up the new repo
-    await page.evaluate(async () => {
+    await page.evaluate(async (repoPath) => {
       const store = window.__store
       if (!store) {
         return
       }
 
       await store.getState().fetchRepos()
-    })
+      const repo = store.getState().repos.find((candidate) => candidate.path === repoPath)
+      if (!repo) {
+        throw new Error(`Expected e2e repo to be loaded: ${repoPath}`)
+      }
+      // Why: the fixture deliberately creates external Git worktrees. New
+      // repos hide those by default after the visibility rollout, so opt this
+      // disposable repo into showing them before specs assert on worktree state.
+      await store.getState().updateRepo(repo.id, { externalWorktreeVisibility: 'show' })
+    }, repoPath)
 
     // Wait for the repo to appear and fetch its worktrees
     await page.evaluate(async () => {
@@ -340,6 +305,31 @@ export const test = base.extend<OrcaTestFixtures, OrcaWorkerFixtures>({
         await store.getState().fetchWorktrees(repo.id)
       }
     })
+
+    // Why: parallel specs mutate real git worktrees in the shared fixture repo.
+    // A first scan can briefly return no rows while git holds a worktree lock,
+    // so poll the public fetch path until the seeded primary + secondary load.
+    await playwrightExpect
+      .poll(
+        () =>
+          page.evaluate(async (repoPath) => {
+            const store = window.__store
+            if (!store) {
+              return 0
+            }
+            const repo = store.getState().repos.find((candidate) => candidate.path === repoPath)
+            if (!repo) {
+              return 0
+            }
+            await store.getState().fetchWorktrees(repo.id)
+            return store.getState().worktreesByRepo[repo.id]?.length ?? 0
+          }, repoPath),
+        {
+          timeout: 30_000,
+          message: 'seeded e2e worktrees did not load'
+        }
+      )
+      .toBeGreaterThanOrEqual(2)
 
     // Wait for workspaceSessionReady to become true
     await page.waitForFunction(

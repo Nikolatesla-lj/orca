@@ -5,11 +5,20 @@ import type { WorkspaceVisibleTabType } from '../../../shared/types'
  * based on current view, tab type, and focused element.
  */
 export function resolveZoomTarget(args: {
-  activeView: 'terminal' | 'settings' | 'tasks' | 'activity' | 'automations' | 'space' | 'skills'
+  activeView:
+    | 'terminal'
+    | 'settings'
+    | 'tasks'
+    | 'activity'
+    | 'automations'
+    | 'space'
+    | 'skills'
+    | 'mobile'
   activeTabType: WorkspaceVisibleTabType
+  activeBrowserPageId?: string | null
   activeElement: unknown
-}): 'terminal' | 'editor' | 'ui' {
-  const { activeView, activeTabType, activeElement } = args
+}): 'terminal' | 'editor' | 'browser' | 'ui' {
+  const { activeView, activeTabType, activeBrowserPageId, activeElement } = args
   const terminalInputFocused =
     typeof activeElement === 'object' &&
     activeElement !== null &&
@@ -36,6 +45,11 @@ export function resolveZoomTarget(args: {
 
   if (activeView !== 'terminal') {
     return 'ui'
+  }
+  // Why: a browser tab owns zoom shortcuts even if DOM focus still points at a
+  // just-deactivated editor or terminal during tab switches.
+  if (activeTabType === 'browser' && activeBrowserPageId) {
+    return 'browser'
   }
   if (activeTabType === 'editor' || editorFocused) {
     return 'editor'
