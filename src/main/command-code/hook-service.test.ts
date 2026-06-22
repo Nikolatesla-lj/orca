@@ -50,7 +50,11 @@ describe('CommandCodeHookService', () => {
     expect(config.hooks.Stop[0].matcher).toBeUndefined()
     expect(config.hooks.PreToolUse[0].hooks[0].command).toContain('command-code-hook')
     expect(config.hooks.PreToolUse[0].hooks[0].command).toContain(join(homeDir, '.orca'))
-    expect(config.hooks.PreToolUse[0].hooks[0].command).toMatch(/^if \[ -x /)
+    if (process.platform === 'win32') {
+      expect(config.hooks.PreToolUse[0].hooks[0].command).toContain('command-code-hook.cmd')
+    } else {
+      expect(config.hooks.PreToolUse[0].hooks[0].command).toMatch(/^if \[ -x /)
+    }
   })
 
   it('installs a hook script that can recover the endpoint when Command Code strips token env', () => {
@@ -71,6 +75,7 @@ describe('CommandCodeHookService', () => {
       expect(script).toContain('__orca_fill_from_endpoint_file')
       expect(script).toContain('[ "$__orca_endpoint_port" != "$ORCA_AGENT_HOOK_PORT" ]')
       expect(script).toContain('ORCA_PANE_KEY')
+      expect(script).toContain('ORCA_AGENT_LAUNCH_TOKEN')
       expect(script).toContain('orca-dev/agent-hooks')
       expect(script).toContain('endpoint_port=')
     }
