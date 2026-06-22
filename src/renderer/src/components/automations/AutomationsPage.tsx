@@ -100,6 +100,7 @@ import {
 } from './AutomationEditorDialog'
 import { AutomationRunPageFrame } from './AutomationRunPageFrame'
 import { AutomationRunHistory } from './AutomationRunHistory'
+import { PipelinePanel } from './PipelinePanel'
 import { getAutomationTemplates, type AutomationTemplate } from './automation-templates'
 import { getAutomationTargetAvailability } from './automation-target-availability'
 import { buildAutomationRunContextForRepo } from './automation-run-context'
@@ -134,7 +135,7 @@ import { translate } from '@/i18n/i18n'
 const AGENTS = getAgentCatalog().map((agent) => agent.id)
 const DEFAULT_TIME = '09:00'
 const AUTOMATIONS_CHANGED_EVENT = 'orca:automations-changed'
-type AutomationPaneTab = 'overview' | 'runs'
+type AutomationPaneTab = 'overview' | 'runs' | 'pipelines'
 type RepoBackedAutomationSourceContext = TaskSourceContext & { provider: 'github' | 'gitlab' }
 
 type ExternalAutomationListEntry =
@@ -2650,6 +2651,7 @@ export default function AutomationsPage(): React.JSX.Element {
                     {translate('auto.components.automations.AutomationsPage.0e110a3469', 'Runs')}
                     <span className="text-xs text-muted-foreground">{selectedRuns.length}</span>
                   </TabsTrigger>
+                  <TabsTrigger value="pipelines">Pipelines</TabsTrigger>
                 </TabsList>
               </div>
 
@@ -2754,6 +2756,10 @@ export default function AutomationsPage(): React.JSX.Element {
                     )}
                   </div>
                 )}
+              </TabsContent>
+
+              <TabsContent value="pipelines" className="scrollbar-sleek min-h-0 overflow-auto p-5">
+                <PipelinePanel repos={repos} settings={settings} />
               </TabsContent>
             </Tabs>
           )}
