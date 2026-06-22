@@ -1,5 +1,3 @@
-import type { WorkspaceVisibleTabType } from '../../../shared/types'
-
 /**
  * Determine which zoom domain (terminal, editor, or UI) should be adjusted
  * based on current view, tab type, and focused element.
@@ -14,10 +12,10 @@ export function resolveZoomTarget(args: {
     | 'space'
     | 'skills'
     | 'mobile'
-  activeTabType: WorkspaceVisibleTabType
+  activeTabType: 'terminal' | 'editor' | 'browser' | 'simulator' | 'architecture'
   activeBrowserPageId?: string | null
   activeElement: unknown
-}): 'terminal' | 'editor' | 'browser' | 'ui' {
+}): 'terminal' | 'editor' | 'browser' | 'simulator' | 'ui' {
   const { activeView, activeTabType, activeBrowserPageId, activeElement } = args
   const terminalInputFocused =
     typeof activeElement === 'object' &&
@@ -50,6 +48,9 @@ export function resolveZoomTarget(args: {
   // just-deactivated editor or terminal during tab switches.
   if (activeTabType === 'browser' && activeBrowserPageId) {
     return 'browser'
+  }
+  if (activeTabType === 'simulator') {
+    return 'simulator'
   }
   if (activeTabType === 'editor' || editorFocused) {
     return 'editor'

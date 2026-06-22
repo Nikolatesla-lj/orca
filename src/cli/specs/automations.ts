@@ -1,26 +1,15 @@
 import type { CommandSpec } from '../args'
 import { GLOBAL_FLAGS } from '../args'
 
-const AUTOMATION_TARGET_FLAGS = ['repo', 'workspace', 'workspace-mode', 'base-branch']
-const AUTOMATION_PIPELINE_FLAGS = [
-  'target',
-  'template',
-  'source-branch',
-  'target-branch',
-  'task-source',
-  'task-owner',
-  'task-repo',
-  'prd-issue',
-  'max-concurrent',
-  'max-iterations',
-  'planner-agent',
-  'implementer-agent',
-  'reviewer-agent',
-  'merger-agent',
-  'verify-command',
-  'verify-timeout-seconds',
-  'execution-target-type',
-  'execution-target-id'
+const AUTOMATION_TARGET_FLAGS = [
+  'repo',
+  'workspace',
+  'project',
+  'host',
+  'project-host-setup',
+  'source-context',
+  'workspace-mode',
+  'base-branch'
 ]
 const AUTOMATION_SCHEDULE_FLAGS = ['trigger', 'schedule', 'time', 'day', 'timezone']
 const AUTOMATION_PRECHECK_FLAGS = ['precheck', 'precheck-timeout']
@@ -52,7 +41,7 @@ export const AUTOMATION_COMMAND_SPECS: CommandSpec[] = [
     path: ['automations', 'create'],
     summary: 'Create a scheduled Orca automation',
     usage:
-      'orca automations create --name <name> --trigger <preset|cron|rrule> --provider <agent> [--target prompt|pipeline] [--prompt <text>] [--precheck <command>] [--repo <selector>|--workspace <selector>] [--json]',
+      'orca automations create --name <name> --trigger <preset|cron|rrule> --prompt <text> --provider <agent> [--precheck <command>] [--repo <selector>|--workspace <selector>|--project <id> [--host <id>]|--project-host-setup <id>] [--json]',
     allowedFlags: [
       ...GLOBAL_FLAGS,
       'name',
@@ -60,22 +49,21 @@ export const AUTOMATION_COMMAND_SPECS: CommandSpec[] = [
       'provider',
       ...AUTOMATION_PRECHECK_FLAGS,
       ...AUTOMATION_TARGET_FLAGS,
-      ...AUTOMATION_PIPELINE_FLAGS,
       ...AUTOMATION_SCHEDULE_FLAGS,
       ...AUTOMATION_STATE_FLAGS
     ],
     notes: [
       'Trigger accepts hourly, daily, weekdays, weekly, a 5-field cron expression, or an RRULE string.',
       'When --repo is omitted, the CLI uses the enclosing Orca worktree when one can be resolved from cwd.',
+      'Use --project with --host, or --project-host-setup, to run on a specific project host setup.',
+      'Use --source-context with a JSON TaskSourceContext when task/provider data should come from a specific host/account; pass null on edit to clear it.',
       'Use --workspace to run in an existing worktree; otherwise the automation creates a new worktree per run.',
-      'Use --target pipeline with the same Pipeline flags accepted by `orca pipelines run` to schedule a Pipeline run.',
       'Use --precheck to run a bounded command before scheduled runs; exit code 0 continues, anything else records a skipped run.',
       'Use --reuse-session only with existing-workspace automations to submit later runs to the previous live automation session when it is still available. Use --fresh-session to disable reuse.'
     ],
     examples: [
       'orca automations create --name "Daily review" --trigger daily --prompt "Review open changes" --provider codex',
       'orca automations create --name "Weekday triage" --trigger "0 9 * * 1-5" --prompt "Triage issues" --provider claude --repo my-repo',
-      'orca automations create --target pipeline --name "Pipeline" --trigger daily --provider codex --repo my-repo --template parallel-planner-with-review --source-branch main --target-branch pipeline-output --task-source github --task-owner Nikolatesla-lj --task-repo orca --prd-issue 13 --planner-agent codex --implementer-agent codex --merger-agent codex',
       'orca automations create --name "PR review" --trigger hourly --precheck "gh pr list --json number -q .[0].number" --prompt "Review requested PRs" --provider codex'
     ]
   },

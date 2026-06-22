@@ -10,13 +10,17 @@ import type {
 } from '../../shared/automations-types'
 import type { ClaudeUsageStore } from '../claude-usage/store'
 import type { CodexUsageStore } from '../codex-usage/store'
-import type { PipelineService } from '../pipelines/service'
-import { splitWorktreeIdForFilesystem } from '../../shared/worktree-id'
 import { runAutomationPrecheck } from './precheck-runner'
-import { collectAutomationRunUsage } from './usage-collector'
+import { resolveAutomationRunTarget, type AutomationRunTargetResult } from './run-target-resolution'
+import { collectAutomationRunUsage } from './run-usage-collection'
+import type { HeadlessAutomationDispatcher } from './headless-dispatch'
+import { clearAutomationDispatchTokens, createAutomationDispatchToken } from './dispatch-tokens'
+import {
+  didAutomationPrecheckPass,
+  formatAutomationPrecheckFailure
+} from '../../shared/automation-precheck'
 
 const DEFAULT_TICK_MS = 60 * 1000
-type PipelineRunner = Pick<PipelineService, 'run'>
 
 export class AutomationService {
   private readonly store: Store
@@ -27,7 +31,8 @@ export class AutomationService {
   private evaluating = false
   private readonly claudeUsage: ClaudeUsageStore | null
   private readonly codexUsage: CodexUsageStore | null
-  private readonly pipelineService: PipelineRunner | null
+  private readonly allowRemoteHostScheduling: boolean
+  private readonly headlessDispatcher: HeadlessAutomationDispatcher | null
 
   constructor(
     store: Store,
@@ -35,14 +40,16 @@ export class AutomationService {
       tickMs?: number
       claudeUsage?: ClaudeUsageStore
       codexUsage?: CodexUsageStore
-      pipelineService?: PipelineRunner
+      allowRemoteHostScheduling?: boolean
+      headlessDispatcher?: HeadlessAutomationDispatcher
     } = {}
   ) {
     this.store = store
     this.tickMs = opts.tickMs ?? DEFAULT_TICK_MS
     this.claudeUsage = opts.claudeUsage ?? null
     this.codexUsage = opts.codexUsage ?? null
-    this.pipelineService = opts.pipelineService ?? null
+    this.allowRemoteHostScheduling = opts.allowRemoteHostScheduling ?? false
+    this.headlessDispatcher = opts.headlessDispatcher ?? null
   }
 
   setWebContents(webContents: WebContents | null): void {
@@ -96,8 +103,10 @@ export class AutomationService {
     if (run.trigger !== 'scheduled' || !automation.precheck) {
       return null
     }
-    const cwd = this.getPrecheckCwd(automation)
-    if (!cwd) {
+    const target = resolveAutomationRunTarget(this.store, automation, {
+      allowRemoteHostScheduling: this.allowRemoteHostScheduling
+    })
+    if (!target.ok) {
       return {
         command: automation.precheck.command,
         exitCode: null,
@@ -107,7 +116,7 @@ export class AutomationService {
         stderr: '',
         stdoutTruncated: false,
         stderrTruncated: false,
-        error: 'Automation precheck target is no longer available.',
+        error: target.error,
         startedAt: Date.now(),
         completedAt: Date.now()
       }
@@ -116,13 +125,14 @@ export class AutomationService {
       precheck: automation.precheck,
       target:
         automation.executionTargetType === 'ssh'
-          ? { type: 'ssh', cwd, connectionId: automation.executionTargetId }
-          : { type: 'local', cwd }
+          ? { type: 'ssh', cwd: target.cwd, connectionId: automation.executionTargetId }
+          : { type: 'local', cwd: target.cwd }
     })
   }
 
   async markDispatchResult(result: AutomationDispatchResult): Promise<AutomationRun> {
     const run = this.store.updateAutomationRun(result)
+    clearAutomationDispatchTokens(run.automationId, run.id)
     if (!isFinalRunStatus(run.status)) {
       return run
     }
@@ -133,9 +143,8 @@ export class AutomationService {
     if (run.usage) {
       return run
     }
-    const automation = this.store.listAutomations().find((entry) => entry.id === run.automationId)
     const usage = await collectAutomationRunUsage({
-      automation,
+      automation: this.store.listAutomations().find((entry) => entry.id === run.automationId),
       run,
       claudeUsage: this.claudeUsage,
       codexUsage: this.codexUsage
@@ -168,16 +177,6 @@ export class AutomationService {
     }
   }
 
-  private getPrecheckCwd(automation: Automation): string | null {
-    if (automation.workspaceMode === 'existing') {
-      const parsed = automation.workspaceId
-        ? splitWorktreeIdForFilesystem(automation.workspaceId)
-        : null
-      return parsed?.worktreePath ?? null
-    }
-    return this.store.getRepo(automation.projectId)?.path ?? null
-  }
-
   private async evaluateAutomation(automation: Automation, now: number): Promise<void> {
     const scheduledFor = this.store.getLatestAutomationOccurrence(automation, now)
     if (scheduledFor === null) {
@@ -205,37 +204,22 @@ export class AutomationService {
     automation: Automation,
     run: AutomationRun
   ): Promise<AutomationRun> {
-    if (automation.target.type === 'pipeline') {
-      if (!this.pipelineService) {
-        return this.store.updateAutomationRun({
-          runId: run.id,
-          status: 'dispatch_failed',
-          workspaceId: null,
-          error: 'Pipeline service is unavailable.'
-        })
-      }
-      try {
-        const result = this.pipelineService.run(automation.target.pipelineInput, {
-          automationRunId: run.id
-        })
-        return this.store.updateAutomationRun({
-          runId: run.id,
-          status: 'dispatched',
-          workspaceId: null,
-          pipelineRunId: result.run.id,
-          error: null
-        })
-      } catch (err) {
-        return this.store.updateAutomationRun({
-          runId: run.id,
-          status: 'dispatch_failed',
-          workspaceId: null,
-          error: err instanceof Error ? err.message : 'Pipeline run dispatch failed.'
-        })
-      }
+    const target = resolveAutomationRunTarget(this.store, automation, {
+      allowRemoteHostScheduling: this.allowRemoteHostScheduling
+    })
+    if (!target.ok) {
+      return this.store.updateAutomationRun({
+        runId: run.id,
+        status: 'skipped_unavailable',
+        workspaceId: automation.workspaceId,
+        error: target.error
+      })
     }
     const webContents = this.webContents
     if (!webContents || webContents.isDestroyed() || !this.rendererReady) {
+      if (this.headlessDispatcher) {
+        return await this.requestHeadlessDispatch(automation, run, target)
+      }
       return this.store.updateAutomationRun({
         runId: run.id,
         status: 'skipped_unavailable',
@@ -249,9 +233,77 @@ export class AutomationService {
       workspaceId: automation.workspaceId,
       error: null
     })
-    const payload: AutomationDispatchRequest = { automation, run: updated }
+    const payload: AutomationDispatchRequest = {
+      automation,
+      run: updated,
+      dispatchToken: createAutomationDispatchToken(automation.id, updated.id)
+    }
     webContents.send('automations:dispatchRequested', payload)
     return updated
+  }
+
+  private async requestHeadlessDispatch(
+    automation: Automation,
+    run: AutomationRun,
+    target: Extract<AutomationRunTargetResult, { ok: true }>
+  ): Promise<AutomationRun> {
+    const precheckResult =
+      run.trigger === 'scheduled' && automation.precheck
+        ? await this.runPrecheck(automation.id, run.id)
+        : null
+    if (precheckResult && !didAutomationPrecheckPass(precheckResult)) {
+      return this.store.updateAutomationRun({
+        runId: run.id,
+        status: 'skipped_precheck',
+        workspaceId: automation.workspaceId,
+        precheckResult,
+        error: formatAutomationPrecheckFailure(precheckResult)
+      })
+    }
+    try {
+      const launch = await this.headlessDispatcher!({ automation, run, target })
+      const updated = this.store.updateAutomationRun({
+        runId: run.id,
+        status: 'dispatched',
+        workspaceId: launch.workspaceId,
+        workspaceDisplayName: launch.workspaceDisplayName ?? null,
+        terminalSessionId: launch.terminalSessionId,
+        error: null
+      })
+      if (launch.completion) {
+        void launch.completion
+          .then((completion) =>
+            this.markDispatchResult({
+              runId: run.id,
+              status: completion.status,
+              workspaceId: launch.workspaceId,
+              workspaceDisplayName: launch.workspaceDisplayName ?? null,
+              terminalSessionId: launch.terminalSessionId,
+              precheckResult,
+              outputSnapshot: completion.outputSnapshot ?? null,
+              error: completion.error ?? null
+            })
+          )
+          .catch((error) =>
+            this.markDispatchResult({
+              runId: run.id,
+              status: 'dispatch_failed',
+              workspaceId: launch.workspaceId,
+              workspaceDisplayName: launch.workspaceDisplayName ?? null,
+              terminalSessionId: launch.terminalSessionId,
+              error: error instanceof Error ? error.message : String(error)
+            })
+          )
+      }
+      return updated
+    } catch (error) {
+      return this.store.updateAutomationRun({
+        runId: run.id,
+        status: 'dispatch_failed',
+        workspaceId: automation.workspaceId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
   }
 }
 

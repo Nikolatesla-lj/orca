@@ -22,17 +22,17 @@ import {
   type TestInfo
 } from '@stablyai/playwright-test'
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { execSync } from 'child_process'
+import { randomUUID } from 'crypto'
 import os from 'os'
 import path from 'path'
 import { TEST_REPO_PATH_FILE } from '../global-setup'
 import { cleanupE2EDaemons, closeElectronAppForE2E } from './electron-process-shutdown'
 import { getOrcaElectronLaunchArgs } from './electron-launch-args'
 import { getE2ECompletedOnboardingProfile } from './e2e-completed-onboarding-profile'
-import { createSeededTestRepo, isValidGitRepo, removeTree } from './orca-test-repo'
 
 type OrcaTestFixtures = {
   electronApp: ElectronApplication
-  activeTestRepo: TestRepoFixture
   sharedPage: Page
   orcaPage: Page
   // Why: every fresh userData dir paints the first-launch onboarding overlay
@@ -43,15 +43,15 @@ type OrcaTestFixtures = {
   // Why: most E2E specs need a ready project before assertions start. Golden
   // first-run specs opt out so they can prove the zero-project onboarding path.
   seedTestRepo: boolean
+  // Why: a few IPC repro specs need to launch the Electron app with a scoped
+  // PATH/token environment. Keep this fixture-owned so tests never mutate the
+  // developer's shell or already-running Orca instance.
+  launchEnv: NodeJS.ProcessEnv
 }
 
 type OrcaWorkerFixtures = {
   /** Absolute path to the test git repo created by globalSetup. */
   testRepoPath: string
-}
-
-type TestRepoFixture = {
-  repoPath: string
 }
 
 // Why: parse + warn at module scope so a bad ORCA_E2E_SLOWMO_MS value logs once
@@ -114,8 +114,57 @@ function forwardElectronProcessLogs(app: ElectronApplication, testInfo: TestInfo
   })
 }
 
-function shouldUseIsolatedArchitectureRepo(testInfo: TestInfo): boolean {
-  return path.basename(testInfo.file).startsWith('architecture-')
+function isValidGitRepo(repoPath: string): boolean {
+  if (!repoPath || !existsSync(repoPath)) {
+    return false
+  }
+
+  try {
+    return (
+      execSync('git rev-parse --is-inside-work-tree', {
+        cwd: repoPath,
+        stdio: 'pipe',
+        encoding: 'utf8'
+      }).trim() === 'true'
+    )
+  } catch {
+    return false
+  }
+}
+
+function createSeededTestRepo(): string {
+  const testRepoDir = mkdtempSync(path.join(os.tmpdir(), 'orca-e2e-repo-'))
+
+  execSync('git init', { cwd: testRepoDir, stdio: 'pipe' })
+  execSync('git config user.email "e2e@test.local"', { cwd: testRepoDir, stdio: 'pipe' })
+  execSync('git config user.name "E2E Test"', { cwd: testRepoDir, stdio: 'pipe' })
+
+  writeFileSync(
+    path.join(testRepoDir, 'README.md'),
+    '# Orca E2E Test Repo\n\nThis repo was created automatically for Playwright tests.\n'
+  )
+  writeFileSync(path.join(testRepoDir, 'CLAUDE.md'), '# CLAUDE.md\n\nTest instructions for E2E.\n')
+  writeFileSync(
+    path.join(testRepoDir, 'package.json'),
+    `${JSON.stringify({ name: 'orca-e2e-test', version: '0.0.0', private: true }, null, 2)}\n`
+  )
+  writeFileSync(path.join(testRepoDir, '.gitignore'), 'node_modules/\n')
+  mkdirSync(path.join(testRepoDir, 'src'), { recursive: true })
+  writeFileSync(path.join(testRepoDir, 'src', 'index.ts'), 'export const hello = "world"\n')
+
+  execSync('git add -A', { cwd: testRepoDir, stdio: 'pipe' })
+  execSync('git commit -m "Initial commit for E2E tests"', { cwd: testRepoDir, stdio: 'pipe' })
+
+  // Why: worker-scoped fixture fallbacks can run in parallel; UUIDs avoid
+  // colliding on the same temp repo/worktree when workers start together.
+  const worktreeDir = path.join(testRepoDir, '..', `orca-e2e-worktree-${randomUUID()}`)
+  execSync(`git worktree add "${worktreeDir}" -b e2e-secondary`, {
+    cwd: testRepoDir,
+    stdio: 'pipe'
+  })
+
+  writeFileSync(TEST_REPO_PATH_FILE, testRepoDir)
+  return testRepoDir
 }
 
 /**
@@ -136,39 +185,14 @@ export const test = base.extend<OrcaTestFixtures, OrcaWorkerFixtures>({
         : ''
       const repoPath = isValidGitRepo(persistedRepoPath)
         ? persistedRepoPath
-        : createSeededTestRepo().repoPath
+        : createSeededTestRepo()
       await provideFixture(repoPath)
     },
     { scope: 'worker' }
   ],
 
-  // Test-scoped: Architecture specs get a dedicated git repo and .scryer
-  // directory. electronApp depends on this fixture, so teardown runs only
-  // after Electron closes and releases architecture file watchers.
-  activeTestRepo: async ({ testRepoPath }, provideFixture, testInfo) => {
-    if (shouldUseIsolatedArchitectureRepo(testInfo)) {
-      const isolatedRepo = createSeededTestRepo({
-        persistPathFile: false,
-        repoPrefix: 'orca-e2e-arch-repo',
-        worktreePrefix: 'orca-e2e-arch-worktree'
-      })
-      await provideFixture({ repoPath: isolatedRepo.repoPath })
-      removeTree(isolatedRepo.worktreePath)
-      removeTree(isolatedRepo.repoPath)
-      return
-    }
-
-    const repoPath = isValidGitRepo(testRepoPath) ? testRepoPath : createSeededTestRepo().repoPath
-    await provideFixture({ repoPath })
-  },
-
   // Test-scoped: one Electron app per test
-  electronApp: async (
-    { activeTestRepo: _activeTestRepo, dismissOnboarding },
-    provideFixture,
-    testInfo
-  ) => {
-    void _activeTestRepo
+  electronApp: async ({ dismissOnboarding, launchEnv }, provideFixture, testInfo) => {
     const mainPath = path.join(process.cwd(), 'out', 'main', 'index.js')
     const userDataDir = mkdtempSync(path.join(os.tmpdir(), 'orca-e2e-userdata-'))
 
@@ -222,9 +246,12 @@ export const test = base.extend<OrcaTestFixtures, OrcaWorkerFixtures>({
       // so pass the repo-root relay path explicitly for this opt-in suite.
       env: {
         ...cleanEnv,
+        ...launchEnv,
         NODE_ENV: 'development',
         ORCA_E2E_USER_DATA_DIR: userDataDir,
-        ...(process.env.ORCA_E2E_SSH_LOCALHOST === '1' && !cleanEnv.ORCA_RELAY_PATH
+        ...((process.env.ORCA_E2E_SSH_LOCALHOST === '1' ||
+          process.env.ORCA_E2E_SSH_DOCKER === '1') &&
+        !cleanEnv.ORCA_RELAY_PATH
           ? { ORCA_RELAY_PATH: path.join(process.cwd(), 'out', 'relay') }
           : {}),
         ...(headful ? { ORCA_E2E_HEADFUL: '1' } : { ORCA_E2E_HEADLESS: '1' })
@@ -242,10 +269,11 @@ export const test = base.extend<OrcaTestFixtures, OrcaWorkerFixtures>({
   // Default: dismiss the onboarding overlay so it doesn't intercept clicks.
   dismissOnboarding: [true, { option: true }],
   seedTestRepo: [true, { option: true }],
+  launchEnv: [{}, { option: true }],
 
   // Test-scoped: grab the first BrowserWindow, add the test repo, and wait
   // until the session is fully ready with a worktree active.
-  sharedPage: async ({ activeTestRepo, electronApp, seedTestRepo }, provideFixture) => {
+  sharedPage: async ({ electronApp, seedTestRepo, testRepoPath }, provideFixture) => {
     // Why: the Electron app may take a while to create the first window,
     // especially on cold start with no prior dev userData. Isolated per-test
     // profiles make late-suite launches slower, so use the full test budget.
@@ -265,7 +293,7 @@ export const test = base.extend<OrcaTestFixtures, OrcaWorkerFixtures>({
       return
     }
 
-    const repoPath = activeTestRepo.repoPath
+    const repoPath = isValidGitRepo(testRepoPath) ? testRepoPath : createSeededTestRepo()
 
     // Add the test repo via the IPC bridge
     // Why: calling window.api.repos.add() goes through the same code path as

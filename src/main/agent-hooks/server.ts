@@ -42,6 +42,7 @@ import {
   type AgentStatusIpcPayload,
   type AgentType,
   type AgentStatusState,
+  type ParsedAgentStatusPayload,
   normalizeAgentStatusPayload
 } from '../../shared/agent-status-types'
 import {
@@ -54,6 +55,7 @@ import {
 } from '../../shared/agent-interrupt-intent'
 import { parseLegacyNumericPaneKey, parsePaneKey } from '../../shared/stable-pane-id'
 import type { LegacyPaneKeyAliasEntry } from '../../shared/types'
+import { normalizeAgentProviderSession } from '../../shared/agent-session-resume'
 
 export type { AgentHookSource }
 
@@ -213,6 +215,7 @@ function sanitizeHydratedEntry(
   }
   return {
     paneKey,
+    launchToken: typeof record.launchToken === 'string' ? record.launchToken : undefined,
     tabId: typeof tabId === 'string' ? tabId : undefined,
     worktreeId: typeof worktreeId === 'string' ? worktreeId : undefined,
     connectionId,
@@ -221,6 +224,7 @@ function sanitizeHydratedEntry(
     toolUseId: typeof record.toolUseId === 'string' ? record.toolUseId : undefined,
     toolAgentId: typeof record.toolAgentId === 'string' ? record.toolAgentId : undefined,
     toolAgentType: typeof record.toolAgentType === 'string' ? record.toolAgentType : undefined,
+    providerSession: normalizeAgentProviderSession(record.providerSession) ?? undefined,
     payload,
     receivedAt,
     stateStartedAt
@@ -230,13 +234,30 @@ function sanitizeHydratedEntry(
 function toAgentStatusIpcPayload(entry: EnrichedAgentHookEventPayload): AgentStatusIpcPayload {
   return {
     paneKey: entry.paneKey,
+    ...(entry.launchToken ? { launchToken: entry.launchToken } : {}),
     tabId: entry.tabId,
     worktreeId: entry.worktreeId,
     connectionId: entry.connectionId,
     receivedAt: entry.receivedAt,
     stateStartedAt: entry.stateStartedAt,
+    ...(entry.providerSession ? { providerSession: entry.providerSession } : {}),
     ...entry.payload
   }
+}
+
+function equivalentParsedAgentStatusPayload(
+  a: ParsedAgentStatusPayload,
+  b: ParsedAgentStatusPayload
+): boolean {
+  return (
+    a.state === b.state &&
+    a.prompt === b.prompt &&
+    a.agentType === b.agentType &&
+    a.toolName === b.toolName &&
+    a.toolInput === b.toolInput &&
+    a.lastAssistantMessage === b.lastAssistantMessage &&
+    a.interrupted === b.interrupted
+  )
 }
 
 function trackEmptyPaneKeyHook(body: unknown): void {
@@ -509,6 +530,7 @@ export class AgentHookServer {
       tabId: existing.tabId,
       worktreeId: existing.worktreeId,
       connectionId: existing.connectionId,
+      providerSession: existing.providerSession,
       payload: {
         state: 'done',
         prompt: payload.prompt,
@@ -893,6 +915,57 @@ export class AgentHookServer {
     return { ...record, paneKey: stablePaneKey }
   }
 
+  ingestTerminalStatus(event: {
+    paneKey: string
+    tabId?: string
+    worktreeId?: string
+    connectionId?: string | null
+    payload: ParsedAgentStatusPayload
+  }): void {
+    const paneKey = this.resolvePaneKeyAlias(event.paneKey.trim())
+    const parsedPaneKey = parsePaneKey(paneKey)
+    if (paneKey.length === 0) {
+      track('agent_hook_unattributed', { reason: 'empty_pane_key' })
+      return
+    }
+    if (paneKey.length > MAX_PANE_KEY_LEN || !parsedPaneKey) {
+      return
+    }
+    const tabId =
+      event.tabId !== undefined && event.tabId.trim().length > 0 ? event.tabId.trim() : undefined
+    if (tabId !== undefined && tabId !== parsedPaneKey.tabId) {
+      return
+    }
+    const worktreeId =
+      event.worktreeId !== undefined && event.worktreeId.trim().length > 0
+        ? event.worktreeId.trim()
+        : undefined
+    const connectionId =
+      typeof event.connectionId === 'string' && event.connectionId.trim().length > 0
+        ? event.connectionId.trim()
+        : null
+    const previous = this.state.lastStatusByPaneKey.get(paneKey) as
+      | EnrichedAgentHookEventPayload
+      | undefined
+    if (
+      previous?.connectionId === connectionId &&
+      previous.tabId === tabId &&
+      previous.worktreeId === worktreeId &&
+      equivalentParsedAgentStatusPayload(previous.payload, event.payload)
+    ) {
+      return
+    }
+    // Why: OSC terminal status is a runtime/model observation, not a hook
+    // prompt boundary. Keep prompt-sent telemetry tied to native hooks.
+    this.applyNormalizedStatus({
+      paneKey,
+      tabId,
+      worktreeId,
+      connectionId,
+      payload: event.payload
+    })
+  }
+
   /** Ingest a payload that arrived over the relay JSON-RPC channel rather
    *  than the local HTTP server. `connectionId` is the SshChannelMultiplexer
    *  identity Orca holds (the wire envelope carries connectionId: null and
@@ -909,12 +982,14 @@ export class AgentHookServer {
       worktreeId?: string
       env?: string
       version?: string
+      launchToken?: string
       hasExplicitPrompt?: boolean
       promptInteractionKey?: string
       hookEventName?: string
       toolUseId?: string
       toolAgentId?: string
       toolAgentType?: string
+      providerSession?: unknown
       isReplay?: boolean
       payload: unknown
     },
@@ -989,6 +1064,7 @@ export class AgentHookServer {
       typeof envelope.toolAgentType === 'string' && envelope.toolAgentType.trim().length > 0
         ? envelope.toolAgentType.trim()
         : undefined
+    const providerSession = normalizeAgentProviderSession(envelope.providerSession) ?? undefined
     // Why: the relay is across a trust boundary; re-run the canonical
     // normalizer on the inner payload so prompt/agentType/toolName/toolInput
     // length caps, embedded-newline collapse, and the `interrupted`-only-on-
@@ -1009,6 +1085,7 @@ export class AgentHookServer {
     })
     const event: AgentHookEventPayload = {
       paneKey,
+      launchToken: envelope.launchToken,
       tabId,
       worktreeId,
       connectionId: trimmedConnectionId,
@@ -1018,6 +1095,7 @@ export class AgentHookServer {
       toolUseId,
       toolAgentId,
       toolAgentType,
+      providerSession,
       isReplay: envelope.isReplay === true ? true : undefined,
       payload: normalizedPayload
     }

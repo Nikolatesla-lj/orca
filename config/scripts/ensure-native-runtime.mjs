@@ -210,7 +210,6 @@ function parseChildCheckResult(result) {
   return {
     ok: result.status === 0,
     status: result.status,
-    signal: result.signal,
     stdout: result.stdout,
     stderr: result.stderr,
     error: result.error,
@@ -315,6 +314,23 @@ function getWindowsBuildNumber() {
   return match && match.length === 4 ? Number.parseInt(match[3], 10) : 0
 }
 
+function runPnpm(args) {
+  const command = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
+  const result = spawnSync(command, args, {
+    cwd: projectDir,
+    stdio: 'inherit',
+    shell: process.platform === 'win32'
+  })
+
+  if (result.error || result.status !== 0) {
+    console.error(`[native-runtime] ${command} ${args.join(' ')} failed.`)
+    if (result.error) {
+      console.error(formatError(result.error))
+    }
+    process.exit(result.status ?? 1)
+  }
+}
+
 function runNodeScript(args) {
   const result = spawnSync(process.execPath, args, {
     cwd: projectDir,
@@ -351,9 +367,6 @@ function printCheckError(result) {
     result.status !== 0
   ) {
     console.warn(`[native-runtime] Native check exited with status ${result.status}.`)
-  }
-  if (result.signal) {
-    console.warn(`[native-runtime] Native check terminated with signal ${result.signal}.`)
   }
 }
 

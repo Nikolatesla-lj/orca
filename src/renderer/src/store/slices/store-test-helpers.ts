@@ -37,7 +37,12 @@ import { createDetectedAgentsSlice } from './detected-agents'
 import { createWorktreeNavHistorySlice } from './worktree-nav-history'
 import { createDictationSlice } from './dictation'
 import { createWorkspaceCleanupSlice } from './workspace-cleanup'
+import { createRuntimeStatusSlice } from './runtime-status'
+import { createPullRequestGenerationSlice } from './pull-request-generation'
+import { createCommitMessageGenerationSlice } from './commit-message-generation'
+import { createPinnedTabCloseConfirmSlice } from './pinned-tab-close-confirm'
 import { createArchitectureSlice } from './architecture'
+import { translate } from '@/i18n/i18n'
 
 export const TEST_REPO = {
   id: 'repo1',
@@ -78,6 +83,10 @@ export function createTestStore() {
     ...createWorktreeNavHistorySlice(...a),
     ...createDictationSlice(...a),
     ...createWorkspaceCleanupSlice(...a),
+    ...createRuntimeStatusSlice(...a),
+    ...createPullRequestGenerationSlice(...a),
+    ...createCommitMessageGenerationSlice(...a),
+    ...createPinnedTabCloseConfirmSlice(...a),
     ...createArchitectureSlice(...a)
   }))
 }
@@ -125,7 +134,7 @@ export function makeTab(
 ): TerminalTab {
   return {
     ptyId: null,
-    title: 'Terminal 1',
+    title: translate('auto.store.slices.store.test.helpers.b9a8117c33', 'Terminal 1'),
     customTitle: null,
     color: null,
     sortOrder: 0,
@@ -157,7 +166,7 @@ export function makeUnifiedTab(
   return {
     entityId: overrides.id,
     contentType: 'terminal',
-    label: 'Terminal 1',
+    label: translate('auto.store.slices.store.test.helpers.b9a8117c33', 'Terminal 1'),
     customLabel: null,
     color: null,
     sortOrder: 0,

@@ -1672,6 +1672,9 @@ export function useArchitectureModelController({
       if (!launched) {
         throw new Error('Could not launch an Orca agent terminal for architecture sync.')
       }
+      if (!launched.tabId) {
+        throw new Error('Architecture sync agent launch did not return a terminal tab id.')
+      }
       aiRunSession.markRun('sync', 'running', 'Architecture sync is running')
       syncTerminalHadPtyRef.current = false
       setSyncTerminalTabId(launched.tabId)

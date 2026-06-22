@@ -28,7 +28,7 @@ import {
 //   - preToolUse/postToolUse/postToolUseFailure: in-flight tool preview
 //     between submit and stop — without these the pane appears idle for the
 //     entire duration of a long tool-heavy turn
-//   - beforeShellExecution / beforeMCPExecution: approval prompts (→ waiting)
+//   - beforeShellExecution / beforeMCPExecution: shell/MCP tool preview (→ working)
 //   - afterAgentResponse: carries the final composed reply text so the
 //     dashboard can surface it on done
 // sessionStart / sessionEnd are intentionally NOT subscribed — cursor-agent
@@ -106,6 +106,7 @@ function getManagedScript(target: 'local' | 'posix' = 'local'): string {
     '  -H "X-Orca-Agent-Hook-Token: ${ORCA_AGENT_HOOK_TOKEN}" \\',
     '  --data-urlencode "paneKey=${ORCA_PANE_KEY}" \\',
     '  --data-urlencode "tabId=${ORCA_TAB_ID}" \\',
+    '  --data-urlencode "launchToken=${ORCA_AGENT_LAUNCH_TOKEN}" \\',
     '  --data-urlencode "worktreeId=${ORCA_WORKTREE_ID}" \\',
     '  --data-urlencode "env=${ORCA_AGENT_HOOK_ENV}" \\',
     '  --data-urlencode "version=${ORCA_AGENT_HOOK_VERSION}" \\',

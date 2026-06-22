@@ -7,7 +7,13 @@ import type {
   AutomationSchedulePreset,
   AutomationUpdateInput
 } from '../../shared/automations-types'
-import type { TuiAgent } from '../../shared/types'
+import {
+  buildWorkspaceRunContext,
+  normalizeTaskSourceContext,
+  type TaskSourceContext,
+  type WorkspaceRunContext
+} from '../../shared/task-source-context'
+import type { ProjectHostSetup, TuiAgent } from '../../shared/types'
 import {
   DEFAULT_AUTOMATION_PRECHECK_TIMEOUT_SECONDS,
   MAX_AUTOMATION_PRECHECK_TIMEOUT_SECONDS
@@ -30,7 +36,11 @@ import {
 } from '../flags'
 import { RuntimeClientError } from '../runtime-client'
 import { getOptionalWorktreeSelector, resolveCurrentWorktreeSelector } from '../selectors'
-import { buildPipelineRunInput } from './pipelines'
+import {
+  assertWorkspaceTargetFlagsCompatible,
+  hasWorkspaceProjectTarget,
+  resolveProjectCreateTarget
+} from '../worktree-project-target'
 
 type AutomationCreateParams = Omit<AutomationCreateInput, 'projectId' | 'timezone'> & {
   repo?: string
@@ -271,6 +281,46 @@ function getPrecheckFlag(
   }
 }
 
+function getSourceContextFlag(
+  flags: Map<string, string | boolean>
+): TaskSourceContext | null | undefined {
+  if (!flags.has('source-context')) {
+    return undefined
+  }
+  const value = flags.get('source-context')
+  if (typeof value !== 'string') {
+    throw new RuntimeClientError(
+      'invalid_argument',
+      '--source-context requires a JSON TaskSourceContext or null'
+    )
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(value)
+  } catch {
+    throw new RuntimeClientError('invalid_argument', '--source-context must be valid JSON')
+  }
+  if (parsed === null) {
+    return null
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    throw new RuntimeClientError(
+      'invalid_argument',
+      '--source-context must be a JSON TaskSourceContext or null'
+    )
+  }
+  const sourceContext = normalizeTaskSourceContext(
+    parsed as Parameters<typeof normalizeTaskSourceContext>[0]
+  )
+  if (!sourceContext) {
+    throw new RuntimeClientError(
+      'invalid_argument',
+      '--source-context is not a valid TaskSourceContext'
+    )
+  }
+  return sourceContext
+}
+
 function getWorkspaceModeFlag(
   flags: Map<string, string | boolean>
 ): 'existing' | 'new_per_run' | undefined {
@@ -290,47 +340,28 @@ function getWorkspaceModeFlag(
   )
 }
 
-function getAutomationTargetFlag(flags: Map<string, string | boolean>): 'prompt' | 'pipeline' {
-  const target = getOptionalStringFlag(flags, 'target') ?? 'prompt'
-  if (target === 'prompt' || target === 'pipeline') {
-    return target
-  }
-  throw new RuntimeClientError('invalid_argument', '--target must be prompt or pipeline')
-}
-
-function buildAutomationTarget(
-  flags: Map<string, string | boolean>,
-  target: 'prompt' | 'pipeline'
-): AutomationCreateInput['target'] | undefined {
-  if (target === 'prompt') {
-    return undefined
-  }
-  const pipelineInput = buildPipelineRunInput(flags)
-  return {
-    type: 'pipeline',
-    pipelineTemplateId: pipelineInput.templateId,
-    pipelineInput
-  }
-}
-
-function getAutomationPromptFlag(
-  flags: Map<string, string | boolean>,
-  target: 'prompt' | 'pipeline'
-): string {
-  if (target === 'pipeline') {
-    return getOptionalStringFlag(flags, 'prompt') ?? ''
-  }
-  return getRequiredStringFlag(flags, 'prompt')
-}
-
 async function resolveDefaultTarget(
   flags: Map<string, string | boolean>,
   cwd: string,
   client: Parameters<CommandHandler>[0]['client']
-): Promise<{ repo?: string; workspace?: string }> {
+): Promise<{ repo?: string; workspace?: string; runContext?: WorkspaceRunContext }> {
+  assertWorkspaceTargetFlagsCompatible(flags)
   const repo = getOptionalStringFlag(flags, 'repo')
   if (repo && getOptionalStringFlag(flags, 'workspace')) {
     throw new RuntimeClientError('invalid_argument', 'Use either --repo or --workspace, not both.')
+  }
+  if (hasWorkspaceProjectTarget(flags) && getOptionalStringFlag(flags, 'workspace')) {
+    throw new RuntimeClientError(
+      'invalid_argument',
+      'Use either --workspace or project target flags, not both.'
+    )
+  }
+  const projectTarget = await resolveProjectCreateTarget(flags, client)
+  if (projectTarget) {
+    return {
+      repo: projectTarget.repoSelector,
+      runContext: buildAutomationRunContextFromSetup(projectTarget.setup)
+    }
   }
   const workspace = await getOptionalWorktreeSelector(flags, 'workspace', cwd, client)
   if (repo || workspace) {
@@ -350,13 +381,44 @@ async function getExplicitTarget(
   flags: Map<string, string | boolean>,
   cwd: string,
   client: Parameters<CommandHandler>[0]['client']
-): Promise<{ repo?: string; workspace?: string }> {
+): Promise<{ repo?: string; workspace?: string; runContext?: WorkspaceRunContext }> {
+  assertWorkspaceTargetFlagsCompatible(flags)
   const repo = getOptionalStringFlag(flags, 'repo')
   if (repo && getOptionalStringFlag(flags, 'workspace')) {
     throw new RuntimeClientError('invalid_argument', 'Use either --repo or --workspace, not both.')
   }
+  if (hasWorkspaceProjectTarget(flags) && getOptionalStringFlag(flags, 'workspace')) {
+    throw new RuntimeClientError(
+      'invalid_argument',
+      'Use either --workspace or project target flags, not both.'
+    )
+  }
+  const projectTarget = await resolveProjectCreateTarget(flags, client)
+  if (projectTarget) {
+    return {
+      repo: projectTarget.repoSelector,
+      runContext: buildAutomationRunContextFromSetup(projectTarget.setup)
+    }
+  }
   const workspace = await getOptionalWorktreeSelector(flags, 'workspace', cwd, client)
   return { repo, workspace }
+}
+
+function buildAutomationRunContextFromSetup(setup: ProjectHostSetup): WorkspaceRunContext {
+  const runContext = buildWorkspaceRunContext({
+    projectId: setup.projectId,
+    hostId: setup.hostId,
+    projectHostSetupId: setup.id,
+    repoId: setup.repoId,
+    path: setup.path
+  })
+  if (!runContext) {
+    throw new RuntimeClientError(
+      'invalid_argument',
+      `Project host setup is missing automation run context fields: ${setup.id}`
+    )
+  }
+  return runContext
 }
 
 export const AUTOMATION_HANDLERS: Record<string, CommandHandler> = {
@@ -375,17 +437,17 @@ export const AUTOMATION_HANDLERS: Record<string, CommandHandler> = {
     if (!schedule) {
       throw new RuntimeClientError('invalid_argument', 'Missing required --trigger')
     }
-    const targetKind = getAutomationTargetFlag(flags)
-    const automationTarget = buildAutomationTarget(flags, targetKind)
     const target = await resolveDefaultTarget(flags, cwd, client)
+    const sourceContext = getSourceContextFlag(flags)
     const workspaceMode =
       getWorkspaceModeFlag(flags) ?? (target.workspace ? 'existing' : 'new_per_run')
     const result = await client.call<{ automation: Automation }>('automation.create', {
       name: getRequiredStringFlag(flags, 'name'),
-      prompt: getAutomationPromptFlag(flags, targetKind),
-      target: automationTarget,
+      prompt: getRequiredStringFlag(flags, 'prompt'),
       precheck: getPrecheckFlag(flags),
       agentId: getProviderFlag(flags),
+      ...(target.runContext ? { runContext: target.runContext } : {}),
+      ...(sourceContext !== undefined ? { sourceContext } : {}),
       repo: target.repo,
       workspace: target.workspace,
       workspaceMode,
@@ -401,6 +463,7 @@ export const AUTOMATION_HANDLERS: Record<string, CommandHandler> = {
   'automations edit': async ({ flags, client, cwd, json }) => {
     const target = await getExplicitTarget(flags, cwd, client)
     const schedule = getScheduleFlag(flags, false)
+    const sourceContext = getSourceContextFlag(flags)
     const result = await client.call<{ automation: Automation }>('automation.update', {
       id: getRequiredStringFlag(flags, 'id'),
       updates: {
@@ -408,6 +471,8 @@ export const AUTOMATION_HANDLERS: Record<string, CommandHandler> = {
         prompt: getOptionalStringFlag(flags, 'prompt'),
         precheck: getPrecheckFlag(flags),
         agentId: getOptionalProviderFlag(flags),
+        ...(target.runContext ? { runContext: target.runContext } : {}),
+        ...(sourceContext !== undefined ? { sourceContext } : {}),
         repo: target.repo,
         workspace: target.workspace,
         workspaceMode: getWorkspaceModeFlag(flags),

@@ -48,14 +48,14 @@ function browserTab(id: string, groupId: string, entityId: string, sortOrder: nu
   }
 }
 
-function architectureTab(id: string, groupId: string, entityId: string, sortOrder: number): Tab {
+function simulatorTab(id: string, groupId: string, sortOrder: number): Tab {
   return {
     id,
-    entityId,
+    entityId: id,
     groupId,
     worktreeId: 'wt',
-    contentType: 'architecture',
-    label: entityId,
+    contentType: 'simulator',
+    label: 'Mobile Emulator',
     customLabel: null,
     color: null,
     sortOrder,
@@ -82,7 +82,6 @@ describe('getGroupVisibleTabOrder', () => {
         tabs,
         new Set(['term-1', 'term-2']),
         new Set(['/repo/file.md']),
-        new Set(),
         new Set()
       )
     ).toEqual([
@@ -114,7 +113,6 @@ describe('getGroupVisibleTabOrder', () => {
         tabs,
         new Set(['term-1', 'term-2', 'term-3']),
         new Set(),
-        new Set(),
         new Set()
       ).map((t) => t.id)
     ).toEqual(['term-2', 'term-3', 'term-1'])
@@ -131,9 +129,9 @@ describe('getGroupVisibleTabOrder', () => {
       terminalTab('tab-t1', 'g1', 'term-1', 0),
       terminalTab('tab-t2', 'g1', 'term-zombie', 1)
     ]
-    expect(
-      getGroupVisibleTabOrder(group, tabs, new Set(['term-1']), new Set(), new Set(), new Set())
-    ).toEqual([{ type: 'terminal', id: 'term-1', tabId: 'tab-t1' }])
+    expect(getGroupVisibleTabOrder(group, tabs, new Set(['term-1']), new Set(), new Set())).toEqual(
+      [{ type: 'terminal', id: 'term-1', tabId: 'tab-t1' }]
+    )
   })
 
   it('includes browser tabs keyed by entityId in the declared group order', () => {
@@ -154,8 +152,7 @@ describe('getGroupVisibleTabOrder', () => {
         tabs,
         new Set(['term-1']),
         new Set(['/repo/file.md']),
-        new Set(['browser-1']),
-        new Set()
+        new Set(['browser-1'])
       )
     ).toEqual([
       { type: 'terminal', id: 'term-1', tabId: 'tab-t1' },
@@ -164,16 +161,16 @@ describe('getGroupVisibleTabOrder', () => {
     ])
   })
 
-  it('includes architecture tabs keyed by entityId in the declared group order', () => {
+  it('includes simulator tabs keyed by unified tab id in the declared group order', () => {
     const group: TabGroup = {
       id: 'g1',
       worktreeId: 'wt',
-      activeTabId: 'tab-a1',
-      tabOrder: ['tab-t1', 'tab-a1', 'tab-e1']
+      activeTabId: 'tab-s1',
+      tabOrder: ['tab-t1', 'tab-s1', 'tab-e1']
     }
     const tabs: Tab[] = [
       terminalTab('tab-t1', 'g1', 'term-1', 0),
-      architectureTab('tab-a1', 'g1', 'architecture-1', 1),
+      simulatorTab('tab-s1', 'g1', 1),
       editorTab('tab-e1', 'g1', '/repo/file.md', 2)
     ]
     expect(
@@ -183,11 +180,11 @@ describe('getGroupVisibleTabOrder', () => {
         new Set(['term-1']),
         new Set(['/repo/file.md']),
         new Set(),
-        new Set(['architecture-1'])
+        new Set(['tab-s1'])
       )
     ).toEqual([
       { type: 'terminal', id: 'term-1', tabId: 'tab-t1' },
-      { type: 'architecture', id: 'architecture-1', tabId: 'tab-a1' },
+      { type: 'simulator', id: 'tab-s1', tabId: 'tab-s1' },
       { type: 'editor', id: '/repo/file.md', tabId: 'tab-e1' }
     ])
   })
@@ -202,7 +199,6 @@ type NavState = Pick<
   | 'tabsByWorktree'
   | 'openFiles'
   | 'browserTabsByWorktree'
-  | 'architectureTabsByWorktree'
 >
 
 function makeState(overrides: Partial<NavState>): NavState {
@@ -214,7 +210,6 @@ function makeState(overrides: Partial<NavState>): NavState {
     tabsByWorktree: {},
     openFiles: [],
     browserTabsByWorktree: {},
-    architectureTabsByWorktree: {},
     ...overrides
   }
 }
@@ -292,7 +287,8 @@ describe('getActiveTabNavOrder', () => {
 
   it('falls back to the legacy reconciled order when no active group exists', () => {
     const state = makeState({
-      tabBarOrderByWorktree: { wt: ['term-1', 'e1', 'term-2'] },
+      tabBarOrderByWorktree: { wt: ['term-1', 'sim-1', 'e1', 'term-2'] },
+      unifiedTabsByWorktree: { wt: [simulatorTab('sim-1', 'g1', 3)] },
       tabsByWorktree: {
         // @ts-expect-error — minimal shape
         wt: [{ id: 'term-1' }, { id: 'term-2' }]
@@ -302,6 +298,7 @@ describe('getActiveTabNavOrder', () => {
     })
     expect(getActiveTabNavOrder(state, 'wt')).toEqual([
       { type: 'terminal', id: 'term-1' },
+      { type: 'simulator', id: 'sim-1' },
       { type: 'editor', id: 'e1' },
       { type: 'terminal', id: 'term-2' }
     ])
