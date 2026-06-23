@@ -69,8 +69,7 @@ export function useTabGroupWorkspaceModel({
       terminalTabs: state.tabsByWorktree[worktreeId] ?? EMPTY_TERMINAL_TABS,
       openFiles: state.openFiles,
       browserTabs: state.browserTabsByWorktree[worktreeId] ?? EMPTY_BROWSER_TABS,
-      architectureTabs:
-        state.architectureTabsByWorktree[worktreeId] ?? EMPTY_ARCHITECTURE_TABS,
+      architectureTabs: state.architectureTabsByWorktree?.[worktreeId] ?? EMPTY_ARCHITECTURE_TABS,
       expandedPaneByTabId: state.expandedPaneByTabId,
       worktreesByRepo: state.worktreesByRepo,
       generatedTabTitlesEnabled: state.settings?.tabAutoGenerateTitle === true,
@@ -626,11 +625,9 @@ export function useTabGroupWorkspaceModel({
         if (!item) {
           return itemId
         }
-        return (
-          item.contentType === 'terminal' ||
+        return item.contentType === 'terminal' ||
           item.contentType === 'browser' ||
           item.contentType === 'architecture'
-        )
           ? item.entityId
           : item.id
       }),

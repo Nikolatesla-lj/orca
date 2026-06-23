@@ -91,7 +91,7 @@ function getFloatingWorkspaceVisibleTabs(
       (store.browserTabsByWorktree[FLOATING_TERMINAL_WORKTREE_ID] ?? []).map((tab) => tab.id)
     ),
     new Set(
-      (store.architectureTabsByWorktree[FLOATING_TERMINAL_WORKTREE_ID] ?? []).map((tab) => tab.id)
+      (store.architectureTabsByWorktree?.[FLOATING_TERMINAL_WORKTREE_ID] ?? []).map((tab) => tab.id)
     )
   )
 }
