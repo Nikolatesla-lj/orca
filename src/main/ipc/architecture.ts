@@ -22,6 +22,7 @@ import { checkDrift } from '../scryer/drift'
 import { callScryerTool } from '../scryer/mcp-tools'
 import { writeArchitectureMcpConfig } from '../scryer/mcp-config'
 import { beginSync, cancelSync, finishSync } from '../scryer/sync'
+import { createScryerEngine, type ScryerOperationId } from '../scryer/engine'
 import {
   advisorPrompt,
   initialModelPrompt,
@@ -32,6 +33,13 @@ import type { C4ModelData, C4NodeData, ScryerToolCall } from '../../shared/scrye
 import { BUILT_IN_SCRYER_TEMPLATES } from '../../shared/scryer/templates'
 
 const watchers = new Map<string, FSWatcher>()
+const scryerEngine = createScryerEngine()
+const SCRYER_WRITE_OPERATIONS = new Set<ScryerOperationId>([
+  'scryer.node.update',
+  'scryer.link.add',
+  'scryer.link.delete',
+  'scryer.plan.fold'
+])
 
 export type ArchitectureIpcRegistrar = {
   handle: <Args>(
@@ -321,6 +329,33 @@ export function registerArchitectureHandlers(
     async (event, args: { projectPath: string; call: ScryerToolCall }) => {
       const result = await deps.callScryerTool(args.projectPath, args.call)
       if (result.ok) {
+        notifyModelChanged(event, args.projectPath, undefined, deps)
+      }
+      return result
+    }
+  )
+
+  registrar.handle(
+    'architecture:executeScryerOperation',
+    async (
+      event,
+      args: {
+        projectPath: string
+        operationId: ScryerOperationId
+        input?: unknown
+        requestId?: string
+        leaseToken?: string
+      }
+    ) => {
+      const result = await scryerEngine.executeOperation(args.operationId, args.input ?? {}, {
+        requestId: args.requestId ?? `ipc-${Date.now()}`,
+        transport: 'ipc',
+        caller: 'human',
+        cwd: args.projectPath,
+        projectRoot: args.projectPath,
+        leaseToken: args.leaseToken
+      })
+      if (result.ok && SCRYER_WRITE_OPERATIONS.has(args.operationId)) {
         notifyModelChanged(event, args.projectPath, undefined, deps)
       }
       return result

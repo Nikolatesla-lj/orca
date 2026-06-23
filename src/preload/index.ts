@@ -1797,6 +1797,13 @@ const api = {
       ipcRenderer.invoke('architecture:finishSync', args),
     callTool: (args: { projectPath: string; call: unknown }): Promise<unknown> =>
       ipcRenderer.invoke('architecture:callTool', args),
+    executeScryerOperation: (args: {
+      projectPath: string
+      operationId: string
+      input?: unknown
+      requestId?: string
+      leaseToken?: string
+    }): Promise<unknown> => ipcRenderer.invoke('architecture:executeScryerOperation', args),
     watchModel: (args: { projectPath: string }): Promise<void> =>
       ipcRenderer.invoke('architecture:watchModel', args),
     onModelChanged: (

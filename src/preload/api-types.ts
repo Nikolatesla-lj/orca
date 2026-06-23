@@ -836,6 +836,13 @@ export type ArchitectureApi = {
   cancelSync: (args: { projectPath: string }) => Promise<C4ModelData>
   finishSync: (args: { projectPath: string }) => Promise<void>
   callTool: (args: { projectPath: string; call: ScryerToolCall }) => Promise<ScryerToolResult>
+  executeScryerOperation: (args: {
+    projectPath: string
+    operationId: string
+    input?: unknown
+    requestId?: string
+    leaseToken?: string
+  }) => Promise<unknown>
   watchModel: (args: { projectPath: string }) => Promise<void>
   onModelChanged: (
     callback: (event: { projectPath: string; fileName: string }) => void

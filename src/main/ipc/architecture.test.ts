@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from 'fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -135,6 +135,45 @@ describe('registerArchitectureHandlers', () => {
       revision: expect.any(String)
     })
     expect(send).toHaveBeenLastCalledWith('architecture:modelChanged', {
+      projectPath,
+      fileName: 'model.scry'
+    })
+  })
+
+  it('forwards Native Scryer Engine operation envelopes through IPC', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-engine-'))
+    await mkdir(join(projectPath, '.scryer'), { recursive: true })
+    await writeFile(
+      join(projectPath, '.scryer', 'model.scry'),
+      JSON.stringify({
+        version: '0.3',
+        nodes: [{ id: 'api', kind: 'system', name: 'API' }],
+        links: [],
+        groups: [],
+        sourceMap: {},
+        boundaries: {}
+      }),
+      'utf8'
+    )
+    const send = vi.fn()
+
+    const result = await handlers.get('architecture:executeScryerOperation')!(
+      { sender: { send } },
+      {
+        projectPath,
+        operationId: 'scryer.node.update',
+        requestId: 'ipc-test',
+        input: { nodes: [{ node_id: 'api', name: 'Public API' }] }
+      }
+    )
+
+    expect(result).toMatchObject({
+      ok: true,
+      operationId: 'scryer.node.update',
+      requestId: 'ipc-test',
+      result: { updated: 1 }
+    })
+    expect(send).toHaveBeenCalledWith('architecture:modelChanged', {
       projectPath,
       fileName: 'model.scry'
     })
