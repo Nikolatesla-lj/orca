@@ -722,6 +722,16 @@ function isCodexPaneStale(args: {
   return false
 }
 
+function shouldClearUnreadForTerminalInput(data: string): boolean {
+  if (!data) {
+    return false
+  }
+  // xterm can emit protocol replies from terminal output parsing, not from a
+  // person typing. Those replies start with ESC (DA/CPR/focus/OSC responses)
+  // and must not dismiss a BEL indicator raised by the same output stream.
+  return !data.startsWith('\x1b')
+}
+
 // Why: daemon session IDs use the format `${worktreeId}@@${shortUuid}`.
 // This validates that a session ID actually belongs to the given worktree,
 // preventing cross-workspace contamination during restore.
@@ -1906,6 +1916,15 @@ export function connectPanePty(
     if (currentPtyId && isPtyLocked(currentPtyId)) {
       clearPendingTerminalInputIntent()
       return
+    }
+    // Why: a real keystroke into the terminal is the unambiguous "user is
+    // here" signal that dismisses the bell (ghostty "show until interact").
+    // Guarded by the replay and codex-stale checks above, plus the
+    // ESC-prefixed protocol-reply filter below, so synthetic xterm auto-replies
+    // never count as interaction.
+    if (shouldClearUnreadForTerminalInput(data)) {
+      deps.clearTerminalTabUnread(deps.tabId)
+      deps.clearWorktreeUnread(deps.worktreeId)
     }
     const intent = pendingTerminalInputIntent
     // Why: real xterm can deliver the terminal byte even when our DOM keydown

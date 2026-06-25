@@ -107,7 +107,6 @@ globalThis.window = { api: mockApi }
 import { createTestStore, makeOpenFile, makeTabGroup, makeUnifiedTab } from './store-test-helpers'
 
 const WT = 'repo1::/tmp/feature'
-
 describe('TabsSlice', () => {
   let store: ReturnType<typeof createTestStore>
 

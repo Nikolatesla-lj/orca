@@ -370,7 +370,12 @@ function collapseGroupLayout(
 }
 
 function toVisibleTabType(contentType: TabContentType): WorkspaceVisibleTabType {
-  if (contentType === 'browser' || contentType === 'terminal' || contentType === 'simulator') {
+  if (
+    contentType === 'browser' ||
+    contentType === 'terminal' ||
+    contentType === 'simulator' ||
+    contentType === 'architecture'
+  ) {
     return contentType
   }
   return 'editor'

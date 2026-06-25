@@ -3987,6 +3987,7 @@ export class Store {
       id: randomUUID(),
       name: input.name.trim() || 'Untitled automation',
       prompt: input.prompt,
+      target: input.target,
       precheck: normalizeAutomationPrecheck(input.precheck),
       agentId: input.agentId,
       runContext: input.runContext ?? contexts.runContext,
@@ -4118,6 +4119,7 @@ export class Store {
       sessionKind: 'terminal',
       chatSessionId: null,
       terminalSessionId: null,
+      pipelineRunId: null,
       outputSnapshot: null,
       precheckResult: null,
       usage: null,
@@ -4154,6 +4156,9 @@ export class Store {
         normalizeAutomationRunWorkspaceDisplayName(current.workspaceDisplayName ?? null) ??
         this.getAutomationRunWorkspaceDisplayName(workspaceId),
       terminalSessionId: result.terminalSessionId ?? current.terminalSessionId,
+      pipelineRunId: Object.hasOwn(result, 'pipelineRunId')
+        ? (result.pipelineRunId ?? null)
+        : (current.pipelineRunId ?? null),
       outputSnapshot: Object.hasOwn(result, 'outputSnapshot')
         ? normalizeAutomationRunOutputSnapshot(result.outputSnapshot)
         : normalizeAutomationRunOutputSnapshot(current.outputSnapshot),

@@ -49,6 +49,7 @@ import { registerCodexAccountHandlers } from './codex-accounts'
 import { registerAgentHookHandlers } from './agent-hooks'
 import { registerAgentTrustHandlers } from './agent-trust'
 import { registerClaudeAccountHandlers } from './claude-accounts'
+import { registerArchitectureHandlers } from './architecture'
 import { registerUpdaterHandlers } from '../window/attach-main-window-services'
 import {
   registerClipboardHandlers,
@@ -146,6 +147,7 @@ export function registerCoreHandlers(
   }
   registerTelemetryHandlers(store)
   registerBrowserHandlers()
+  registerArchitectureHandlers()
   registerShellHandlers()
   registerPetHandlers()
   registerSessionHandlers(store)

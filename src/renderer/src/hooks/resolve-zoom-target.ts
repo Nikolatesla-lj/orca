@@ -12,7 +12,7 @@ export function resolveZoomTarget(args: {
     | 'space'
     | 'skills'
     | 'mobile'
-  activeTabType: 'terminal' | 'editor' | 'browser' | 'simulator'
+  activeTabType: 'terminal' | 'editor' | 'browser' | 'simulator' | 'architecture'
   activeBrowserPageId?: string | null
   activeElement: unknown
 }): 'terminal' | 'editor' | 'browser' | 'simulator' | 'ui' {

@@ -20,6 +20,7 @@ const {
   registerKeybindingHandlersMock,
   registerTelemetryHandlersMock,
   registerDiagnosticsHandlersMock,
+  registerArchitectureHandlersMock,
   registerShellHandlersMock,
   registerPetHandlersMock,
   registerSessionHandlersMock,
@@ -71,6 +72,7 @@ const {
   registerKeybindingHandlersMock: vi.fn(),
   registerTelemetryHandlersMock: vi.fn(),
   registerDiagnosticsHandlersMock: vi.fn(),
+  registerArchitectureHandlersMock: vi.fn(),
   registerShellHandlersMock: vi.fn(),
   registerPetHandlersMock: vi.fn(),
   registerSessionHandlersMock: vi.fn(),
@@ -198,6 +200,10 @@ vi.mock('./diagnostics', () => ({
   registerDiagnosticsHandlers: registerDiagnosticsHandlersMock
 }))
 
+vi.mock('./architecture', () => ({
+  registerArchitectureHandlers: registerArchitectureHandlersMock
+}))
+
 vi.mock('./shell', () => ({
   registerShellHandlers: registerShellHandlersMock
 }))
@@ -315,6 +321,7 @@ describe('registerCoreHandlers', () => {
     registerKeybindingHandlersMock.mockReset()
     registerTelemetryHandlersMock.mockReset()
     registerDiagnosticsHandlersMock.mockReset()
+    registerArchitectureHandlersMock.mockReset()
     registerShellHandlersMock.mockReset()
     registerPetHandlersMock.mockReset()
     registerSessionHandlersMock.mockReset()
@@ -408,6 +415,7 @@ describe('registerCoreHandlers', () => {
     expect(registerWorkspaceSpaceHandlersMock).toHaveBeenCalledWith(store)
     expect(registerWorkspacePortHandlersMock).toHaveBeenCalledWith(store)
     expect(registerTelemetryHandlersMock).toHaveBeenCalledWith(store)
+    expect(registerArchitectureHandlersMock).toHaveBeenCalled()
     expect(registerSessionHandlersMock).toHaveBeenCalledWith(store)
     expect(registerUIHandlersMock).toHaveBeenCalledWith(store)
     expect(registerEmulatorFrameStreamHandlersMock).toHaveBeenCalled()

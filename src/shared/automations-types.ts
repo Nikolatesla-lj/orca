@@ -75,10 +75,22 @@ export type AutomationPrecheckResult = {
   completedAt: number
 }
 
+export type AutomationTarget =
+  | {
+      type: 'prompt'
+      prompt: string
+    }
+  | {
+      type: 'pipeline'
+      pipelineTemplateId: string
+      pipelineInput: unknown
+    }
+
 export type Automation = {
   id: string
   name: string
   prompt: string
+  target?: AutomationTarget
   precheck: AutomationPrecheck | null
   agentId: TuiAgent
   /** Why: runContext carries the logical project + host setup identity for
@@ -128,6 +140,7 @@ export type AutomationRun = {
   sessionKind: 'terminal'
   chatSessionId: string | null
   terminalSessionId: string | null
+  pipelineRunId?: string | null
   outputSnapshot: AutomationRunOutputSnapshot | null
   precheckResult: AutomationPrecheckResult | null
   usage: AutomationRunUsage | null
@@ -140,6 +153,7 @@ export type AutomationRun = {
 export type AutomationCreateInput = {
   name: string
   prompt: string
+  target?: AutomationTarget
   precheck?: AutomationPrecheck | null
   agentId: TuiAgent
   runContext?: WorkspaceRunContext | null
@@ -163,6 +177,7 @@ export type AutomationUpdateInput = Partial<
     Automation,
     | 'name'
     | 'prompt'
+    | 'target'
     | 'precheck'
     | 'agentId'
     | 'runContext'
@@ -192,6 +207,7 @@ export type AutomationDispatchResult = {
   workspaceId?: string | null
   workspaceDisplayName?: string | null
   terminalSessionId?: string | null
+  pipelineRunId?: string | null
   outputSnapshot?: AutomationRunOutputSnapshot | null
   precheckResult?: AutomationPrecheckResult | null
   usage?: AutomationRunUsage | null

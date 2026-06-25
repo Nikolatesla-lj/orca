@@ -134,6 +134,7 @@ function resetStore(): void {
     settings: { activeRuntimeEnvironmentId: null },
     tabsByWorktree: { 'wt-1': [terminalTab] },
     unifiedTabsByWorktree: { 'wt-1': [unifiedTab] },
+    worktreesByRepo: { repo: [{ id: 'wt-1', path: '/worktree' }] },
     activateTab: mocks.activateTab,
     closeBrowserTab: mocks.closeBrowserTab,
     closeEmptyGroup: mocks.closeEmptyGroup,

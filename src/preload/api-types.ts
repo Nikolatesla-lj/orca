@@ -393,6 +393,13 @@ import type {
   WorkspaceCleanupScanResult
 } from '../shared/workspace-cleanup'
 import type { KeybindingActionId, KeybindingFileSnapshot } from '../shared/keybindings'
+import type {
+  C4ModelData,
+  C4NodeData,
+  DriftReport,
+  ScryerToolCall,
+  ScryerToolResult
+} from '../shared/scryer/model-types'
 
 export type BrowserApi = {
   registerGuest: (args: {
@@ -749,6 +756,97 @@ export type AppApi = {
   /** Opens a native directory picker and authorizes the selected directory
    *  for Floating Workspace markdown file creation. */
   pickFloatingWorkspaceDirectory: () => Promise<string | null>
+}
+
+export type ArchitectureApi = {
+  readModel: (args: { projectPath: string; modelName?: string | null }) => Promise<C4ModelData>
+  readModelDocument: (args: { projectPath: string; modelName?: string | null }) => Promise<{
+    model: C4ModelData
+    revision: string
+  }>
+  writeModel: (args: {
+    projectPath: string
+    model: C4ModelData
+    modelName?: string | null
+  }) => Promise<void>
+  writeModelDocument: (args: {
+    projectPath: string
+    model: C4ModelData
+    modelName?: string | null
+    baseRevision?: string | null
+  }) => Promise<{ model: C4ModelData; revision: string }>
+  patchNodeData: (args: {
+    projectPath: string
+    nodeId: string
+    patch: Partial<C4NodeData>
+    modelName?: string | null
+    baseRevision?: string | null
+    baseNodeData?: C4NodeData | null
+  }) => Promise<{ model: C4ModelData; revision: string }>
+  listModels: (args: { projectPath: string }) => Promise<
+    {
+      name: string
+      fileName: string
+      path: string
+      isDefault: boolean
+      scope: 'project' | 'global'
+    }[]
+  >
+  createModel: (args: {
+    projectPath: string
+    modelName?: string | null
+    templateId?: string | null
+  }) => Promise<{ modelName: string; model: C4ModelData }>
+  saveModelAs: (args: {
+    projectPath: string
+    fromModelName?: string | null
+    toModelName: string
+  }) => Promise<{ modelName: string; model: C4ModelData }>
+  deleteModel: (args: { projectPath: string; modelName: string }) => Promise<void>
+  migrateGlobalModel: (args: {
+    projectPath: string
+    modelName: string
+  }) => Promise<{ modelName: string; model: C4ModelData }>
+  writeMcpConfig: (args: { projectPath: string }) => Promise<{
+    claudePath: string
+    codexPath: string
+  }>
+  listTemplates: () => Promise<{ id: string; name: string }[]>
+  prepareInitialModelPrompt: (args: {
+    projectPath: string
+    modelName: string
+  }) => Promise<{ prompt: string }>
+  prepareNodeFillPrompt: (args: {
+    projectPath: string
+    modelName?: string | null
+    nodeId: string
+  }) => Promise<{ prompt: string }>
+  prepareAdvisorPrompt: (args: {
+    projectPath: string
+    modelName?: string | null
+  }) => Promise<{ prompt: string }>
+  checkDrift: (args: { projectPath: string }) => Promise<DriftReport>
+  markSynced: (args: { projectPath: string }) => Promise<void>
+  isSyncing: (args: { projectPath: string }) => Promise<boolean>
+  hasPreSyncSnapshot: (args: { projectPath: string }) => Promise<boolean>
+  beginSync: (args: {
+    projectPath: string
+    modelName?: string
+  }) => Promise<{ prompt: string; drift: DriftReport; snapshot: C4ModelData }>
+  cancelSync: (args: { projectPath: string }) => Promise<C4ModelData>
+  finishSync: (args: { projectPath: string }) => Promise<void>
+  callTool: (args: { projectPath: string; call: ScryerToolCall }) => Promise<ScryerToolResult>
+  executeScryerOperation: (args: {
+    projectPath: string
+    operationId: string
+    input?: unknown
+    requestId?: string
+    leaseToken?: string
+  }) => Promise<unknown>
+  watchModel: (args: { projectPath: string }) => Promise<void>
+  onModelChanged: (
+    callback: (event: { projectPath: string; fileName: string }) => void
+  ) => () => void
 }
 
 export type PreloadApi = {
@@ -1913,6 +2011,7 @@ export type PreloadApi = {
     read: (id: string, fileName: string, kind?: 'image' | 'bundle') => Promise<ArrayBuffer | null>
     delete: (id: string, fileName: string, kind?: 'image' | 'bundle') => Promise<void>
   }
+  architecture: ArchitectureApi
   browser: BrowserApi
   emulator: EmulatorApi
   hooks: {
