@@ -84,7 +84,7 @@ describe('orca scryer CLI handlers', () => {
     expect(output).toMatchObject({
       ok: true,
       operationId: 'scryer.node.update',
-      result: { updated: 1 }
+      result: { updatedCount: 1 }
     })
   })
 })

@@ -1,26 +1,26 @@
-import type { ScryerStateStore } from '../state-store'
 import type {
   ScryerModelValidateInput,
   ScryerModelValidateResult,
-  ScryerProjectRef
+  ScryerOperationExecutor
 } from '../types'
-import { ScryerEngineError } from '../pipeline'
-import { validateModelStructure } from '../validators'
+import { failure, success } from './helpers'
 
-export async function modelValidateOperation(
-  input: ScryerModelValidateInput,
-  project: ScryerProjectRef,
-  store: ScryerStateStore
-): Promise<ScryerModelValidateResult> {
-  const layer = input.layer ?? 'plan'
-  if (layer !== 'plan' && layer !== 'committed') {
-    throw new ScryerEngineError('invalid_input', "layer must be 'plan' or 'committed'", {
-      field: 'layer'
+export const modelValidateOperation: ScryerOperationExecutor<
+  ScryerModelValidateInput,
+  ScryerModelValidateResult
+> = ({ state, services }) => {
+  if (!state.committed) {
+    return failure('internal_error', 'Committed state was not loaded for validation', {
+      reason: 'policy_violation',
+      contractOperationId: 'scryer.model.validate'
     })
   }
-  const model =
-    layer === 'committed'
-      ? await store.readCommitted(project.projectRoot)
-      : await store.readPlanned(project.projectRoot)
-  return { layer, warnings: validateModelStructure(model) }
+  const findings = services.validators.validateModel(state.committed)
+  return success({
+    result: {
+      findings,
+      validationWarningCount: findings.filter((item) => item.severity === 'warning').length,
+      validationErrorCount: findings.filter((item) => item.severity === 'error').length
+    }
+  })
 }

@@ -1,146 +1,149 @@
 import type {
-  ScryGroup,
-  ScryModel,
-  ScryNode,
-  ScryResponsibility,
-  ScrySchemaProperty
-} from '../model'
-import type {
-  FoldedItem,
+  ScryerFoldTarget,
+  ScryerOperationExecutor,
   ScryerPlanFoldInput,
-  ScryerPlanFoldResult,
-  ScryerProjectRef
+  ScryerPlanFoldResult
 } from '../types'
 import { diffModels } from '../diff'
-import { ScryerEngineError } from '../pipeline'
-import type { ScryerStateStore } from '../state-store'
-import { validateModelStructure } from '../validators'
+import { failure, success } from './helpers'
 
-function findResponsibility(
-  model: ScryModel,
-  id: string
-): { ownerId: string; responsibility: ScryResponsibility } | null {
-  for (const node of model.nodes) {
-    const responsibility = node.responsibilities?.find((item) => item.id === id)
-    if (responsibility) {
-      return { ownerId: node.id, responsibility }
-    }
-  }
-  for (const group of model.groups) {
-    const responsibility = group.responsibilities?.find((item) => item.id === id)
-    if (responsibility) {
-      return { ownerId: group.id, responsibility }
-    }
-  }
-  return null
-}
-
-function responsibilityHosts(model: ScryModel): (ScryNode | ScryGroup)[] {
-  return [...model.nodes, ...model.groups]
-}
-
-function foldResponsibility(committed: ScryModel, planned: ScryModel, id: string): FoldedItem {
-  for (const host of responsibilityHosts(committed)) {
-    host.responsibilities = (host.responsibilities ?? []).filter((item) => item.id !== id)
-  }
-  const plannedResponsibility = findResponsibility(planned, id)
-  if (!plannedResponsibility) {
-    return { kind: 'responsibility', id }
-  }
-  const host = responsibilityHosts(committed).find(
-    (item) => item.id === plannedResponsibility.ownerId
-  )
-  if (!host) {
-    throw new ScryerEngineError(
-      'not_found',
-      `cannot fold responsibility '${id}': host '${plannedResponsibility.ownerId}' is not committed`,
-      { responsibility_id: id, owner_id: plannedResponsibility.ownerId }
-    )
-  }
-  host.responsibilities = [...(host.responsibilities ?? []), plannedResponsibility.responsibility]
-  return { kind: 'responsibility', id, ownerId: plannedResponsibility.ownerId }
-}
-
-function foldLink(committed: ScryModel, planned: ScryModel, id: string): FoldedItem {
-  committed.links = committed.links.filter((link) => link.id !== id)
-  const plannedLink = planned.links.find((link) => link.id === id)
-  if (plannedLink) {
-    committed.links.push(plannedLink)
-  }
-  return { kind: 'link', id }
-}
-
-function foldNode(committed: ScryModel, planned: ScryModel, id: string): FoldedItem {
-  committed.nodes = committed.nodes.filter((node) => node.id !== id)
-  const plannedNode = planned.nodes.find((node) => node.id === id)
-  if (plannedNode) {
-    committed.nodes.push(plannedNode)
-  }
-  return { kind: 'node', id }
-}
-
-function foldProperty(
-  committed: ScryModel,
-  planned: ScryModel,
-  ownerId: string,
-  label: string
-): FoldedItem {
-  const committedNode = committed.nodes.find((node) => node.id === ownerId)
-  if (!committedNode) {
-    throw new ScryerEngineError('not_found', `Node '${ownerId}' not found`, { node_id: ownerId })
-  }
-  committedNode.properties = (committedNode.properties ?? []).filter((item) => item.label !== label)
-  const plannedProperty = planned.nodes
-    .find((node) => node.id === ownerId)
-    ?.properties?.find((item) => item.label === label) as ScrySchemaProperty | undefined
-  if (plannedProperty) {
-    committedNode.properties = [...(committedNode.properties ?? []), plannedProperty]
-  }
-  return { kind: 'property', id: label, ownerId }
-}
-
-export async function planFoldOperation(
-  input: ScryerPlanFoldInput,
-  project: ScryerProjectRef,
-  store: ScryerStateStore
-): Promise<ScryerPlanFoldResult> {
-  if (!input || typeof input.node_id !== 'string' || !input.node_id) {
-    throw new ScryerEngineError('invalid_input', 'plan.fold requires node_id', {
-      field: 'node_id'
+function selectors(input: ScryerPlanFoldInput): ScryerFoldTarget[] {
+  const targets: ScryerFoldTarget[] = []
+  const hasSubselectors =
+    (input.responsibility_ids?.length ?? 0) > 0 ||
+    (input.property_labels?.length ?? 0) > 0 ||
+    (input.properties?.length ?? 0) > 0 ||
+    (input.link_ids?.length ?? 0) > 0 ||
+    (input.group_ids?.length ?? 0) > 0
+  if (input.node_id && (input.all === true || !hasSubselectors)) {
+    targets.push({
+      kind: 'node',
+      node_id: input.node_id,
+      includeDescendants: input.include_descendants
     })
   }
-  const planned = await store.readPlanned(project.projectRoot)
-  const committed = await store.readCommitted(project.projectRoot)
-  const folded: FoldedItem[] = []
+  for (const responsibility_id of input.responsibility_ids ?? []) {
+    targets.push({ kind: 'responsibility', responsibility_id })
+  }
+  for (const label of input.property_labels ?? []) {
+    if (input.node_id) {
+      targets.push({ kind: 'property', node_id: input.node_id, label })
+    }
+  }
+  for (const property of input.properties ?? []) {
+    targets.push({ kind: 'property', node_id: property.node_id, label: property.label })
+  }
+  for (const link_id of input.link_ids ?? []) {
+    targets.push({ kind: 'link', link_id })
+  }
+  for (const group_id of input.group_ids ?? []) {
+    targets.push({ kind: 'group', group_id })
+  }
+  return targets
+}
 
-  const responsibilityIds = input.responsibility_ids ?? []
-  const propertyLabels = input.property_labels ?? []
-  const linkIds = input.link_ids ?? []
-  if (
-    input.all === true ||
-    (responsibilityIds.length === 0 && propertyLabels.length === 0 && linkIds.length === 0)
-  ) {
-    folded.push(foldNode(committed, planned, input.node_id))
+export const planFoldOperation: ScryerOperationExecutor<
+  ScryerPlanFoldInput,
+  ScryerPlanFoldResult
+> = ({ input, state, services }) => {
+  if (!state.committed || !state.planned) {
+    return failure('internal_error', 'Committed and planned state were not loaded for plan.fold', {
+      reason: 'policy_violation',
+      contractOperationId: 'scryer.plan.fold'
+    })
   }
-  for (const id of responsibilityIds) {
-    folded.push(foldResponsibility(committed, planned, id))
+  const targets = selectors(input)
+  if (targets.length === 0) {
+    return failure('invalid_input', 'plan.fold requires at least one fold selector', undefined, {
+      fieldErrors: [
+        {
+          path: 'node_id',
+          message: 'provide a node, responsibility, link, group, or property selector'
+        }
+      ]
+    })
   }
-  for (const label of propertyLabels) {
-    folded.push(foldProperty(committed, planned, input.node_id, label))
-  }
-  for (const id of linkIds) {
-    folded.push(foldLink(committed, planned, id))
-  }
-
-  const warnings = validateModelStructure(committed)
-  await store.writeCommitted(project.projectRoot, committed)
-  await store.writeBaseline(project.projectRoot, committed)
-  await store.appendHistory(project.projectRoot, {
-    operationId: 'scryer.plan.fold',
-    folded,
-    node_id: input.node_id,
-    timestamp: Date.now()
+  const pending = diffModels(state.committed, state.planned)
+  const pendingKeys = new Set(
+    pending.map((change) =>
+      change.kind === 'property'
+        ? `property:${change.ownerId}:${change.id}`
+        : `${change.kind}:${change.id}`
+    )
+  )
+  const missingTargets = targets.filter((target) => {
+    switch (target.kind) {
+      case 'node':
+        return !pendingKeys.has(`node:${target.node_id}`)
+      case 'responsibility':
+        return !pendingKeys.has(`responsibility:${target.responsibility_id}`)
+      case 'property':
+        return !pendingKeys.has(`property:${target.node_id}:${target.label}`)
+      case 'link':
+        return !pendingKeys.has(`link:${target.link_id}`)
+      case 'group':
+        return !pendingKeys.has(`group:${target.group_id}`)
+    }
   })
-  const remaining = diffModels(committed, planned)
-  return { folded, remaining, warnings }
+  if (missingTargets.length > 0) {
+    return failure('validation_failed', 'Selected fold target is not pending work', {
+      findings: missingTargets.map((target) => ({
+        code: 'missing_reference',
+        severity: 'error',
+        message: `Selected ${target.kind} fold target is not pending`,
+        path: 'model',
+        details: {
+          entity: target.kind === 'responsibility' ? 'responsibility' : target.kind,
+          id:
+            target.kind === 'node'
+              ? target.node_id
+              : target.kind === 'responsibility'
+                ? target.responsibility_id
+                : target.kind === 'property'
+                  ? target.label
+                  : target.kind === 'link'
+                    ? target.link_id
+                    : target.group_id,
+          field: 'foldTarget'
+        }
+      }))
+    })
+  }
+  const foldedState = services.fold.foldTargets({
+    committed: state.committed,
+    planned: state.planned,
+    targets
+  })
+  const findings = services.validators.validateModel(foldedState.committed)
+  const remaining = diffModels(foldedState.committed, foldedState.planned)
+  return success({
+    result: {
+      folded: foldedState.folded,
+      remaining,
+      findings
+    },
+    changes: {
+      committed: foldedState.committed,
+      planned: foldedState.planned,
+      baseline: 'refresh',
+      historyEvents: [
+        {
+          operationId: 'scryer.plan.fold',
+          folded: foldedState.folded,
+          mode: input.mode ?? 'manual',
+          timestamp: services.clock.nowIso()
+        }
+      ]
+    },
+    meta: {
+      completionGate: {
+        complete:
+          remaining.length === 0 &&
+          findings.filter((finding) => finding.severity === 'error').length === 0,
+        pendingCount: remaining.length,
+        validationWarningCount: findings.filter((finding) => finding.severity === 'warning').length,
+        validationErrorCount: findings.filter((finding) => finding.severity === 'error').length
+      }
+    }
+  })
 }

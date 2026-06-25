@@ -1,4 +1,4 @@
-import type { ScryModel } from './model'
+import type { ScryGroup, ScryModel, ScrySchemaProperty } from './model'
 import type { PendingSummary } from './types'
 
 export type PendingChangeType =
@@ -58,6 +58,22 @@ function indexResponsibilities(
     }
   }
   return out
+}
+
+function indexProperties(
+  model: ScryModel
+): Map<string, { ownerId: string; property: ScrySchemaProperty }> {
+  const out = new Map<string, { ownerId: string; property: ScrySchemaProperty }>()
+  for (const node of model.nodes) {
+    for (const property of node.properties ?? []) {
+      out.set(`${node.id}:${property.label}`, { ownerId: node.id, property })
+    }
+  }
+  return out
+}
+
+function groupLabel(group: ScryGroup): string {
+  return group.name || group.id
 }
 
 export function diffModels(from: ScryModel, to: ScryModel): PendingChange[] {
@@ -138,6 +154,65 @@ export function diffModels(from: ScryModel, to: ScryModel): PendingChange[] {
     }
   }
 
+  const fromProperties = indexProperties(from)
+  const toProperties = indexProperties(to)
+  for (const [key, property] of toProperties) {
+    const previous = fromProperties.get(key)
+    if (!previous) {
+      changes.push({
+        kind: 'property',
+        id: property.property.label,
+        ownerId: property.ownerId,
+        label: property.property.label,
+        changes: [{ type: 'added' }]
+      })
+      continue
+    }
+    const propertyChanges: PendingChange['changes'] = []
+    reword(
+      propertyChanges,
+      'description',
+      previous.property.description,
+      property.property.description
+    )
+    if ((previous.property.vagrant ?? false) !== (property.property.vagrant ?? false)) {
+      reword(
+        propertyChanges,
+        'vagrant',
+        String(previous.property.vagrant),
+        String(property.property.vagrant)
+      )
+    }
+    if ((previous.property.stale ?? false) !== (property.property.stale ?? false)) {
+      reword(
+        propertyChanges,
+        'stale',
+        String(previous.property.stale),
+        String(property.property.stale)
+      )
+    }
+    if (propertyChanges.length > 0) {
+      changes.push({
+        kind: 'property',
+        id: property.property.label,
+        ownerId: property.ownerId,
+        label: property.property.label,
+        changes: propertyChanges
+      })
+    }
+  }
+  for (const [key, property] of fromProperties) {
+    if (!toProperties.has(key)) {
+      changes.push({
+        kind: 'property',
+        id: property.property.label,
+        ownerId: property.ownerId,
+        label: property.property.label,
+        changes: [{ type: 'deleted' }]
+      })
+    }
+  }
+
   const fromLinks = new Map(from.links.map((link) => [link.id, link]))
   const toLinks = new Map(to.links.map((link) => [link.id, link]))
   for (const [id, link] of toLinks) {
@@ -168,12 +243,40 @@ export function diffModels(from: ScryModel, to: ScryModel): PendingChange[] {
     }
   }
 
+  const fromGroups = new Map(from.groups.map((group) => [group.id, group]))
+  const toGroups = new Map(to.groups.map((group) => [group.id, group]))
+  for (const [id, group] of toGroups) {
+    const previous = fromGroups.get(id)
+    if (!previous) {
+      changes.push({ kind: 'group', id, label: groupLabel(group), changes: [{ type: 'added' }] })
+      continue
+    }
+    const groupChanges: PendingChange['changes'] = []
+    reword(groupChanges, 'name', previous.name, group.name)
+    reword(groupChanges, 'description', previous.description, group.description)
+    const beforeMembers = [...previous.memberIds].sort().join('\n')
+    const afterMembers = [...group.memberIds].sort().join('\n')
+    if (beforeMembers !== afterMembers || previous.parentGroupId !== group.parentGroupId) {
+      groupChanges.push({ type: 'membersChanged' })
+    }
+    if (groupChanges.length > 0) {
+      changes.push({ kind: 'group', id, label: groupLabel(group), changes: groupChanges })
+    }
+  }
+  for (const [id, group] of fromGroups) {
+    if (!toGroups.has(id)) {
+      changes.push({ kind: 'group', id, label: groupLabel(group), changes: [{ type: 'deleted' }] })
+    }
+  }
+
   return changes
 }
 
 export function summarizePending(changes: PendingChange[]): PendingSummary {
   const summary: PendingSummary = {
     total: 0,
+    byKind: {},
+    byChange: {},
     toImplement: 0,
     toReimplement: 0,
     toMove: 0,
@@ -181,8 +284,10 @@ export function summarizePending(changes: PendingChange[]): PendingSummary {
     toRepoint: 0
   }
   for (const change of changes) {
+    summary.byKind[change.kind] = (summary.byKind[change.kind] ?? 0) + 1
     for (const item of change.changes) {
       summary.total += 1
+      summary.byChange[item.type] = (summary.byChange[item.type] ?? 0) + 1
       switch (item.type) {
         case 'added':
           summary.toImplement += 1

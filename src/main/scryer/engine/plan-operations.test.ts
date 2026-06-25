@@ -8,8 +8,8 @@ import type { ScryerOperationContext, ScryerPlanPendingResult } from './types'
 function testContext(projectPath: string, requestId = 'req-plan'): ScryerOperationContext {
   return {
     requestId,
-    transport: 'test',
-    caller: 'test',
+    transport: 'cli',
+    caller: 'human',
     cwd: projectPath,
     projectRoot: projectPath
   }
@@ -144,7 +144,7 @@ describe('scryer plan operations', () => {
           { kind: 'link', id: 'link-web-api' }
         ],
         remaining: [expect.objectContaining({ kind: 'responsibility', id: 'resp-c' })],
-        warnings: []
+        findings: []
       }
     })
 

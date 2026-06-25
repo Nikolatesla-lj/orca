@@ -11,8 +11,8 @@ function testContext(
 ): ScryerOperationContext {
   return {
     requestId: 'req-lease',
-    transport: 'test',
-    caller: 'test',
+    transport: 'cli',
+    caller: 'human',
     cwd: projectPath,
     projectRoot: projectPath,
     ...overrides

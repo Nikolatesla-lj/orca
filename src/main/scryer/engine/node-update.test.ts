@@ -8,8 +8,8 @@ import type { ScryerOperationContext } from './types'
 function testContext(projectPath: string): ScryerOperationContext {
   return {
     requestId: 'req-node-update',
-    transport: 'test',
-    caller: 'test',
+    transport: 'cli',
+    caller: 'human',
     cwd: projectPath,
     projectRoot: projectPath
   }
@@ -55,7 +55,7 @@ describe('scryer.node.update', () => {
       operationId: 'scryer.node.update',
       requestId: 'req-node-update',
       result: {
-        updated: 1,
+        updatedCount: 1,
         pendingSummary: { total: 2 }
       }
     })
@@ -68,12 +68,8 @@ describe('scryer.node.update', () => {
     expect(planned.nodes[0].responsibilities).toEqual([
       { id: 'resp-1', statement: 'serves user requests' }
     ])
-    expect(planned.sourceMap).toEqual({
-      api: [{ pattern: 'src/api.ts', line: 10, endLine: 20 }]
-    })
-    expect(planned.boundaries).toEqual({
-      api: [{ pattern: 'src/api/**/*.ts', comment: 'API container sources' }]
-    })
+    expect(planned.sourceMap).toEqual({})
+    expect(planned.boundaries).toEqual({})
   })
 
   it('returns lock_busy when another writer owns the model lock', async () => {

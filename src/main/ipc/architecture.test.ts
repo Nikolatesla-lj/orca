@@ -171,7 +171,7 @@ describe('registerArchitectureHandlers', () => {
       ok: true,
       operationId: 'scryer.node.update',
       requestId: 'ipc-test',
-      result: { updated: 1 }
+      result: { updatedCount: 1 }
     })
     expect(send).toHaveBeenCalledWith('architecture:modelChanged', {
       projectPath,

@@ -1,24 +1,20 @@
-import type { ScryerStateStore } from '../state-store'
-import type { ScryerModelReadInput, ScryerModelReadResult, ScryerProjectRef } from '../types'
-import { ScryerEngineError } from '../pipeline'
+import type { ScryerModelReadInput, ScryerModelReadResult, ScryerOperationExecutor } from '../types'
+import { failure, success } from './helpers'
 
-export async function modelReadOperation(
-  input: ScryerModelReadInput,
-  project: ScryerProjectRef,
-  store: ScryerStateStore
-): Promise<ScryerModelReadResult> {
+export const modelReadOperation: ScryerOperationExecutor<
+  ScryerModelReadInput,
+  ScryerModelReadResult
+> = ({ input, state }) => {
   const layer = input.layer ?? 'plan'
-  if (layer !== 'plan' && layer !== 'committed') {
-    throw new ScryerEngineError('invalid_input', "layer must be 'plan' or 'committed'", {
-      field: 'layer'
+  const model = layer === 'committed' ? state.committed : state.planned
+  if (!model) {
+    return failure('internal_error', `Declared ${layer} state was not loaded`, {
+      reason: 'policy_violation',
+      contractOperationId: 'scryer.model.read'
     })
   }
-  const model =
-    layer === 'committed'
-      ? await store.readCommitted(project.projectRoot)
-      : await store.readPlanned(project.projectRoot)
-  if (layer === 'committed') {
-    await store.writeBaseline(project.projectRoot, model)
-  }
-  return { layer, model }
+  return success({
+    result: { layer, model, ...(layer === 'committed' ? { baselineRefreshed: true } : {}) },
+    changes: layer === 'committed' ? { baseline: 'refresh' } : undefined
+  })
 }

@@ -9,6 +9,8 @@ export type ScryerPaths = {
   historyPath: string
   baselinePath: string
   leasePath: string
+  syncPath: string
+  anchorBaselinePath: string
   anchorsPath: string
   buildEdgesPath: string
 }
@@ -25,6 +27,8 @@ export function scryerPaths(projectRoot: string): ScryerPaths {
     historyPath: join(scryerDir, 'history.jsonl'),
     baselinePath: join(scryerDir, 'model.baseline.scry'),
     leasePath: join(scryerDir, '.model-edit-lease.json'),
+    syncPath: join(scryerDir, '.sync.json'),
+    anchorBaselinePath: join(scryerDir, '.anchors.baseline.json'),
     anchorsPath: join(scryerDir, '.anchors.json'),
     buildEdgesPath: join(scryerDir, '.build_edges.json')
   }

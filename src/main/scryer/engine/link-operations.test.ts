@@ -8,8 +8,8 @@ import type { ScryerOperationContext } from './types'
 function testContext(projectPath: string, requestId = 'req-link'): ScryerOperationContext {
   return {
     requestId,
-    transport: 'test',
-    caller: 'test',
+    transport: 'cli',
+    caller: 'human',
     cwd: projectPath,
     projectRoot: projectPath
   }
@@ -50,7 +50,7 @@ describe('scryer link operations', () => {
       ok: true,
       operationId: 'scryer.link.add',
       result: {
-        added: ['link-web-api'],
+        addedIds: ['link-web-api'],
         pendingSummary: { total: 1 }
       }
     })
@@ -121,8 +121,8 @@ describe('scryer link operations', () => {
       operationId: 'scryer.link.delete',
       requestId: 'req-link-delete',
       result: {
-        deleted: 1,
-        missing: ['missing-link'],
+        deletedCount: 1,
+        missingIds: ['missing-link'],
         pendingSummary: { total: 1, toDelete: 1 }
       }
     })

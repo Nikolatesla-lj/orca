@@ -1,14 +1,31 @@
-import type { ScryerStateStore } from '../state-store'
-import type { ScryerPlanPendingInput, ScryerPlanPendingResult, ScryerProjectRef } from '../types'
+import type {
+  ScryerOperationExecutor,
+  ScryerPlanPendingInput,
+  ScryerPlanPendingResult
+} from '../types'
 import { diffModels, summarizePending } from '../diff'
+import { failure, success } from './helpers'
 
-export async function planPendingOperation(
-  _input: ScryerPlanPendingInput,
-  project: ScryerProjectRef,
-  store: ScryerStateStore
-): Promise<ScryerPlanPendingResult> {
-  const committed = await store.readCommitted(project.projectRoot)
-  const planned = await store.readPlanned(project.projectRoot)
-  const changes = diffModels(committed, planned)
-  return { changes, summary: summarizePending(changes) }
+export const planPendingOperation: ScryerOperationExecutor<
+  ScryerPlanPendingInput,
+  ScryerPlanPendingResult
+> = ({ state }) => {
+  if (!state.committed || !state.planned) {
+    return failure(
+      'internal_error',
+      'Committed and planned state were not loaded for plan.pending',
+      {
+        reason: 'policy_violation',
+        contractOperationId: 'scryer.plan.pending'
+      }
+    )
+  }
+  const changes = diffModels(state.committed, state.planned)
+  return success({
+    result: {
+      clean: changes.length === 0,
+      changes,
+      summary: summarizePending(changes)
+    }
+  })
 }

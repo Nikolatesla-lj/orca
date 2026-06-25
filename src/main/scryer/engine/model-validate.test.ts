@@ -8,8 +8,8 @@ import type { ScryerOperationContext } from './types'
 function testContext(projectPath: string): ScryerOperationContext {
   return {
     requestId: 'req-validate',
-    transport: 'test',
-    caller: 'test',
+    transport: 'cli',
+    caller: 'human',
     cwd: projectPath,
     projectRoot: projectPath
   }
@@ -47,11 +47,12 @@ describe('scryer.model.validate', () => {
       operationId: 'scryer.model.validate',
       requestId: 'req-validate',
       result: {
-        layer: 'plan',
-        warnings: expect.arrayContaining([
-          expect.objectContaining({ code: 'invalid_parent' }),
-          expect.objectContaining({ code: 'unknown_link_endpoint' })
-        ])
+        findings: expect.arrayContaining([
+          expect.objectContaining({ code: 'invalid_hierarchy', path: 'node:component.parentId' }),
+          expect.objectContaining({ code: 'missing_reference', path: 'link:link-1.dst' })
+        ]),
+        validationWarningCount: 2,
+        validationErrorCount: 0
       }
     })
   })

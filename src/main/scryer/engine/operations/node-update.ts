@@ -1,9 +1,11 @@
-import type { ScryKind } from '../model'
-import type { ScryerStateStore } from '../state-store'
-import type { ScryerNodeUpdateInput, ScryerNodeUpdateResult, ScryerProjectRef } from '../types'
+import type { ScryKind, ScryModel } from '../model'
+import type {
+  ScryerNodeUpdateInput,
+  ScryerNodeUpdateResult,
+  ScryerOperationExecutor
+} from '../types'
 import { diffModels, summarizePending } from '../diff'
-import { ScryerEngineError } from '../pipeline'
-import { validateModelStructure } from '../validators'
+import { failure, success } from './helpers'
 
 function isScryKind(value: string): value is ScryKind {
   return (
@@ -15,36 +17,37 @@ function isScryKind(value: string): value is ScryKind {
   )
 }
 
-export async function nodeUpdateOperation(
-  input: ScryerNodeUpdateInput,
-  project: ScryerProjectRef,
-  store: ScryerStateStore
-): Promise<ScryerNodeUpdateResult> {
-  if (!Array.isArray(input.nodes) || input.nodes.length === 0) {
-    throw new ScryerEngineError('invalid_input', 'node.update requires at least one node patch', {
-      field: 'nodes'
+function cloneModel(model: ScryModel): ScryModel {
+  return JSON.parse(JSON.stringify(model)) as ScryModel
+}
+
+export const nodeUpdateOperation: ScryerOperationExecutor<
+  ScryerNodeUpdateInput,
+  ScryerNodeUpdateResult
+> = ({ input, state, services }) => {
+  if (!state.planned) {
+    return failure('internal_error', 'Planned state was not loaded for node.update', {
+      reason: 'policy_violation',
+      contractOperationId: 'scryer.node.update'
     })
   }
-  const committed = await store.readCommitted(project.projectRoot)
-  let planned = await store.readPlannedForEdit(project.projectRoot)
-  let updated = 0
+  const committed = state.committed ?? state.planned
+  const planned = cloneModel(state.planned)
+  let updatedCount = 0
   for (const patch of input.nodes) {
-    if (!patch || typeof patch.node_id !== 'string' || !patch.node_id) {
-      throw new ScryerEngineError('invalid_input', 'each node patch requires node_id', {
-        field: 'nodes.node_id'
-      })
-    }
     const index = planned.nodes.findIndex((node) => node.id === patch.node_id)
     if (index === -1) {
-      throw new ScryerEngineError('not_found', `Node '${patch.node_id}' not found`, {
-        node_id: patch.node_id
+      return failure('not_found', `Node '${patch.node_id}' not found`, {
+        entity: 'node',
+        id: patch.node_id,
+        field: 'node_id'
       })
     }
     const node = planned.nodes[index]!
     if (patch.kind !== undefined) {
       if (!isScryKind(patch.kind)) {
-        throw new ScryerEngineError('invalid_input', `invalid node kind '${patch.kind}'`, {
-          field: 'nodes.kind'
+        return failure('invalid_input', `invalid node kind '${patch.kind}'`, undefined, {
+          fieldErrors: [{ path: 'nodes.kind', message: 'invalid Scryer node kind' }]
         })
       }
       node.kind = patch.kind
@@ -73,14 +76,15 @@ export async function nodeUpdateOperation(
     if (patch.parent_id !== undefined) {
       node.parentId = patch.parent_id ?? undefined
     }
-    updated += 1
+    updatedCount += 1
   }
-  planned = { ...planned, nodes: [...planned.nodes] }
-  const warnings = validateModelStructure(planned)
-  await store.writePlanned(project.projectRoot, planned)
-  return {
-    updated,
-    warnings,
-    pendingSummary: summarizePending(diffModels(committed, planned))
-  }
+  const findings = services.validators.validateModel(planned)
+  return success({
+    result: {
+      updatedCount,
+      findings,
+      pendingSummary: summarizePending(diffModels(committed, planned))
+    },
+    changes: { planned }
+  })
 }
