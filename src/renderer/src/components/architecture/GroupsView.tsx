@@ -763,7 +763,11 @@ function MemberChip({
         type="button"
         className="cursor-pointer px-1 text-xs text-[var(--text-muted)] opacity-0 transition-opacity hover:text-red-500 group-hover/member:opacity-100"
         title="Remove from group"
-        onClick={onRemove}
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation()
+          onRemove()
+        }}
         data-testid="architecture-group-member-remove"
       >
         x

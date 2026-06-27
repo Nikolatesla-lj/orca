@@ -198,13 +198,33 @@ export const createArchitectureSlice: StateCreator<AppState, [], [], Architectur
         : (tabs[0]?.id ?? null)
     }
 
-    const activeWorktreeId = get().activeWorktreeId
+    const current = get()
+    const activeWorktreeId = current.activeWorktreeId
+    const activeTabTypeByWorktree = { ...current.activeTabTypeByWorktree }
+    for (const [worktreeId, tabType] of Object.entries(activeTabTypeByWorktree)) {
+      if (tabType === 'architecture' && !activeArchitectureTabIdByWorktree[worktreeId]) {
+        delete activeTabTypeByWorktree[worktreeId]
+      }
+    }
+    for (const [worktreeId, tabId] of Object.entries(activeArchitectureTabIdByWorktree)) {
+      if (tabId && session.activeTabTypeByWorktree?.[worktreeId] === 'architecture') {
+        activeTabTypeByWorktree[worktreeId] = 'architecture'
+      }
+    }
+    const activeArchitectureTabId = activeWorktreeId
+      ? (activeArchitectureTabIdByWorktree[activeWorktreeId] ?? null)
+      : null
+    const shouldActivateArchitecture =
+      Boolean(activeArchitectureTabId) &&
+      activeWorktreeId !== null &&
+      activeTabTypeByWorktree[activeWorktreeId] === 'architecture'
+
     set({
       architectureTabsByWorktree,
-      activeArchitectureTabId: activeWorktreeId
-        ? (activeArchitectureTabIdByWorktree[activeWorktreeId] ?? null)
-        : null,
-      activeArchitectureTabIdByWorktree
+      activeArchitectureTabId,
+      activeArchitectureTabIdByWorktree,
+      activeTabTypeByWorktree,
+      ...(shouldActivateArchitecture ? { activeTabType: 'architecture' as const } : {})
     })
   }
 })
