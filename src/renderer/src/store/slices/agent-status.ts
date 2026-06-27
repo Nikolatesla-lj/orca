@@ -104,6 +104,10 @@ export type AgentStatusSlice = {
    *  disappearance. Consumed by the retention sync as a one-shot suppressor. */
   retentionSuppressedPaneKeys: Record<string, true>
 
+  /** Terminal tabs explicitly closed in this renderer session. Used only to
+   *  drop late in-flight IPC statuses and stale main-cache replays. */
+  recentlyClosedAgentStatusTabIds: Record<string, true>
+
   /** Update or insert an agent status entry from a status payload. */
   setAgentStatus: (
     paneKey: string,
@@ -225,6 +229,16 @@ function getLeafIdFromPaneKey(paneKey: string): string | null {
   }
   const leafId = paneKey.slice(separator + 1)
   return leafId.length > 0 ? leafId : null
+}
+
+function isRecentlyClosedAgentStatusTab(
+  closedTabs: Record<string, true>,
+  tabId: string | null
+): boolean {
+  if (!tabId) {
+    return false
+  }
+  return closedTabs[tabId] === true
 }
 
 function findAgentPaneWorktreeId(state: AppState, paneKey: string): string | null {
@@ -770,6 +784,7 @@ export const createAgentStatusSlice: StateCreator<AppState, [], [], AgentStatusS
     sleepingAgentSessionsByPaneKey: {},
     agentLaunchConfigByPaneKey: {},
     retentionSuppressedPaneKeys: {},
+    recentlyClosedAgentStatusTabIds: {},
 
     setRuntimeAgentOrchestrationByPaneKey: (entries) => {
       set((s) => {
@@ -915,6 +930,16 @@ export const createAgentStatusSlice: StateCreator<AppState, [], [], AgentStatusS
 
     setAgentStatus: (paneKey, payload, terminalTitle, timing, routing, metadata) => {
       const updatedAt = timing?.updatedAt ?? Date.now()
+      if (
+        // Why: a closed terminal tab is no longer a valid destination for hook
+        // replays or late status events, even if main still receives them.
+        isRecentlyClosedAgentStatusTab(
+          get().recentlyClosedAgentStatusTabIds,
+          getTabIdFromPaneKey(paneKey)
+        )
+      ) {
+        return
+      }
       let completionRefreshWorktreeId: string | null = null
       let suppressedInheritedTerminalStatus = false
       set((s) => {
@@ -1142,6 +1167,16 @@ export const createAgentStatusSlice: StateCreator<AppState, [], [], AgentStatusS
           nextRetentionSuppressedPaneKeys = { ...s.retentionSuppressedPaneKeys }
           delete nextRetentionSuppressedPaneKeys[paneKey]
         }
+        // Why: pane keys are reused by the same terminal pane across turns.
+        // Once a fresh live hook row arrives, any retained snapshot for that
+        // pane is stale and must not render beside the live row in the sidebar.
+        const hasRetainedSnapshot = paneKey in s.retainedAgentsByPaneKey
+        const nextRetainedAgents = hasRetainedSnapshot
+          ? { ...s.retainedAgentsByPaneKey }
+          : s.retainedAgentsByPaneKey
+        if (hasRetainedSnapshot) {
+          delete nextRetainedAgents[paneKey]
+        }
         const migrationUnsupported = pruneMigrationUnsupportedEntries(
           s.migrationUnsupportedByPtyId,
           (entry) => entry.paneKey === paneKey
@@ -1201,6 +1236,7 @@ export const createAgentStatusSlice: StateCreator<AppState, [], [], AgentStatusS
         }
         return {
           agentStatusByPaneKey: { ...s.agentStatusByPaneKey, [paneKey]: entry },
+          retainedAgentsByPaneKey: nextRetainedAgents,
           sleepingAgentSessionsByPaneKey: nextSleepingAgentSessions,
           agentLaunchConfigByPaneKey: nextLaunchConfigs,
           migrationUnsupportedByPtyId: migrationUnsupported.next,
@@ -1528,6 +1564,11 @@ export const createAgentStatusSlice: StateCreator<AppState, [], [], AgentStatusS
             delete nextAck[k]
           }
         }
+        const nextClosedTabs: Record<string, true> = {
+          ...s.recentlyClosedAgentStatusTabIds,
+          [tabIdPrefix]: true
+        }
+
         if (
           liveKeys.length === 0 &&
           launchConfigKeys.length === 0 &&
@@ -1535,9 +1576,12 @@ export const createAgentStatusSlice: StateCreator<AppState, [], [], AgentStatusS
           !migrationUnsupported.changed
         ) {
           if (nextAck !== s.acknowledgedAgentsByPaneKey) {
-            return { acknowledgedAgentsByPaneKey: nextAck }
+            return {
+              acknowledgedAgentsByPaneKey: nextAck,
+              recentlyClosedAgentStatusTabIds: nextClosedTabs
+            }
           }
-          return s
+          return { recentlyClosedAgentStatusTabIds: nextClosedTabs }
         }
         hadLive = liveKeys.length > 0
 
@@ -1589,6 +1633,7 @@ export const createAgentStatusSlice: StateCreator<AppState, [], [], AgentStatusS
           retainedAgentsByPaneKey: nextRetained,
           migrationUnsupportedByPtyId: migrationUnsupported.next,
           retentionSuppressedPaneKeys: nextRetentionSuppressedPaneKeys,
+          recentlyClosedAgentStatusTabIds: nextClosedTabs,
           ...(nextAck !== s.acknowledgedAgentsByPaneKey
             ? { acknowledgedAgentsByPaneKey: nextAck }
             : {}),
@@ -1602,6 +1647,9 @@ export const createAgentStatusSlice: StateCreator<AppState, [], [], AgentStatusS
       })
       if (hadLive) {
         queueMicrotask(() => freshness.schedule())
+      }
+      if (typeof window !== 'undefined') {
+        window.api?.agentStatus?.dropByTabPrefix?.(tabIdPrefix)
       }
     },
 

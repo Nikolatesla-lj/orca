@@ -47,6 +47,9 @@ const EMPTY_UNIFIED_TABS: readonly Tab[] = []
 const EMPTY_BROWSER_TABS: readonly BrowserTabState[] = []
 const EMPTY_TERMINAL_TABS: readonly TerminalTab[] = []
 const EMPTY_ARCHITECTURE_TABS: readonly ArchitectureWorkspace[] = []
+const EMPTY_TERMINAL_LAYOUTS_BY_TAB_ID: NonNullable<
+  ReturnType<typeof useAppStore.getState>['terminalLayoutsByTabId']
+> = {}
 
 type TerminalTabItem = TerminalTab & { unifiedTabId: string }
 
@@ -72,6 +75,7 @@ export function useTabGroupWorkspaceModel({
       architectureTabs: state.architectureTabsByWorktree?.[worktreeId] ?? EMPTY_ARCHITECTURE_TABS,
       expandedPaneByTabId: state.expandedPaneByTabId,
       worktreesByRepo: state.worktreesByRepo,
+      terminalLayoutsByTabId: state.terminalLayoutsByTabId ?? EMPTY_TERMINAL_LAYOUTS_BY_TAB_ID,
       generatedTabTitlesEnabled: state.settings?.tabAutoGenerateTitle === true,
       mobileEmulatorEnabled: state.settings?.mobileEmulatorEnabled !== false
     }))
@@ -421,11 +425,21 @@ export function useTabGroupWorkspaceModel({
       }
       setActiveTab(terminalId)
       setActiveTabType('terminal')
-      // Why: clicking the tab button gives the browser focus to the tab strip
-      // after pointerdown; explicitly return it to xterm on the next frames.
-      focusTerminalTabSurface(terminalId)
+      const activeLeafId = worktreeState.terminalLayoutsByTabId[terminalId]?.activeLeafId ?? null
+      // Why: split terminal tab activation must restore xterm focus to the
+      // store-active leaf so keyboard input cannot drift to a sibling pane.
+      focusTerminalTabSurface(terminalId, activeLeafId)
     },
-    [activateTab, focusGroup, groupId, groupTabs, setActiveTab, setActiveTabType, worktreeId]
+    [
+      activateTab,
+      focusGroup,
+      groupId,
+      groupTabs,
+      setActiveTab,
+      setActiveTabType,
+      worktreeState.terminalLayoutsByTabId,
+      worktreeId
+    ]
   )
 
   const toggleTerminalPaneExpand = useCallback(

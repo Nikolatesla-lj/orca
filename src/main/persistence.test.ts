@@ -478,6 +478,9 @@ describe('Store', () => {
     expect(settings.editorAutoSaveDelayMs).toBe(1000)
     expect(settings.terminalFontSize).toBe(14)
     expect(settings.terminalFontWeight).toBe(500)
+    expect(settings.terminalScrollSensitivity).toBe(1.15)
+    expect(settings.terminalFastScrollSensitivity).toBe(5)
+    expect(settings.terminalTuiScrollSensitivity).toBe(3)
     expect(settings.terminalUseSeparateLightTheme).toBe(true)
     expect(settings.rightSidebarOpenByDefault).toBe(true)
     expect(settings.showTasksButton).toBe(true)
@@ -1729,11 +1732,15 @@ describe('Store', () => {
       dtstart: new Date('2026-05-13T00:00:00Z').getTime()
     })
     const run = store.createAutomationRun(automation, new Date('2026-05-13T09:00:00Z').getTime())
+    const paneKey = 'tab-1:11111111-1111-4111-8111-111111111111'
 
     store.updateAutomationRun({
       runId: run.id,
-      status: 'completed',
+      status: 'dispatched',
       workspaceId: 'wt1',
+      terminalSessionId: 'tab-1',
+      terminalPaneKey: paneKey,
+      terminalPtyId: 'pty-run',
       outputSnapshot: {
         format: 'plain_text',
         content: 'Run finished',
@@ -1746,14 +1753,19 @@ describe('Store', () => {
       runId: run.id,
       status: 'completed',
       workspaceId: 'wt1',
-      terminalSessionId: 'tab-1',
       usage: null,
       error: null
     })
 
-    expect(store.listAutomationRuns(automation.id)[0].outputSnapshot).toMatchObject({
+    const persisted = store.listAutomationRuns(automation.id)[0]
+    expect(persisted.outputSnapshot).toMatchObject({
       content: 'Run finished',
       truncated: false
+    })
+    expect(persisted).toMatchObject({
+      terminalSessionId: 'tab-1',
+      terminalPaneKey: paneKey,
+      terminalPtyId: 'pty-run'
     })
   })
 

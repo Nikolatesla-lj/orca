@@ -166,7 +166,7 @@ export function registerCoreHandlers(
   registerAiVaultHandlers({
     getAdditionalCodexHomePaths: lifecycleOptions.getAdditionalAiVaultCodexHomePaths
   })
-  registerClipboardHandlers()
+  registerClipboardHandlers(store)
   registerUpdaterHandlers(store)
   registerSpeechHandlers(store)
 }

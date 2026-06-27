@@ -99,8 +99,10 @@ import {
 } from '../../../../src/terminal/terminal-accessory-layout'
 import {
   clearTerminalLiveInputFocusTimer,
+  defaultTerminalLiveInputHandles,
   getTerminalLiveSpecialKeyBytes,
   isTerminalLiveInputWithinByteLimit,
+  pruneTerminalLiveInputHandles,
   scheduleTerminalLiveInputFocus
 } from '../../../../src/terminal/terminal-live-input'
 import {
@@ -163,6 +165,11 @@ import {
 import { useMobileImageAttachment } from '../../../../src/session/use-mobile-image-attachment'
 import { classifyMobileArtifact } from '../../../../src/session/mobile-artifact-kind'
 import { useLiveWorktreeName } from '../../../../src/session/use-live-worktree-name'
+import {
+  acceptSessionSnapshot,
+  applyClosedTabTombstones,
+  type AppliedSnapshotMarker
+} from '../../../../src/session/session-tab-snapshot-gate'
 import {
   buildMarkdownDiskFallbackDoc,
   shouldReadMarkdownFromDiskAfterReadTabFailure
@@ -908,6 +915,16 @@ export default function SessionScreen() {
   const terminalsRef = useRef<Terminal[]>([])
   const [sessionTabs, setSessionTabs] = useState<MobileSessionTab[]>([])
   const sessionTabsRef = useRef<MobileSessionTab[]>([])
+  // Why: subscription, 2s polling, and post-mutation refetch race to apply tab
+  // snapshots. Track the last applied (publicationEpoch, snapshotVersion) so a
+  // late-arriving older snapshot from the same publisher can't overwrite (and
+  // resurrect closed tabs in) a newer one. See session-tab-snapshot-gate.
+  const appliedSnapshotMarkerRef = useRef<AppliedSnapshotMarker>({ epoch: null, version: -1 })
+  // Why: after an optimistic local close, suppress the tab until the publisher
+  // confirms its absence, so an in-flight snapshot generated before the close
+  // propagated (and thus newer by version) can't flash the tab back. Maps tab id
+  // to an expiry timestamp so a failed host-side close can't hide a tab forever.
+  const closedTabTombstonesRef = useRef<Map<string, number>>(new Map())
   const [terminalsLoaded, setTerminalsLoaded] = useState(false)
   const [input, setInput] = useState('')
   // Why: baseline terminal zoom, reloaded on focus so a Settings → Terminal change
@@ -922,6 +939,8 @@ export default function SessionScreen() {
   const [liveInputTerminalHandles, setLiveInputTerminalHandles] = useState<Set<string>>(
     () => new Set()
   )
+  const liveInputTerminalHandlesRef = useRef<Set<string>>(new Set())
+  const defaultedLiveInputTerminalHandlesRef = useRef<Set<string>>(new Set())
   const [activeHandle, setActiveHandle] = useState<string | null>(null)
   const [activeSessionTabId, setActiveSessionTabId] = useState<string | null>(null)
   const activeSessionTabIdRef = useRef<string | null>(null)
@@ -941,6 +960,10 @@ export default function SessionScreen() {
   const [pendingDiffNotesDelivery, setPendingDiffNotesDelivery] =
     useState<DiffNotesDelivery | null>(null)
   const [creating, setCreating] = useState(false)
+  // Why: React state isn't a synchronous lock — a fast double-tap can fire two
+  // creates before `creating` re-renders. This ref blocks the second one in the
+  // same tick (server idempotency only dedupes identical clientMutationIds).
+  const creatingTerminalRef = useRef(false)
   const [creatingBrowser, setCreatingBrowser] = useState(false)
   const [creatingMarkdown, setCreatingMarkdown] = useState(false)
   const [createError, setCreateError] = useState('')
@@ -1092,6 +1115,7 @@ export default function SessionScreen() {
   sessionTabsRef.current = sessionTabs
   activeSessionTabIdRef.current = activeSessionTabId
   markdownDocsRef.current = markdownDocs
+  liveInputTerminalHandlesRef.current = liveInputTerminalHandles
   const reconciledCreateWarningState = reconcileMobileSessionCreateWarningState(
     createWarningState,
     initialCreateWarning
@@ -1155,6 +1179,52 @@ export default function SessionScreen() {
       })
     },
     [clearToastHideTimer]
+  )
+
+  // Why: direct input is now the mobile default, but only once per discovered
+  // handle so a user's buffered-mode toggle survives tab/list refreshes.
+  const defaultTerminalHandlesToLiveInput = useCallback((handles: readonly string[]) => {
+    const result = defaultTerminalLiveInputHandles(
+      liveInputTerminalHandlesRef.current,
+      defaultedLiveInputTerminalHandlesRef.current,
+      handles
+    )
+    if (!result.changed) {
+      return
+    }
+    const nextEnabledHandles = new Set(result.enabledHandles)
+    const nextDefaultedHandles = new Set(result.defaultedHandles)
+    liveInputTerminalHandlesRef.current = nextEnabledHandles
+    defaultedLiveInputTerminalHandlesRef.current = nextDefaultedHandles
+    setLiveInputTerminalHandles(nextEnabledHandles)
+  }, [])
+
+  const pruneTerminalHandlesFromLiveInput = useCallback((liveHandles: ReadonlySet<string>) => {
+    const result = pruneTerminalLiveInputHandles(
+      liveInputTerminalHandlesRef.current,
+      defaultedLiveInputTerminalHandlesRef.current,
+      liveHandles
+    )
+    if (!result.changed) {
+      return
+    }
+    const nextEnabledHandles = new Set(result.enabledHandles)
+    const nextDefaultedHandles = new Set(result.defaultedHandles)
+    liveInputTerminalHandlesRef.current = nextEnabledHandles
+    defaultedLiveInputTerminalHandlesRef.current = nextDefaultedHandles
+    setLiveInputTerminalHandles(nextEnabledHandles)
+  }, [])
+
+  const clearTerminalLiveInputDefault = useCallback(
+    (handle: string) => {
+      const liveHandles = new Set([
+        ...liveInputTerminalHandlesRef.current,
+        ...defaultedLiveInputTerminalHandlesRef.current
+      ])
+      liveHandles.delete(handle)
+      pruneTerminalHandlesFromLiveInput(liveHandles)
+    },
+    [pruneTerminalHandlesFromLiveInput]
   )
 
   const dictation = useMobileDictation({
@@ -1594,11 +1664,16 @@ export default function SessionScreen() {
           }
 
           const liveHandles = new Set(result.terminals.map((terminal) => terminal.handle))
+          // Why: terminal.list is the lifetime signal; session-tab snapshots can lag
+          // mobile-created tabs and must not erase a user's buffered-mode opt-out.
+          pruneTerminalHandlesFromLiveInput(liveHandles)
+          defaultTerminalHandlesToLiveInput([...liveHandles])
           for (const handle of Array.from(terminalUnsubsRef.current.keys())) {
             if (!liveHandles.has(handle)) {
               unsubscribeTerminal(handle)
               terminalRefs.current.delete(handle)
               initializedHandlesRef.current.delete(handle)
+              clearTerminalLiveInputDefault(handle)
               setTerminalKeyboardMetrics((prev) => {
                 if (!prev.has(handle)) {
                   return prev
@@ -1643,12 +1718,29 @@ export default function SessionScreen() {
         fetchTerminalsInFlightRef.current = false
       }
     },
-    [client, worktreeId, subscribeToTerminal, unsubscribeTerminal]
+    [
+      client,
+      worktreeId,
+      clearTerminalLiveInputDefault,
+      defaultTerminalHandlesToLiveInput,
+      pruneTerminalHandlesFromLiveInput,
+      subscribeToTerminal,
+      unsubscribeTerminal
+    ]
   )
 
   const applySessionTabs = useCallback(
     (result: SessionTabsResult) => {
-      let nextTabs = result.tabs
+      // Reject out-of-order snapshots, then suppress just-closed tabs until the
+      // publisher confirms their absence. See session-tab-snapshot-gate.
+      if (!acceptSessionSnapshot(result, appliedSnapshotMarkerRef.current)) {
+        return
+      }
+      let nextTabs = applyClosedTabTombstones(
+        result.tabs,
+        closedTabTombstonesRef.current,
+        Date.now()
+      )
       const presentTabIds = new Set(nextTabs.map((tab) => tab.id))
       const orphanedDraftTabs: MobileSessionTab[] = []
       const currentMarkdownDocs = markdownDocsRef.current
@@ -1675,6 +1767,8 @@ export default function SessionScreen() {
       // render loop where the subscription effect tears down and replays itself.
       setSessionTabs((prev) => (mobileSessionTabsEqual(prev, nextTabs) ? prev : nextTabs))
       const terminalTabs = getTerminalRecordsFromSessionTabs(nextTabs)
+      const terminalTabHandles = terminalTabs.map((terminal) => terminal.handle)
+      defaultTerminalHandlesToLiveInput(terminalTabHandles)
       const mergedTerminalsForActive = mergeTerminalRecordsByCurrentOrder(
         terminalTabs,
         terminalsRef.current
@@ -1769,7 +1863,7 @@ export default function SessionScreen() {
         setActiveHandle(null)
       }
     },
-    [subscribeToTerminal, unsubscribeTerminal]
+    [defaultTerminalHandlesToLiveInput, subscribeToTerminal, unsubscribeTerminal]
   )
 
   const readMarkdownTab = useCallback(
@@ -2541,6 +2635,12 @@ export default function SessionScreen() {
     pendingBrowserFocusPageIdRef.current = null
     pendingTerminalActivationAttemptRef.current = null
     initialEmptySessionAutoCreateRef.current = null
+    // Why: snapshot version floor and close tombstones are per-worktree. This
+    // screen can be reused across worktrees, so a prior worktree's high version
+    // would reject the next one's first snapshot (same renderer epoch) and stale
+    // tombstones could suppress same-id tabs.
+    appliedSnapshotMarkerRef.current = { epoch: null, version: -1 }
+    closedTabTombstonesRef.current.clear()
     for (const queued of terminalGestureInputQueuesRef.current.values()) {
       if (queued.timer) {
         clearTimeout(queued.timer)
@@ -2554,6 +2654,8 @@ export default function SessionScreen() {
     setSessionTabs([])
     setActiveSessionTabId(null)
     setLiveInputCapture('')
+    liveInputTerminalHandlesRef.current = new Set()
+    defaultedLiveInputTerminalHandlesRef.current = new Set()
     setLiveInputTerminalHandles(new Set())
     setMarkdownDocs(new Map())
     setFileDocs(new Map())
@@ -2561,7 +2663,7 @@ export default function SessionScreen() {
     return () => {
       clearDelayedActionTimers()
     }
-  }, [clearDelayedActionTimers, clearTerminalCache, worktreeId])
+  }, [clearDelayedActionTimers, clearTerminalCache, hostId, worktreeId])
 
   useEffect(() => {
     if (connState !== 'connected') {
@@ -2590,11 +2692,12 @@ export default function SessionScreen() {
     }
     void (async () => {
       if (client && created !== '1') {
-        // Why: desktop reveal can be slow on cold/busy hosts, but mobile
-        // session tabs are addressed by worktree id and can load immediately.
+        // Why: mobile needs host-owned tabs hydrated for this route, but should
+        // not pull other paired clients, especially desktop, into this worktree.
         void client
           .sendRequest('worktree.activate', {
-            worktree: `id:${worktreeId}`
+            worktree: `id:${worktreeId}`,
+            notifyClients: false
           })
           .catch(() => null)
       }
@@ -2619,7 +2722,8 @@ export default function SessionScreen() {
           void (async () => {
             await client
               .sendRequest('worktree.activate', {
-                worktree: `id:${worktreeId}`
+                worktree: `id:${worktreeId}`,
+                notifyClients: false
               })
               .catch(() => null)
             if (disposed) {
@@ -2748,6 +2852,7 @@ export default function SessionScreen() {
       pendingActiveSessionTabIdRef.current = matchingTab?.id ?? null
       pendingActiveTerminalHandleRef.current = handle
       activeSessionTabTypeRef.current = 'terminal'
+      defaultTerminalHandlesToLiveInput([handle])
       setActiveSessionTabId(matchingTab?.id ?? null)
       const prev = activeHandleRef.current
       activeHandleRef.current = handle
@@ -2768,13 +2873,21 @@ export default function SessionScreen() {
           void client
             .sendRequest('session.tabs.activate', {
               worktree: `id:${worktreeId}`,
-              tabId: matchingTab.id
+              tabId: matchingTab.id,
+              notifyClients: false
             })
             .catch(() => {})
         }
       }
     },
-    [client, sessionTabs, subscribeToTerminal, unsubscribeTerminal, worktreeId]
+    [
+      client,
+      defaultTerminalHandlesToLiveInput,
+      sessionTabs,
+      subscribeToTerminal,
+      unsubscribeTerminal,
+      worktreeId
+    ]
   )
 
   const switchSessionTab = useCallback(
@@ -2800,7 +2913,8 @@ export default function SessionScreen() {
           void client
             .sendRequest('session.tabs.activate', {
               worktree: `id:${worktreeId}`,
-              tabId: tab.id
+              tabId: tab.id,
+              notifyClients: false
             })
             .catch(() => {})
         }
@@ -2823,7 +2937,8 @@ export default function SessionScreen() {
         void client
           .sendRequest('session.tabs.activate', {
             worktree: `id:${worktreeId}`,
-            tabId: tab.id
+            tabId: tab.id,
+            notifyClients: false
           })
           .catch(() => {})
       }
@@ -3132,6 +3247,7 @@ export default function SessionScreen() {
       } else {
         next.delete(activeHandle)
       }
+      liveInputTerminalHandlesRef.current = next
       return next
     })
     setLiveInputCapture('')
@@ -3730,17 +3846,27 @@ export default function SessionScreen() {
     agent?: MobileNewTabAgentOption['agent'],
     options?: { initialPrompt?: string; onPromptSent?: () => void }
   ) {
-    if (!client || creating) {
+    if (!client || creatingTerminalRef.current) {
       return
     }
+    creatingTerminalRef.current = true
 
     setCreating(true)
     setCreateError('')
+
+    // Why: idempotency key so a transport-level retry (reconnect replay) of this
+    // create resolves to the same terminal instead of spawning a duplicate. Kept
+    // compact (no worktree id) to stay under the schema's length cap; the ref
+    // guard above blocks concurrent taps synchronously.
+    const clientMutationId = `mobile-create:${Date.now().toString(36)}-${Math.random()
+      .toString(36)
+      .slice(2, 10)}`
 
     try {
       const response = await client.sendRequest('session.tabs.createTerminal', {
         worktree: `id:${worktreeId}`,
         afterTabId: activeSessionTabId ?? undefined,
+        clientMutationId,
         ...(agent ? { agent } : {})
       })
       if (response.ok) {
@@ -3765,6 +3891,7 @@ export default function SessionScreen() {
         })
         if (typeof created.terminal === 'string') {
           const createdHandle = created.terminal
+          defaultTerminalHandlesToLiveInput([createdHandle])
           activeHandleRef.current = createdHandle
           setActiveHandle(createdHandle)
           setTerminals((prev) => {
@@ -3829,6 +3956,7 @@ export default function SessionScreen() {
     } catch {
       setCreateError('Failed to create terminal')
     } finally {
+      creatingTerminalRef.current = false
       setCreating(false)
     }
   }
@@ -4007,6 +4135,7 @@ export default function SessionScreen() {
         unsubscribeTerminal(target.handle)
         terminalRefs.current.delete(target.handle)
         initializedHandlesRef.current.delete(target.handle)
+        clearTerminalLiveInputDefault(target.handle)
         const next = terminals.filter((terminal) => terminal.handle !== target.handle)
         setTerminals(next)
         terminalsRef.current = next
@@ -4019,7 +4148,6 @@ export default function SessionScreen() {
             subscribeToTerminal(replacement.handle)
           }
         }
-        scheduleDelayedAction(() => void fetchTerminals(), 300)
       }
     } catch {
       // Close failed — keep the local tab list unchanged.
@@ -4040,15 +4168,19 @@ export default function SessionScreen() {
           unsubscribeTerminal(tab.terminal)
           terminalRefs.current.delete(tab.terminal)
           initializedHandlesRef.current.delete(tab.terminal)
+          clearTerminalLiveInputDefault(tab.terminal)
         }
         setSessionTabs((prev) => prev.filter((candidate) => candidate.id !== tab.id))
+        // Why: tombstone the closed tab and rely on the subscription/poll
+        // snapshot (gated by snapshotVersion) instead of a blind 300ms refetch
+        // that re-applied whatever the host had — often the not-yet-closed list.
+        closedTabTombstonesRef.current.set(tab.id, Date.now() + 10_000)
         if (activeSessionTabId === tab.id) {
           activeSessionTabTypeRef.current = null
           setActiveSessionTabId(null)
           activeHandleRef.current = null
           setActiveHandle(null)
         }
-        scheduleDelayedAction(() => void fetchSessionTabs(), 300)
       }
     } catch {
       // Close failed — keep the authoritative session snapshot visible.
@@ -4090,7 +4222,8 @@ export default function SessionScreen() {
       .sendRequest('session.tabs.activate', {
         worktree: `id:${worktreeId}`,
         tabId: activePendingTerminalTab.id,
-        leafId: activePendingTerminalTab.leafId
+        leafId: activePendingTerminalTab.leafId,
+        notifyClients: false
       })
       .then((response) => {
         if (!response.ok) {
@@ -4868,12 +5001,14 @@ export default function SessionScreen() {
                       autoCorrect={false}
                       spellCheck={false}
                       smartInsertDelete={false}
+                      // Why: iOS textContentType wins over autoComplete and can
+                      // narrow the keyboard surface; keep IME switching available.
+                      autoComplete="off"
                       keyboardType={getTerminalLiveInputKeyboardType(Platform.OS)}
                       returnKeyType="default"
                       blurOnSubmit={false}
                       editable={canSend}
                       importantForAutofill="no"
-                      textContentType="none"
                     />
                   </Pressable>
                 ) : (
@@ -4899,8 +5034,9 @@ export default function SessionScreen() {
                       autoCorrect={autocompleteEnabled}
                       spellCheck={autocompleteEnabled}
                       smartInsertDelete={false}
-                      // Why: Android's default keyboard is required for CJK IME
-                      // composition; iOS can still use ASCII when autocomplete is off.
+                      // Why: terminal commands are not autofill content, but the
+                      // keyboard must stay default so non-Latin IMEs remain selectable.
+                      autoComplete="off"
                       keyboardType={getTerminalCommandKeyboardType(
                         Platform.OS,
                         autocompleteEnabled

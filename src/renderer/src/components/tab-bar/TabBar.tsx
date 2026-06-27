@@ -55,7 +55,7 @@ import {
 import { getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import { getRuntimeEnvironmentIdForWorktree } from '@/lib/worktree-runtime-owner'
 import { getLocalProjectExecutionRuntimeContext } from '@/lib/local-preflight-context'
-import { useShortcutLabel } from '@/hooks/useShortcutLabel'
+import { useOptionalShortcutLabel, useShortcutLabel } from '@/hooks/useShortcutLabel'
 import {
   type BuiltInWindowsTerminalShell,
   WINDOWS_GIT_BASH_SHELL
@@ -80,6 +80,7 @@ import { TabStripScrollIndicator } from './TabStripScrollIndicator'
 import { getTabStripScrollMaskClassName } from './tab-strip-scroll-metrics'
 import { useTabStripOverflowNavigation } from './tab-strip-overflow-navigation'
 import { useTabStripDragScrollHandlers } from './tab-strip-drag-scroll'
+import { shouldShowWindowsShellMenu } from './windows-shell-menu-visibility'
 
 const isWindows = navigator.userAgent.includes('Windows')
 const isMacOs = navigator.userAgent.includes('Mac')
@@ -299,6 +300,7 @@ function TabBarInner({
   const newBrowserShortcut = useShortcutLabel('tab.newBrowser')
   const newSimulatorShortcut = useShortcutLabel('tab.newSimulator')
   const newFileShortcut = useShortcutLabel('tab.newMarkdown')
+  const openMarkdownShortcut = useOptionalShortcutLabel('tab.openMarkdown')
   const generatedTabTitlesEnabled = useAppStore((s) => s.settings?.tabAutoGenerateTitle === true)
   const mobileEmulatorEnabled = useAppStore((s) => s.settings?.mobileEmulatorEnabled !== false)
   const persistedUIReady = useAppStore((s) => s.persistedUIReady)
@@ -403,13 +405,14 @@ function TabBarInner({
     windowsTerminalCapabilityOwnerKey,
     runtimeTarget
   )
-  // Why: SSH-backed PTYs ignore local Windows shell overrides; showing these
-  // entries there promises PowerShell/CMD/Git Bash but opens the remote shell.
-  const shouldShowWindowsShellMenu =
-    (isWindows || windowsTerminalCapabilities.hostPlatform === 'win32') &&
-    !worktreeHasRemoteConnection
+  const showWindowsShellMenu = shouldShowWindowsShellMenu({
+    activeRuntimeEnvironmentId,
+    hostPlatform: windowsTerminalCapabilities.hostPlatform,
+    isWindowsClient: isWindows,
+    worktreeHasRemoteConnection
+  })
   const localProjectRuntime = useMemo(() => {
-    if (!shouldShowWindowsShellMenu || activeRuntimeEnvironmentId?.trim()) {
+    if (!showWindowsShellMenu || activeRuntimeEnvironmentId?.trim()) {
       return undefined
     }
     return getLocalProjectExecutionRuntimeContext(
@@ -439,7 +442,7 @@ function TabBarInner({
     projects,
     repos,
     settings,
-    shouldShowWindowsShellMenu,
+    showWindowsShellMenu,
     windowsTerminalCapabilities.isLoading,
     windowsTerminalCapabilities.wslAvailable,
     windowsTerminalCapabilities.wslDistros,
@@ -521,7 +524,7 @@ function TabBarInner({
     pendingNewTabMenuFocusRef.current = () => focusTerminalTabSurface(tabId)
   }
   const windowsShellEntries = useMemo(() => {
-    if (!shouldShowWindowsShellMenu || !onNewTerminalWithShell) {
+    if (!showWindowsShellMenu || !onNewTerminalWithShell) {
       return undefined
     }
     const includeHostShells = projectRuntimeShellMenuMode !== 'wsl'
@@ -568,7 +571,7 @@ function TabBarInner({
     defaultWindowsShell,
     onNewTerminalWithShell,
     projectRuntimeShellMenuMode,
-    shouldShowWindowsShellMenu,
+    showWindowsShellMenu,
     windowsTerminalCapabilities.gitBashAvailable,
     windowsTerminalCapabilities.wslAvailable
   ])
@@ -822,6 +825,9 @@ function TabBarInner({
       >
         <FileText className="size-4 text-muted-foreground" />
         {translate('auto.components.tab.bar.TabBar.4f327c8b3d', 'Open Markdown...')}
+        {openMarkdownShortcut ? (
+          <DropdownMenuShortcut>{openMarkdownShortcut}</DropdownMenuShortcut>
+        ) : null}
       </DropdownMenuItem>
     ) : null
   const mobileEmulatorIntroMenuBlock =
@@ -1137,7 +1143,7 @@ function TabBarInner({
             // a different box than the tab's own `border-t`, producing a
             // heavier-looking L-corner at the leftmost tab when inactive.
             className={[
-              'terminal-tab-strip flex h-full min-w-0 max-w-full flex-1 items-stretch overflow-x-auto overflow-y-hidden border-r border-border',
+              'terminal-tab-strip flex h-full min-w-0 max-w-full flex-1 items-stretch overflow-x-auto overflow-y-hidden border-r border-border/70',
               getTabStripScrollMaskClassName(tabStripOverflowState)
             ]
               .filter(Boolean)
