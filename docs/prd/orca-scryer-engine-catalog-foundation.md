@@ -1,6 +1,6 @@
 # PRD: Orca Scryer Engine Catalog Foundation
 
-Status: draft
+Status: implemented via operation migration; retained as historical specification
 Date: 2026-06-24
 
 ## Source
@@ -26,16 +26,18 @@ Date: 2026-06-24
 
 ## Problem Statement
 
-PRD #22 proved the first Native Scryer Engine loop with seven operations, but
-the current engine still has first-slice scaffolding: operation dispatch is a
-switch, runtime contract validation is incomplete, and cross-cutting state
-rules are not yet declared in one catalog.
+Implementation status: this foundation has since landed as part of the completed
+#41-#49 operation migration. The catalog, pipeline, state-store, schemas, error
+mapping, parity fixtures, and read/write operation families now sit behind the
+Native Scryer Engine seam. This PRD remains useful as historical specification,
+not as a fresh backlog of unchecked operation work.
 
-Before migrating the remaining upstream Scryer operations, Orca needs a deeper
-engine foundation. Adding the next operations as one-off files would push
-planned/committed semantics, lock/lease behavior, anchor routing, history,
-baseline refresh, drift sync, build-edge reads, and result-envelope validation
-back into individual operation implementations.
+At the time this PRD was written, PRD #22 had proved the first Native Scryer
+Engine loop with seven operations, while the engine still had first-slice
+scaffolding. The purpose of this PRD was to prevent later operations from
+pushing planned/committed semantics, lock/lease behavior, anchor routing,
+history, baseline refresh, drift sync, build-edge reads, and result-envelope
+validation back into individual operation implementations.
 
 ## Decision
 
@@ -535,13 +537,13 @@ Detail schema table:
 | `incompatible_model` | State store | `{ path: string; expectedVersion: '0.3'; actualVersion?: string; reason: 'missing_version' \| 'unsupported_version' \| 'invalid_json' }` | A model file cannot be treated as upstream Scryer 0.3 state. |
 | `io_error` | State store | `{ target: ScryerIoTarget; operation: 'read' \| 'write' \| 'rename' \| 'mkdir' \| 'append' \| 'lock'; path?: string; cause?: string }` | File-system access failed outside best-effort maintenance warning handling. |
 | `lock_busy` | Pipeline/state store | `{ lockPath?: string; owner?: string; retryAfterMs?: number }` | The state lock could not be acquired. |
-| `lease_required` | Pipeline | `{ policy: 'write_if_active' \| 'completion_gate'; activeLeaseId?: string; activeOwner?: ScryerTransport }` | A write is blocked by an active model edit lease or completion-gated lease policy. |
+| `lease_required` | Pipeline | `{ policy: 'write_if_active' \| 'completion_gate'; activeLease?: true; activeOwner?: ScryerTransport }` | A write is blocked by an active model edit lease or completion-gated lease policy. Do not include the raw lease token in renderer-visible error details. |
 | `operation_not_found` | Pipeline | `{ operationId: string }` | The requested operation id is not registered in the catalog. |
 | `internal_error` | Pipeline | `{ reason: 'success_schema_failed' \| 'error_details_schema_failed' \| 'undeclared_error_code' \| 'policy_violation' \| 'malformed_warning' \| 'unknown_warning_code' \| 'unexpected_exception'; contractOperationId?: string }` | The engine or operation violated its own contract. Do not use for normal user-fixable input. |
 | `not_found` | Operation | `{ entity: ScryerOperationEntity; id: string; field?: string }` | A referenced Scryer model element, project object, rule topic, or agent run does not exist. |
 | `illegal_link` | Operation | `{ reason: 'self_link' \| 'ancestor_descendant' \| 'same_level_reference' \| 'duplicate_link'; src: string; dst: string; linkId?: string }` | Link endpoints exist, but the link violates Scryer structural rules. Missing endpoints use `not_found`. |
 | `validation_failed` | Operation/validator | `{ findings: ScryerValidationFinding[] }` | The request is syntactically valid but would leave the Scryer model structurally invalid. |
-| `agent_run_required` | Pipeline/operation | `{ mode: 'agent_completion'; reason: 'missing_context' \| 'inactive_run' \| 'lease_mismatch' \| 'run_not_complete'; agentRunId?: string; leaseId?: string }` | An operation mode requires trusted Orca agent-run context and it is missing or not satisfied. |
+| `agent_run_required` | Pipeline/operation | `{ mode: 'agent_completion'; reason: 'missing_context' \| 'inactive_run' \| 'lease_mismatch' \| 'run_not_complete'; agentRunId?: string; activeLease?: true }` | An operation mode requires trusted Orca agent-run context and it is missing or not satisfied. Do not include the raw lease token in renderer-visible error details. |
 
 ```ts
 type ScryerIoTarget =
@@ -1385,17 +1387,26 @@ Terminology:
 - Risk does not infer side effects and never creates storage on its own.
 
 `transport`, agent-run identity, and lease token belong to trusted
-`ScryerOperationContext` created by Orca adapters or a thin Scryer agent-run
-adapter over Orca's native agent runtime. That adapter must not launch agents,
-track generic Codex/Claude sessions, infer task completion, or own status UI;
-those remain in Orca's existing hook/session/completion/orchestration modules.
-It only translates trusted Orca run facts into Scryer context and coordinates
-Scryer-only semantics: model edit lease token binding, completion-gated folds,
-cancellation cleanup of Scryer leases, and post-run pending/validation handoff.
-Operation input is untrusted caller data and must not be allowed to set or
-override authorization facts. If a caller passes `caller`, `transport`, or
-similar fields inside operation input, the engine ignores them for
-authorization.
+`ScryerOperationContext` created by main-process Orca adapters or a thin
+Scryer agent-run adapter over Orca's native agent runtime. That adapter must
+not launch agents, track generic Codex/Claude sessions, infer task completion,
+or own status UI; those remain in Orca's existing
+hook/session/completion/orchestration modules. It only translates trusted Orca
+run facts into Scryer context and coordinates Scryer-only semantics: model edit
+lease token binding, completion-gated folds, cancellation cleanup of Scryer
+leases, and post-run pending/validation handoff. Operation input is untrusted
+caller data and must not be allowed to set or override authorization facts. If
+a caller passes `caller`, `transport`, or similar fields inside operation
+input, the engine ignores them for authorization.
+
+The raw lease token must not cross into renderer-facing interfaces. Preload
+types, renderer DTOs, DOM state, logs, prompts, and renderer-originated
+`executeOperation(...)` input cannot expose or accept `leaseToken`. If an
+active lease blocks a write, the engine may report that a lease is active, its
+owner, and the bound agent run id where useful, but renderer-visible error
+details must not echo the token itself. Agent completion goes through
+`ScryerEditSessionController`, which resolves the token internally and attaches
+it to trusted context before calling the engine.
 
 `agentRun.required` is a context dependency, not an identity permission system.
 Use it only for operations whose semantics depend on an active Orca agent run:
@@ -1628,7 +1639,8 @@ Do not include `agentRunId` or `leaseToken` in operation input schemas. They
 are runtime authorization, attribution, and concurrency-control facts, not
 domain input. Trusted adapters place them on `ScryerOperationContext`;
 executors receive only the selected model changes to fold, update, generate,
-or reconcile.
+or reconcile. Renderer-facing adapters should expose sanitized session status,
+not raw context fields.
 
 Write operations default to
 `project: { containment: 'workspace_required', allowProjectOverride: true }`.
@@ -2939,10 +2951,10 @@ directly, so fixture schema drift fails at the parity seam.
 
 ## Implementation Readiness Gate
 
-The broad 33-operation migration should not begin until the engine foundation
-gate is green. This gate keeps operation files focused on domain changes and
-prevents catalog, state, validation, id, fold, and parity rules from being
-reimplemented per operation.
+Historical gate: the broad 33-operation migration was gated on the engine
+foundation being green. That gate has since been satisfied; it kept operation
+files focused on domain changes and prevented catalog, state, validation, id,
+fold, and parity rules from being reimplemented per operation.
 
 The gate passes only when all of the following are true:
 

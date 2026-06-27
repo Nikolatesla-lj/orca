@@ -211,6 +211,10 @@ Context conventions:
   Model Edit Lease.
 - `plan.fold` requires either no active lease, or the matching lease/completion
   gate when an agent owns the edit session.
+- `leaseToken` is trusted runtime context. It may be set by main-process
+  edit-session code or another trusted adapter, but renderer/preload DTOs,
+  ordinary CLI flags, DOM state, logs, prompts, and renderer
+  `executeOperation(...)` input must not expose or accept it.
 
 ## Deep module interfaces
 
@@ -224,7 +228,7 @@ spreading across CLI, IPC, UI, sync, drift, and tests.
 | Scryer Operation Pipeline | Internal engine seam driven by `ScryerOperationContract` | Context validation, input validation, project resolution, authority, lock/lease checks, declared reads/writes, side effects, and envelope validation | In-process; tested through engine contract tests, not through transport tests |
 | Scryer State Store | Internal store seam used only by the pipeline | `.scryer` path calculation, planned fallback, committed writes, atomic IO, baseline/history/anchor/build-edge file effects, and lock ownership | Local-substitutable filesystem; test with temp directories and real files |
 | Scryer Validator | Internal validation seam used by pipeline stages | Parse/version incompatibility, blocking structural errors, non-blocking warnings, anchor warnings, and post-fold committed validation | In-process; pure tests for taxonomy plus engine tests for observable behavior |
-| Scryer Agent Run Bridge | Orca runtime seam for model-edit sessions | Orca agent launch/observation, Model Edit Lease lifecycle, completion gate, cancellation, crash cleanup, and visible handoff | Remote-but-owned Orca runtime; production uses Orca runtime adapter, tests use in-memory runtime adapter |
+| `ScryerEditSessionController` | Orca application-service seam for model-edit sessions | Model Edit Lease lifecycle, completion gate, cancellation/crash cleanup, and visible handoff mapping; Orca still owns agent process launch and terminal/runtime state | In-process workflow over Orca runtime; production uses an Orca runtime adapter, tests use an in-memory runtime adapter |
 | Architecture View Adapter | Renderer-facing view seam through `readView(...)` and operation intents | `ScryModel` to canvas view derivation, render cache separation, UI mutation-to-operation mapping, and structured error rendering | In-process; renderer tests verify mapping and rendering, while engine tests own Scryer semantics |
 
 The deletion test for these modules is strict: deleting the Native Scryer Engine
@@ -273,31 +277,36 @@ validation; they do not decide how a warning differs from a blocking error.
 
 ### Agent edit session interface
 
-The agent run bridge owns the Model Edit Lease lifecycle and completion gate. UI,
-CLI, and IPC callers do not acquire leases directly; they pass context, and the
-engine enforces authority.
+`ScryerEditSessionController` owns the Model Edit Lease lifecycle and completion
+gate. UI, CLI, and IPC callers do not acquire leases directly; they pass
+context, and the engine enforces authority.
+
+Renderer-facing edit-session calls return token-free identity/status only:
+active, owner, agent run id, and timestamps where useful. Agent completion and
+optional fold use `completeAgentEditSession(...)`, where the controller resolves
+the matching token internally before calling the Native Scryer Engine.
 
 ```ts
-interface ScryerAgentRunBridge {
-  beginModelEditSession(
+interface ScryerEditSessionController {
+  beginAgentEditSession(
     project: ScryerProjectRef,
     owner: ScryerLeaseOwner,
     context: ScryerOperationContext,
   ): Promise<ModelEditSession>
 
-  finishModelEditSession(
+  completeAgentEditSession(
     session: ModelEditSessionRef,
     outcome: ScryerAgentRunOutcome,
   ): Promise<ScryerCompletionGateResult>
 
-  cancelModelEditSession(
+  cancelAgentEditSession(
     session: ModelEditSessionRef,
     reason: string,
   ): Promise<ScryerOperationResult>
 }
 ```
 
-The bridge hides Orca terminal/runtime state from the Native Scryer Engine
+The controller keeps Orca terminal/runtime state out of the Native Scryer Engine
 operation interface. Completion is product state: a finished process still needs
 pending-work and validation checks before the model edit session is considered
 closed.

@@ -1,6 +1,6 @@
 # PRD: Orca Scryer Operation Migration Work Set
 
-Status: draft
+Status: implemented via #41-#49; retained as historical specification
 Date: 2026-06-25
 
 ## Source
@@ -15,26 +15,50 @@ Date: 2026-06-25
   - `scryer/crates/scryer-mcp/src/instructions.rs`
   - `scryer/crates/scryer-mcp/src/types.rs`
 
+## Implementation Status
+
+This work set has been implemented and verified through operation migration
+issues #41-#49. The broad operation families described below now live behind
+the Orca-native Native Scryer Engine seam through `executeOperation(...)` and
+`readView(...)`, with focused engine, adapter, CLI, IPC, and Architecture e2e
+coverage.
+
+This document remains useful as the historical specification for the completed
+operation migration. It should not be read as a fresh backlog of unchecked
+operation work. Follow-up product-integration hardening through #29 has also
+completed; the remaining work is PR stabilization and human review, not another
+operation migration batch:
+
+- #25: reconcile linked docs with completed operation migration.
+- #26: main-process legacy Scryer semantic fallback retired or reduced to shims.
+- #27: stabilize `ScryerEditSessionController` and Completion Gate.
+- #28: renderer-facing Architecture View Adapter hard cutover completed.
+- #29: live UI intent and behavior coverage expanded and verified.
+
 ## Problem Statement
 
-The Native Scryer Engine catalog foundation is in place for the first seven
-operations. Orca still needs the remaining upstream Scryer operation families
-planned, specified, and split into implementation issues so agents can finish
-the migration without creating one-off operation files or a single unreviewable
-implementation PR.
+At the time this PRD was written, the Native Scryer Engine catalog foundation
+was in place for the first seven operations, and Orca still needed the remaining
+upstream Scryer operation families planned, specified, and split into
+implementation issues. That work has since been completed through #41-#49. The
+problem statement is retained to explain why the work set was sliced around
+deep modules and vertical operation families instead of one-off operation files
+or a single unreviewable implementation PR.
 
 ## Scope Decision
 
-This PRD covers the complete Scryer Operation Migration Work Set for decision
-map tickets #16-#24. "Complete" means the remaining operation families are
-specified and issue-ready together. It does not mean all operations should be
-implemented in one PR or one agent session.
+This PRD covered the complete Scryer Operation Migration Work Set for decision
+map tickets #16-#24. In the original planning context, "complete" meant the
+remaining operation families were specified and issue-ready together. The
+subsequent #41-#49 implementation pass carried those slices through code and
+focused tests.
 
-Implementation must proceed as vertical operation-family slices. Each task
-slice must carry real operations through catalog contracts, zod schemas,
-pipeline policy, executors, adapters, fixtures, and focused tests. Do not create
-horizontal slices that only add shared infrastructure without proving user- or
-agent-visible operation behavior.
+The implementation rule remains relevant for future maintenance: changes should
+proceed as vertical operation-family slices. Each task slice should carry real
+operations through catalog contracts, zod schemas, pipeline policy, executors,
+adapters, fixtures, and focused tests. Do not create horizontal slices that only
+add shared infrastructure without proving user- or agent-visible operation
+behavior.
 
 ## Operation-Family Slices
 
@@ -894,12 +918,12 @@ and format the standard engine result after execution. They must not define
 parallel command contracts or transport-only result shapes for the same Scryer
 operation.
 
-The Scryer agent-run adapter must reuse Orca's native agent runtime instead of
+`ScryerEditSessionController` must reuse Orca's native agent runtime instead of
 owning process launch, terminal state, account state, model/effort selection,
 generic run status, completion detection, or orchestration context. Its
 interface should expose Scryer model-edit intent to Orca runtime and then
 translate runtime outcomes back into Scryer follow-up work. The Scryer-specific
-adapter keeps only model edit lease binding, completion-gated fold
+controller keeps only model edit lease binding, completion-gated fold
 coordination, lease cleanup on cancellation or crash, visible handoff mapping,
 post-run pending checks, post-run validation checks, and conversion of agent
 outcomes into engine reads or catalog operations. This preserves the earlier
@@ -916,39 +940,71 @@ baselines, or format domain failure details. Once product callers no longer
 need the old entrypoints, remove it or keep only a pure shim with no Scryer
 domain implementation.
 
-`ArchitectureViewAdapter.readView(...)` must return a UI-specific view DTO
-rather than exposing raw `ScryModel` to the renderer. `ScryModel` remains the
-domain model for architecture facts. The view DTO is allowed to resemble the
-current renderer-friendly `C4ModelData` shape during migration, but it is only a
-projection of engine read results plus Orca view state. It may include drawing
-nodes, drawing edges, selection hints, expanded paths, layout metadata, diff
-glow data, and flow-extension display fields. It must not become a second
-source of domain truth, and renderer code must not infer committed/planned
-write semantics, source routing, drift state, group ownership, or link legality
-from the DTO shape.
+`ArchitectureViewAdapter.readView(...)` must return a UI-specific
+`ArchitectureViewDto` rather than exposing raw `ScryModel` or legacy
+`C4ModelData` to the renderer. This is a hard cutover, not a compatibility
+alias. `ScryModel` remains the domain model for architecture facts, and the DTO
+is a projection of engine read results into renderer-ready data. Naming follows
+`ArchitectureView` plus upstream semantic names: `ArchitectureViewNode`,
+`ArchitectureViewLink`, `ArchitectureViewGroup`,
+`ArchitectureViewResponsibility`, `ArchitectureViewProperty`,
+`ArchitectureViewSourceLocation`, and `ArchitectureViewBoundarySource`.
+Fields follow upstream Scryer 0.3 JSON semantics: `nodes`, `links`, `groups`,
+`sourceMap`, `boundaries`, `responsibilities`, `properties`, `parentId`,
+`memberIds`, `src`, and `dst`. Do not use `edges`, `C4ModelData`, `C4Node`,
+`C4Edge`, or `C4NodeData` in Architecture renderer code.
+
+The DTO may include renderer-needed derived facts such as tree rows,
+selected-node details, source-map display rows, boundary display rows, group
+display data, drift indicators, pending/fold summaries, validation diagnostics,
+and recommended next reads. It must not include durable UI-only state such as
+selection, expanded paths, active view mode, viewport, layout positions,
+measured sizes, tab/session state, diff glow animation state, undo/redo stack,
+form drafts, or agent runtime state. A read request may include current
+selection so the adapter can return temporary `selectedDetails`, but the
+adapter does not own long-lived UI state.
 
 This follows upstream Scryer v0.3's split between model data and view data.
-Upstream `ScryModel` contains nodes, links, groups, `sourceMap`, and
-`boundaries`; it does not persist selected item, expanded tree paths, workspace
-view, diagram focus, viewport, or node positions as model fields. Upstream
-`App.tsx` keeps selected item, expanded ids, wiki/diagram view, and diagram
-focus in React/local UI state. Upstream `diagramLayout.ts` acts as a layout
-adapter that turns the v0.3 model plus a focus id into a positioned
-`DiagramScene`. Orca should preserve the same rule: view state may be
-remembered in Orca UI storage or adapter-local cache when useful, and layout may
-be derived or cached for rendering, but none of it is Scryer domain truth and it
-must not be written into `.scryer/model.scry`.
+Upstream `ScryModel` contains only `nodes`, `links`, `groups`, `sourceMap`, and
+`boundaries` as architecture model fields; it does not persist selected item,
+expanded tree paths, workspace view, diagram focus, viewport, node positions, or
+Architecture flows/scenarios as model fields. Upstream Scryer 0.3 has no
+Architecture `flows` model. Orca should preserve the same rule: view state may
+be remembered in Orca UI storage or adapter-local cache when useful, and layout
+may be derived or cached for rendering, but none of it is Scryer domain truth
+and it must not be written into `.scryer/model.scry`.
 
-The migration should happen in staged slices rather than one large rewrite.
-First, route view reads through `ArchitectureViewAdapter.readView(...)` so UI
-rendering is fed by engine read payloads while Orca view state stays separate
-from model state. Second, route UI write intents through `executeOperation(...)`
-instead of direct legacy storage helper calls. Third, route CLI and IPC commands
-through the same catalog operation names, schemas, result envelopes, and error
-mapping used by UI. Fourth, route Scryer agent-run work through Orca's native
-agent runtime via the Scryer Agent Run Bridge, leaving only lease binding,
-completion-gated fold coordination, cancellation/crash cleanup, visible handoff
-mapping, and post-run pending/validation checks in the Scryer-specific adapter.
+Normal Scryer 0.3 runtime uses a closed schema. Engine state-store reads and
+writes for `.scryer/model.scry` and `.scryer/planned.scry` must reject unknown
+fields instead of ignoring them. Top-level allowed fields are `version`,
+`nodes`, `links`, `groups`, `sourceMap`, and `boundaries`; Node/Link/Group and
+nested Responsibility/Property/Source/Boundary objects should also reject
+unknown fields. Unknown fields return structured `incompatible_model` errors
+with `reason: "unknown_fields"` and aggregated dot/bracket paths such as
+`flows`, `nodes[0].type`, and `links[0].source`. UI and CLI surface that error
+envelope directly; logs are only supplementary.
+
+Do not consider old model compatibility in this cutover. There is no implicit
+import, migration, fallback, old `flows`/`scenarios` tolerance, `edges -> links`
+conversion, or `C4ModelData -> ScryModel` normal-runtime conversion. If a future
+product requirement needs old-project support, it belongs in a separate
+explicit import/migration feature, not in the normal Architecture runtime.
+
+Implementation order for #28 is hard cutover: first tighten engine/state-store
+closed-schema validation; second add `ArchitectureViewAdapter` and
+`architecture:readArchitectureView`; third hard-cut renderer reads to
+`ArchitectureViewDto`; fourth hard-cut renderer writes to intent/operation
+calls through `executeOperation(...)`; fifth add ownership tests that forbid
+Architecture renderer imports of legacy C4 model types and normal edit calls to
+`readModelDocument`/`writeModelDocument`. Scryer agent-run work has already
+been routed through Orca's native agent runtime via `ScryerEditSessionController`,
+an in-process application service that coordinates Scryer edit-session safety
+only. It leaves process launch, terminal/account state, generic run status,
+cancellation, crash/done detection, and log streaming in Orca's native agent
+runtime. The controller
+keeps only lease binding, completion-gated fold coordination,
+cancellation/crash cleanup, visible handoff mapping, and post-run
+pending/validation checks in the Scryer-specific layer.
 Finally, demote `mcp-tools.ts` to a thin compatibility adapter and retire its
 semantic implementation; keep compatibility scaffolding only until every
 product caller has crossed the engine seam.
@@ -958,12 +1014,39 @@ that UI write intents call `executeOperation(...)` rather than model-store write
 helpers, CLI and IPC adapters use catalog operation names and schemas rather
 than parallel command contracts, `ArchitectureViewAdapter.readView(...)`
 returns a view DTO rather than raw `ScryModel`, `mcp-tools.ts` only normalizes
-legacy input before crossing the engine seam, and the Scryer agent-run adapter
+legacy input before crossing the engine seam, and `ScryerEditSessionController`
 uses an Orca runtime adapter/mock rather than starting or supervising processes
 itself. Adapter tests should verify conversion, seam calls, and transport
 formatting. Source routing, group/link legality, drift, fold, id minting, and
 state-store transaction semantics should remain covered by engine module tests
 rather than duplicated in adapter tests.
+
+`ScryerEditSessionController` is a deep module: renderer callers should learn
+only the edit-session actions and returned status, not the lease-token
+lifecycle. The lease token stays inside main-process trusted context and may be
+attached only to `ScryerOperationContext` by the controller or trusted adapters.
+Renderer/preload DTOs, DOM state, logs, prompts, and generic renderer operation
+inputs must not expose, persist, or accept `leaseToken`. `beginAgentEditSession`
+and `readEditSession` return token-free session identity/status; agent
+completion and optional fold go through `completeAgentEditSession(...)`, which
+resolves the matching token internally before calling the Native Scryer Engine.
+
+`ScryerEditSessionController` implementation tickets:
+
+| Ticket | Slice | Scope |
+| --- | --- | --- |
+| #27A | Controller skeleton + gate evaluator | Add `src/main/scryer/edit-session-controller.ts` and focused tests for `evaluateCompletionGate(...)`: no changes -> `nothing_to_fold`, foldable changes with warnings -> `fold_allowed`, blocking validation -> `fix_validation`, unknown pending kind -> `manual_review`, destructive valid change -> foldable with risk, conflicting lease -> blocked. |
+| #27B | Lease store + engine policy tests | Add `src/main/scryer/edit-lease-store.ts`; acquire/release the shared Scryer lease sidecar (`scryerPaths(...).leasePath`, currently `.scryer/.model-edit-lease.json`); wire active lease reads into engine write policy; prove semantic writes require the matching token while reads, validate, pending, prompt prep, and view-only state do not. |
+| #27C | Agent runtime minimal integration | Inject a small agent-run interface (`getRunStatus`, `onRunFinished`); acquire lease on begin; release on done/cancel/crash; run completion gate on done; call `scryer.plan.fold` only for `foldPolicy: "when_gate_passes"` when the gate passes. |
+| #27D | IPC/UI gate status + live coverage | Add begin/complete/cancel/read edit-session IPC channels with token-free renderer DTOs; render a `CompletionGateResult` DTO; keep UI buttons as intent only; prove renderer operations cannot pass `leaseToken`; prove live agent done -> gate result -> no legacy write bypass. |
+
+The completion gate checks planned state, but it must not require
+`pending.total === 0`. Planned changes are expected after an edit session.
+Gate pass means pending changes are foldable and validation has no blocking
+finding. Warning findings and destructive-but-valid changes may fold, but the
+DTO must surface warning/risk details. `pending.total === 0` maps to
+`nothing_to_fold`, not failure. Force fold is an explicit human action through
+`executeOperation("scryer.plan.fold", ...)`, not an agent-controlled override.
 
 ## Out Of Scope Decision
 
@@ -1010,16 +1093,13 @@ implementation, or reserve dual-runtime seams in the operation catalog,
 state-store, validators, schemas, error mapper, or adapters. The runtime engine
 for this work set is Native TypeScript/Node only.
 
-If a future slice needs compatibility with old Orca or Scryer model files, it
-must use an explicit import path outside normal engine reads. Normal
-`model.read` and `readView(...)` should continue to reject incompatible model
-versions rather than silently converting files.
-The failure should be a structured `incompatible_model` domain error with the
-detected version, expected version, and a recommended action pointing to
-explicit import or migration. It must not modify the model file, write
-baseline state, write planned or committed state, or create compatibility
-sidecars. A future import command may perform best-effort mapping and report
-losses, but that command is a separate design topic outside this operation
+This work set does not plan compatibility with old Orca or Scryer model files.
+Normal `model.read` and `readView(...)` reject incompatible model versions and
+unknown fields rather than silently converting files. The failure is a
+structured `incompatible_model` domain error with detected/expected version or
+unknown-field details. It must not modify the model file, write baseline state,
+write planned or committed state, create compatibility sidecars, or recommend a
+normal-runtime migration fallback.
 migration set.
 
 ## Safe Broad Operation Migration Decision
@@ -1101,12 +1181,14 @@ include these focused tests:
 
 - `ArchitectureViewAdapter.readView(...)` contract tests: it calls the engine
   read surface with a valid selector, maps engine read payloads into a
-  UI-specific view DTO, preserves stable ids and references, exposes
-  renderer-needed data, and does not return raw `ScryModel` as the renderer
+  UI-specific `ArchitectureViewDto`, preserves stable ids and references,
+  exposes renderer-needed data, uses `links` rather than legacy `edges`, and
+  does not return raw `ScryModel` or legacy `C4ModelData` as the renderer
   contract.
 - View-state separation tests: selected item, expanded ids, workspace view,
-  diagram focus, layout positions, viewport, diff glow state, and flow display
-  state live in Orca UI/view state or derived DTO/cache, not in
+  diagram focus, layout positions, viewport, diff glow state, undo/redo stack,
+  form drafts, and agent runtime state live in Orca UI/view state or derived
+  DTO/cache, not in
   `.scryer/model.scry`. Changing these view-only values must not call
   `executeOperation(...)`, state-store, or model-store writes.
 - UI write-intent tests: representative add, update, move, delete, link, source,
@@ -1118,18 +1200,29 @@ include these focused tests:
   model-store semantic write helpers, direct filesystem writes, or `mcp-tools`
   semantic helpers. Enforce this with explicit unit tests, dependency tests, or
   lint/no-restricted-import rules where practical.
+- Closed-schema tests: normal Scryer runtime rejects unknown fields in
+  `model.scry` / `planned.scry`, including legacy `flows`, `scenarios`,
+  `edges`, `refPositions`, `startingLevel`, renderer `nodes[*].data`,
+  `nodes[*].type`, `links[*].source`, and `links[*].target`. Errors aggregate
+  field paths in `incompatible_model.details.fields`.
+- Removed-flow tests: Architecture renderer has no `flows` mode, does not import
+  `FlowScriptView` for normal Architecture UI, and does not read or write
+  `flows` / `scenarios`.
 - IPC bridge tests: renderer-to-main Scryer calls use catalog operation names
   and standard engine result envelopes. IPC handlers may translate transport
   details, but they must not define independent Scryer result shapes or own
-  validation/failure semantics.
+  validation/failure semantics. Renderer-facing IPC must not expose edit-lease
+  tokens or accept `leaseToken` from renderer operation calls; trusted main
+  process code resolves any active token before calling the engine.
 - Renderer DTO tests: renderer components render from DTO fields, not domain
   model internals; they preserve UI state across compatible refetches, clear
   stale selections when the target id disappears, and display engine warnings
   and domain errors without mutating model state.
-- Agent-run UI tests: Scryer agent actions use the Scryer Agent Run Bridge and
+- Agent-run UI tests: Scryer agent actions use `ScryerEditSessionController` and
   Orca runtime adapter/mock, reflect model edit lease state, block conflicting
-  writes while a lease is active, and clean up UI lease state on completion,
-  cancellation, or crash.
+  writes while a lease is active, expose only token-free lease status to
+  renderer code, and clean up UI lease state on completion, cancellation, or
+  crash.
 - Focused end-to-end smoke tests: opening an architecture view reads through
   `readView(...)`, performing a representative UI write crosses
   `executeOperation(...)`, the UI refreshes through `recommendedNextReads`, and
@@ -1379,7 +1472,7 @@ Canonical public error codes:
 | `incompatible_model` | Model data cannot be treated as Scryer 0.3 state. |
 | `io_error` | Required file or project IO failed. |
 | `lock_busy` | Required state lock cannot be acquired. |
-| `lease_required` | Write requires an active edit lease, or supplied lease token is invalid. |
+| `lease_required` | A write is blocked because an active edit lease exists and trusted operation context lacks the matching internal lease token. |
 | `operation_not_found` | Operation id is not registered in the runtime catalog. |
 | `internal_error` | Engine contract violation or unexpected exception. |
 | `not_found` | Requested project, node, link, group, responsibility, property, source entry, boundary, rule topic, or agent run does not exist. |
@@ -1541,28 +1634,30 @@ does not drift back into UI, IPC, CLI, or compatibility shims.
 | Engine seam | `src/main/scryer/engine/index.ts`, `catalog.ts`, `pipeline.ts`, `state-store.ts` | Own `executeOperation(...)`, `readView(...)`, catalog policy, result envelopes, state commits, and contract validation. |
 | IPC | `src/main/ipc/architecture.ts` | Keep existing channels where product compatibility requires them, but route migrated reads/writes through `readView(...)` or `executeOperation(...)`. Do not import legacy semantic helpers for cataloged operations. |
 | CLI | `src/cli/handlers/scryer.ts`, `src/cli/specs/scryer.ts` | Normalize flags/payloads into catalog input and format `ScryerOperationResult`; do not define separate command semantics. |
-| Legacy storage | `src/main/scryer/model-store.ts`, `src/main/scryer/model-store-core.ts` | Temporary scaffolding only for not-yet-migrated paths and explicit import/compatibility needs. No new semantic behavior after an operation is cataloged. |
+| Legacy storage | `src/main/scryer/model-store.ts`, `src/main/scryer/model-store-core.ts` | Not part of normal Scryer 0.3 Architecture runtime after #28. No new semantic behavior after an operation is cataloged; normal Architecture renderer must not call these paths. |
 | Legacy MCP shim | `src/main/scryer/mcp-tools.ts` | Thin compatibility adapter or removable shim. It may normalize old entrypoints into engine operations; it must not remain a parallel Scryer MCP product path. |
 | Legacy drift/sync helpers | `src/main/scryer/drift.ts`, `src/main/scryer/sync.ts` | Move drift detection, reconcile, and health semantics into engine drift/health modules; retain only adapter glue where needed. |
-| Shared legacy types | `src/shared/scryer/model-types.ts` | Compatibility DTOs only; Native Scryer Engine modules should use canonical engine model types. |
-| Renderer Architecture UI | `src/renderer/src/components/architecture/**` | Render DTOs and express user intent. Do not mutate `ScryModel`, sourceMap, groups, links, fold state, or drift state directly. |
+| Shared legacy types | `src/shared/scryer/model-types.ts` | Not part of the Architecture renderer after #28 hard cutover. Keep only if unrelated legacy tools still require it; normal Scryer runtime must not depend on it. |
+| Renderer Architecture UI | `src/renderer/src/components/architecture/**` | Render `ArchitectureViewDto` and express user intent. Do not import `C4ModelData`, `C4Node`, `C4Edge`, `C4NodeData`, mutate `ScryModel`, sourceMap, groups, links, fold state, or drift state directly. |
 | Renderer state | `src/renderer/src/store/slices/architecture.ts` and workspace session files | Own selected ids, expanded ids, layout/view state, tabs, and session UI data only. Semantic writes cross IPC into the engine. |
 
 Operation-level IPC target mapping:
 
 | Current IPC channel | Target status | Engine target |
 | --- | --- | --- |
-| `architecture:executeScryerOperation` | Keep as the primary migrated IPC seam. | Passes canonical operation id/input to `executeOperation(...)` and returns `ScryerOperationResult`. |
-| `architecture:readModel` | Keep temporarily for renderer compatibility, but implement through `readView(...)` once the renderer consumes the architecture view DTO. | `readView({ mode: "overview" | "subtree", ... })`; no direct model-store read for cataloged read behavior. |
-| `architecture:readModelDocument` | Keep only for document/editor compatibility. | Use `readView(...)` plus adapter-owned document metadata; do not expose raw `ScryModel` as the long-term renderer contract. |
-| `architecture:writeModel` | Restrict to generation/import/repair compatibility. | `scryer.model.set`; ordinary UI edits must not use this channel. |
-| `architecture:writeModelDocument` | Restrict to document compatibility and raw replacement flows. | `scryer.model.set` with base revision checks handled by adapter/state-store policy. |
+| `architecture:readArchitectureView` | Add as the primary Architecture renderer read seam. | Calls `ArchitectureViewAdapter.readView(...)`, which calls engine `readView(...)` and returns `ArchitectureViewDto`. |
+| `architecture:executeArchitectureIntent` | Add as the primary Architecture renderer write-intent seam where useful. | Normalizes UI intent into catalog operation input and calls `executeOperation(...)`; may return operation result plus recommended `readArchitectureView` request. |
+| `architecture:executeScryerOperation` | Keep as the primary migrated IPC seam. | Passes canonical operation id/input to `executeOperation(...)` and returns `ScryerOperationResult`; renderer input must not include `leaseToken`. |
+| `architecture:readModel` | Remove from normal Architecture renderer path. | Legacy/non-Architecture callers only if still needed; normal Architecture reads use `readArchitectureView`. |
+| `architecture:readModelDocument` | Remove from normal Architecture renderer path. | Legacy/non-Architecture callers only if still needed; normal Architecture reads must not expose `ScryModel` or `C4ModelData`. |
+| `architecture:writeModel` | Remove from normal Architecture renderer path. | Raw model replacement is not a normal edit path. |
+| `architecture:writeModelDocument` | Remove from normal Architecture renderer path. | Raw document replacement is not a normal edit path; Architecture UI writes use intent/operation calls. |
 | `architecture:patchNodeData` | Migrate to semantic node patching. | `scryer.node.update`. |
 | `architecture:checkDrift` | Migrate. | `scryer.drift.get`. |
 | `architecture:markSynced` | Migrate. | `scryer.drift.reconcile`. |
-| `architecture:beginSync` | Migrate when agent-run bridge lands. | Scryer Agent Run Bridge plus lease setup; not a model-store semantic write. |
-| `architecture:cancelSync` | Migrate when agent-run bridge lands. | Scryer Agent Run Bridge cancellation plus lease cleanup. |
-| `architecture:finishSync` | Migrate when agent-run bridge lands. | Scryer Agent Run Bridge completion path plus `scryer.plan.fold` where selected. |
+| `architecture:beginSync` | Migrate when `ScryerEditSessionController` lands. | Controller begin path plus lease setup; renderer receives token-free session identity/status only. |
+| `architecture:cancelSync` | Migrate when `ScryerEditSessionController` lands. | Controller cancellation path plus lease cleanup; renderer does not supply lease token. |
+| `architecture:finishSync` | Migrate when `ScryerEditSessionController` lands. | Controller completion gate plus `scryer.plan.fold` only where selected and allowed; controller supplies any matching lease token internally. |
 | `architecture:callTool` | Temporary compatibility shim only. | Normalize old tool names into catalog operations such as read/query, node/link/group/source/intent, drift/health, and generation; remove semantic fallback as operations migrate. |
 | `architecture:prepareInitialModelPrompt` | Keep as prompt adapter until replaced by generation flow. | May use `readView(...)` for context; must not write model files. |
 | `architecture:prepareNodeFillPrompt` | Keep as prompt adapter until `container.fill` UI is migrated. | `readView({ mode: "subtree", node })` for context; eventual write path is `scryer.container.fill`. |
@@ -1612,7 +1707,7 @@ Live test fixture design:
 | Seeded project location | Add a small seeded Scryer project under `tests/e2e/fixtures/scryer-project/` or create it through a helper in `tests/e2e/helpers/scryer-project.ts`. It must include reviewable `.scryer/model.scry`, `.scryer/planned.scry`, and only the sidecars needed by the scenario. |
 | Project isolation | Each test copies the seeded project into the per-test repo/user-data location before launch. Tests must not mutate the shared fixture directory. |
 | Engine seam spy | Add a test-only main-process hook or IPC spy that records calls to `readView(...)` and `executeOperation(...)` by operation id, request id, and normalized input. The spy must observe the real app path; it must not replace the engine implementation for live tests unless the test is explicitly an adapter unit test. |
-| Legacy bypass proof | Add spies or restricted-import assertions for `model-store`, `mcp-tools`, and direct `.scryer/*` filesystem writes on migrated flows. A cataloged operation test fails if the legacy path is invoked after, before, or instead of the engine seam. |
+| Legacy bypass proof | Add spies or restricted-import assertions for `model-store`, `mcp-tools`, and direct `.scryer/*` filesystem writes on migrated workflows. A cataloged operation test fails if the legacy path is invoked after, before, or instead of the engine seam. |
 | DOM proof | Assertions target visible labels, tree rows, selected state, warning/error surfaces, and refreshed model content. Store snapshots are supporting evidence only. |
 | Model-file proof | After semantic edits, read `.scryer` files from the isolated test project and assert engine-owned state effects. After view-only interactions, assert `.scryer/model.scry` is byte-for-byte unchanged. |
 | Headless default | Run overview, subtree, simple edit, error rendering, and no-legacy-bypass specs headless by default in `pnpm run test:e2e`. |

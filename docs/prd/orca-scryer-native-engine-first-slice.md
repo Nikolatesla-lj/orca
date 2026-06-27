@@ -53,7 +53,7 @@ Post-implementation verification on 2026-06-23 restored the full Vitest baseline
 - `corepack pnpm test`: 2029 test files passed, 20032 tests passed, 5 files skipped, 63 tests skipped.
 - `corepack pnpm run tc`: passed.
 
-Remaining migration work is outside this first slice: Architecture UI intent mapping to the engine seam, full agent-run bridge lifecycle, completion gate UI/product state, and broader upstream operation coverage.
+Remaining migration work is outside this first slice: Architecture UI intent mapping to the engine seam, full `ScryerEditSessionController` lifecycle, completion gate UI/product state, and broader upstream operation coverage.
 
 ## User Stories
 
@@ -112,7 +112,7 @@ Remaining migration work is outside this first slice: Architecture UI intent map
 - Operation implementation files own only Scryer domain semantics.
 - `ScryerStateStore` is an internal seam used by the operation pipeline. It hides `.scryer` paths, planned fallback, committed writes, atomic IO, baseline/history/anchor/build-edge effects, and lock ownership.
 - `ScryerValidator` is an internal seam that classifies parse/version incompatibility, input errors, blocking structural errors, non-blocking warnings, and post-fold committed validation.
-- `ScryerAgentRunBridge` owns Orca runtime integration for model-edit sessions, including Model Edit Lease lifecycle, completion gate execution, cancellation, crash cleanup, and visible handoff.
+- `ScryerEditSessionController` owns Scryer model-edit session safety over Orca runtime integration, including Model Edit Lease lifecycle, completion gate execution, cancellation, crash cleanup, and visible handoff mapping.
 - `ArchitectureViewAdapter` keeps renderer state shallow: it maps `ScryModel` to view data and maps UI intents to engine operations without becoming a second model semantics owner.
 - Draft edits write planned state only.
 - Fold operations reconcile planned work into committed state and update baseline/history side effects.

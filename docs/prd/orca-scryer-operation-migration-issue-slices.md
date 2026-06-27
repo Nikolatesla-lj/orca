@@ -1,12 +1,12 @@
 # Orca Scryer Operation Migration Issue Slices
 
-These are implementation-ready issue drafts for the Native Scryer Engine
-operation migration work set. They are generated from the current decision map,
-operation migration PRD, engine catalog foundation PRD, and ADRs. They have not
-been published to GitHub yet.
+These were implementation-ready issue drafts for the Native Scryer Engine
+operation migration work set. The operation migration and follow-up #26-#29
+product-integration slices have since been implemented and verified; this file
+is retained as historical planning context, not as a fresh backlog.
 
-When publishing, create the issues in dependency order so "Blocked by" can be
-rewritten from slice names to real issue links.
+Do not publish these slices as new unchecked issues without first revalidating
+them against the current decision map and code.
 
 ## Parent
 
@@ -783,6 +783,8 @@ state-store transaction.
 
 ## Slice 8: Retire Legacy Adapter Semantics Behind Engine Seams
 
+Status: completed through #26-#28 product-integration work.
+
 ### Parent
 
 - https://github.com/Nikolatesla-lj/orca/issues/23
@@ -846,32 +848,52 @@ through `readView(...)` or `executeOperation(...)`.
     generation/import/repair compatibility via `scryer.model.set`.
   - `architecture:callTool` as a temporary compatibility shim that normalizes
     old tool names into catalog operations, with no semantic fallback.
-- Introduce or update the Architecture view adapter so renderer code consumes a
-  UI-specific DTO instead of raw `ScryModel`.
+- Introduce the Architecture view adapter as a hard cutover so renderer code
+  consumes `ArchitectureViewDto` instead of raw `ScryModel` or legacy
+  `C4ModelData`. The DTO and renderer data fields follow upstream Scryer names:
+  `nodes`, `links`, `groups`, `sourceMap`, and `boundaries`; do not keep
+  `edges` as the architecture data field.
 - Keep selected ids, expanded ids, layout positions, workspace view, diff glow,
   tabs, and session UI state outside `.scryer/model.scry`.
+- Remove normal Architecture `flows` / `scenarios` support. Upstream Scryer 0.3
+  has no Architecture flow model; do not keep `FlowScriptView` or flow
+  extension state in the normal product path.
+- Tighten normal Scryer runtime to a closed schema before the renderer cutover.
+  Unknown fields in `model.scry` or `planned.scry` reject with structured
+  `incompatible_model` details listing all unknown field paths.
 - Demote `mcp-tools.ts` to a compatibility shim or remove semantic ownership
   for operations already cataloged.
-- Move Scryer agent-run UI semantics behind a thin Scryer Agent Run Bridge over
+- Move Scryer agent-run UI semantics behind `ScryerEditSessionController` over
   Orca runtime; do not duplicate generic process launch or terminal state.
+- Keep Model Edit Lease tokens inside trusted main-process edit-session
+  context. Renderer/preload DTOs and renderer operation inputs expose only
+  token-free session status and completion-gate results.
 - Add no-restricted-import tests or architecture ownership tests for migrated
   adapter files.
 
 ### Acceptance criteria
 
-- [ ] UI, IPC, CLI, and agent adapter tests prove migrated reads cross
+- [x] UI, IPC, CLI, and agent adapter tests prove migrated reads cross
   `readView(...)`.
-- [ ] UI, IPC, CLI, and agent adapter tests prove migrated writes cross
+- [x] Architecture renderer code no longer imports `C4ModelData`, `C4Node`,
+  `C4Edge`, `C4NodeData`, `parseModelData`, or `serializeModelData`.
+- [x] Architecture renderer normal reads use `architecture:readArchitectureView`;
+  normal writes use intent/operation calls, not `readModelDocument` or
+  `writeModelDocument`.
+- [x] Closed-schema tests reject unknown top-level and core nested fields,
+  including `flows`, `scenarios`, `edges`, `nodes[*].type`, `nodes[*].data`,
+  `links[*].source`, and `links[*].target`.
+- [x] UI, IPC, CLI, and agent adapter tests prove migrated writes cross
   `executeOperation(...)`.
-- [ ] Renderer DTO tests prove components render from DTO fields rather than
+- [x] Renderer DTO tests prove components render from DTO fields rather than
   domain model internals.
-- [ ] View-only state changes do not write `.scryer/model.scry`.
-- [ ] Semantic UI actions handle success payloads, `meta.warnings`,
+- [x] View-only state changes do not write `.scryer/model.scry`.
+- [x] Semantic UI actions handle success payloads, `meta.warnings`,
   `recommendedNextReads`, domain errors, validation errors, and unexpected
   error envelopes.
-- [ ] Legacy model-store and `mcp-tools` semantic paths are gone for cataloged
+- [x] Legacy model-store and `mcp-tools` semantic paths are gone for cataloged
   operations or reduced to pure shims.
-- [ ] A cataloged operation failure never falls back to the old implementation.
+- [x] A cataloged operation failure never falls back to the old implementation.
 
 ### Blocked by
 
@@ -885,6 +907,8 @@ through `readView(...)` or `executeOperation(...)`.
 ---
 
 ## Slice 9: Prove Broad Migration Readiness With Parity, Ownership, And Live UI Gates
+
+Status: completed through #29 live UI coverage and operation readiness gates.
 
 ### Parent
 
@@ -956,21 +980,21 @@ it proves the migrated semantics are owned in the right modules.
 
 ### Acceptance criteria
 
-- [ ] Every migrated operation family has at least one upstream parity or golden
+- [x] Every migrated operation family has at least one upstream parity or golden
   behavior fixture.
-- [ ] Catalog tests fail if any migrated operation lacks schemas, declared
+- [x] Catalog tests fail if any migrated operation lacks schemas, declared
   errors, policy, risk, warning validation, success validation, or upstream
   anchors.
-- [ ] Ownership tests fail if operation files own file IO, locks, source routing,
+- [x] Ownership tests fail if operation files own file IO, locks, source routing,
   id scanning, fold cleanup, result envelopes, or transport formatting.
-- [ ] Adapter tests fail if UI/IPC/CLI/agent callers bypass
+- [x] Adapter tests fail if UI/IPC/CLI/agent callers bypass
   `executeOperation(...)` or `readView(...)` for cataloged operations.
-- [ ] No legacy fallback path exists for a cataloged operation.
-- [ ] Live UI tests open a seeded Scryer project, read through `readView(...)`,
+- [x] No legacy fallback path exists for a cataloged operation.
+- [x] Live UI tests open a seeded Scryer project, read through `readView(...)`,
   perform a representative semantic edit through visible controls, refresh via
   `recommendedNextReads`, render a domain error, and prove no legacy semantic
   write path was invoked.
-- [ ] Headless live specs cover ordinary overview/subtree/edit/error flows;
+- [x] Headless live specs cover ordinary overview/subtree/edit/error flows;
   headful specs are reserved only for real focus, drag, pointer capture, native
   menu, or OS-window behavior.
 

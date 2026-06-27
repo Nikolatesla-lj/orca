@@ -2,13 +2,18 @@
 
 生成时间：2026-05-11
 
-本文用 UML 风格对比 Scryer 原始实现和当前 Orca 迁移实现，重点不是看某个按钮是否存在，而是看“人类操作前端 -> 前端状态变化 -> 后端持久化 -> agent/MCP 外部改写 -> 前端重新理解状态”的完整链路。
+Document boundary: this is a linked UML/gap-analysis asset. It compares product
+flows and implementation gaps; it is not the decision map, not an ADR, and not a
+glossary. The compact planning authority is
+[orca-scryer-decision-map.md](./orca-scryer-decision-map.md).
+
+本文用 UML 风格对比 Scryer 原始实现和当前 Orca 迁移实现，重点不是看某个按钮是否存在，而是看“人类操作前端 -> 前端状态变化 -> 后端持久化 -> agent/Scryer operation 外部改写 -> 前端重新理解状态”的完整链路。
 
 ## 结论
 
-当前 Orca 迁移已经不是空壳：ReactFlow 画布、节点/边编辑、flow/group 编辑、source map、drift、MCP bridge、sync/cancel/finish 都走了真实 `.scryer/model.scry` 和 Electron IPC。
+当前 Orca 迁移已有真实链路：ReactFlow 画布、节点/边编辑、group 编辑、source map、drift、Native Scryer Engine operation layer、sync/cancel/finish 都走了真实 `.scryer/model.scry` 和 Electron IPC。#41-#49 已完成 broad operation migration；#26-#29 产品集成固化也已完成到 Architecture View Adapter hard cutover 和 live UI coverage。旧 flow 功能是 Orca 历史扩展，不属于 upstream Scryer 0.3 Architecture 模型，已在 #28 hard cutover 中从正常产品路径移除。
 
-本轮已补上此前最大的结构性差距：Orca 现在有 `useArchitectureModelController`，把模型读取、写入、文件监听、外部变更 diff、高亮、follow 外部变更、撤销/重做、drift、sync/cancel/finish 和 Orca agent 完成状态监听集中到一个前端控制层。它不是照搬 Scryer 的 Tauri/Rust 链路，而是把同一套状态语义接进 Orca 原生 tab/store/IPC/agent terminal。
+当前关键结构是 `useArchitectureModelController`：它把模型读取、写入、文件监听、外部变更 diff、高亮、follow 外部变更、撤销/重做、drift、sync/cancel/finish 和 Orca agent 完成状态监听集中到一个前端控制层，并接入 Orca 原生 tab/store/IPC/agent terminal。
 
 仍需注意：当前目标是功能链和人类交互链对齐，不是逐像素复刻。比如 group bubble 已按成员位置真实计算并渲染 overlay，但没有引入 `bubblesets-js` 做有机曲线；AI provider 仍按要求走 Orca agent，不迁移 Scryer 独立 provider。
 
@@ -56,8 +61,8 @@ Scryer 的关键点：
 
 - UI 组件只负责交互，模型读写集中进 `useModelStorage`。
 - `useModelStorage` 用 `lastKnownDisk` 避免自己写文件后又重复 reload。
-- 外部 MCP/agent 改写文件后，watcher 触发 reload，再计算 changed nodes、旧值 diff、父层级变化和 follow AI 导航。
-- `useHistory` 捕获同一份模型状态，所以 nodes、edges、sourceMap、groups、flows 可以一起 undo/redo。
+- 外部 Scryer operation/agent 改写文件后，watcher 触发 reload，再计算 changed nodes、before/after diff、父层级变化和 follow AI 导航。
+- `useHistory` 捕获同一份模型状态，所以 nodes、links、sourceMap、boundaries、groups 可以一起 undo/redo。
 - sync 不是只显示状态条，后端 agent runtime 会发 `agent-event`，前端根据 completed/cancelled/failed 自动 mark synced、reload model、展示 diff。
 
 ## 2. 当前 Orca 迁移链路
@@ -67,24 +72,23 @@ flowchart LR
   User[User interaction] --> Panel[ArchitecturePanel]
   Panel --> Canvas[ArchitectureCanvas]
   Panel --> Context[ArchitectureContextPanel]
-  Panel --> Flows[FlowScriptView]
   Panel --> Groups[GroupsView]
   Panel --> Sync[SyncBar]
 
   Canvas --> Persist[persist / applyModelChange]
   Context --> Persist
-  Flows --> Persist
   Groups --> Persist
 
   Persist --> Preload[window.api.architecture]
   Preload --> IPC[Electron IPC architecture:*]
-  IPC --> Store[main/scryer/model-store.ts]
+  IPC --> Store[main/scryer/model-store.ts<br/>legacy compatibility / file plumbing]
   Store --> ModelFile[.scryer/model.scry]
 
   IPC --> Drift[main/scryer/drift.ts]
-  IPC --> Tools[main/scryer/mcp-tools.ts]
+  IPC --> Ops[Native Scryer Engine<br/>executeOperation / readView]
   IPC --> SyncMain[main/scryer/sync.ts]
-  Tools --> Store
+  Ops --> EngineStore[engine/state-store.ts]
+  EngineStore --> ModelFile
   SyncMain --> Snapshot[model.presync.scry + .implementing]
 
   IPC --> Watch[fs.watch .scryer]
@@ -95,7 +99,7 @@ flowchart LR
   Sync --> BeginSync[beginSync]
   BeginSync --> Prompt[generated sync prompt]
   Prompt --> OrcaAgent[Orca agent terminal tab]
-  OrcaAgent --> Tools
+  OrcaAgent --> Ops
   Sync --> Finish[finishSync]
   Sync --> Cancel[cancelSync restores snapshot]
 ```
@@ -103,17 +107,44 @@ flowchart LR
 Orca 当前做对的地方：
 
 - 没有迁移 Scryer Tauri 外壳，而是接入 Orca 原生 tab、preload、Electron IPC、store、agent terminal。
-- MCP bridge、drift、model-store、sync snapshot 都是真实 TypeScript/Node 逻辑，不是 mock。
+- #41-#49 已把 broad operation migration 收敛进 Native Scryer Operation Catalog、typed operation contracts、pipeline、state-store、planner/reporter modules 和 parity/ownership tests。
 - `beginSync` 写 pre-sync snapshot 和 `.implementing`，所以切换 tab、重启后还能恢复 sync 中状态。
 - source map 直接打开 Orca editor，不再走 Scryer 的独立 `open_in_editor`。
 - `useArchitectureModelController` 已集中管理模型状态、外部变更 diff/follow、undo/redo 和 sync 生命周期。
 - sync 已接 Orca agent 状态：新开的 agent tab 报告非中断 `done` 时自动 `finishSync`，更新 baseline 并清除 `.implementing`。
 
+目标 deep module 链路：
+
+```mermaid
+flowchart LR
+  UI[Architecture UI] --> ViewAdapter[Architecture View Adapter]
+  CLI[orca scryer CLI] --> CLIAdapter[CLI Adapter]
+  IPC[Electron IPC] --> IPCAdapter[IPC Adapter]
+  Agent[Codex / Claude Code] --> CLIAdapter
+
+  ViewAdapter --> Engine[ScryerEngine<br/>executeOperation / readView]
+  CLIAdapter --> Engine
+  IPCAdapter --> Engine
+
+  Engine --> Pipeline[Operation Pipeline]
+  Pipeline --> Catalog[Operation Catalog]
+  Pipeline --> StateStore[Scryer State Store]
+  Pipeline --> Validator[Scryer Validator]
+  Pipeline --> EditSession[ScryerEditSessionController]
+
+  StateStore --> Files[.scryer model / planned / history / anchors]
+  AgentBridge --> OrcaRuntime[Orca runtime / terminal state]
+  ViewAdapter --> ViewState[selection / layout / render cache / flow extension]
+```
+
+这个目标链路的关键不是多加文件，而是把 seam 放对：UI、CLI、IPC、agent 都是 adapter；`ScryerEngine` 是语义 Module；pipeline、state store、validator、`ScryerEditSessionController` 是它的深模块或专用 workflow seam。删除 adapter 不应该删除 Scryer 语义；删除 engine 才会让复杂性重新散落到多个调用者。
+
 主要剩余差距：
 
+- PR 稳定化：当前需要把 dirty worktree 按 #28 hard cutover、#29 live UI coverage、docs/status cleanup 和相邻历史改动拆清楚，再做 final review 和人工验收。
+- #26-#29 已完成：legacy semantic owners 已降级为 engine-backed shim 或清理出 cataloged-operation 语义路径；`ScryerEditSessionController` + Completion Gate 已固化；Architecture renderer 已消费 `ArchitectureViewDto`；live UI coverage 已扩大到稳定 product path 的真实可见控件和 `.scryer` 文件效果，group nesting / bulk group restore 保持 operation-backed setup 加文件效果断言。
 - group bubble 目前是按节点范围计算的 ReactFlow overlay，未做 `bubblesets-js` 的有机曲线形状。
 - Scryer 的独立 AI advisor/provider 按用户要求不迁移；如果以后要“AI 填充节点”，应该接 Orca agent 能力，而不是新增 provider 设置。
-- 外部 stdio MCP server 仍可后置；当前 Orca 内置 MCP bridge 已能真实读写模型。
 
 ## 3. 编辑保存时序对比
 
@@ -135,24 +166,24 @@ sequenceDiagram
   SMS->>Tauri: write_model
   Tauri->>SFile: atomic write
 
-  User->>OUI: edit node / edge / flow / group
-  OUI->>OUI: persist next C4ModelData
-  OUI->>IPC: architecture:writeModel
-  IPC->>OStore: writeModel
-  OStore->>OFile: atomic write
+  User->>OUI: edit node / link / group
+  OUI->>OUI: update view/session state
+  OUI->>IPC: execute operation intent
+  IPC->>Engine: executeOperation / readView
+  Engine->>OFile: atomic planned/committed write
 ```
 
 Orca 已补齐的逻辑：
 
-- `persist/applyModelChange/loadModel/watchModel` 已抽成 `useArchitectureModelController`。
-- 节点、边、flow、group、source map 修改都通过 controller 写入 `.scryer/model.scry`。
-- controller 维护 `lastKnownModelFingerprint`、`changedNodeIds`、`nodeDiffs`、follow external changes、undo/redo、sync terminal tab 和 agent done 自动 finish。
+- `persist/applyModelChange/loadModel/watchModel` 已收敛为 renderer view/session controller 逻辑。
+- #28 已把节点、links、groups、source map、boundaries 等语义写入改为通过 view adapter / engine seam 的 intent operation；旧 `flows`/`scenarios` 已从正常产品路径移除。
+- controller 维护 view/session state、external changes、sync terminal tab 和 agent done 自动 finish；语义状态以 `ArchitectureViewDto` 和 `.scryer` planned/committed state 为准。
 
-## 4. 外部 MCP/agent 写入刷新对比
+## 4. 外部 Scryer operation/agent 写入刷新对比
 
 ```mermaid
 sequenceDiagram
-  participant MCP as MCP / agent
+  participant STool as Scryer upstream tool / agent
   participant SFile as Scryer model file
   participant SWatch as Scryer watcher
   participant SMS as useModelStorage
@@ -160,8 +191,9 @@ sequenceDiagram
   participant OFile as Orca model file
   participant OWatch as architecture:modelChanged
   participant OPanel as ArchitecturePanel
+  participant OTool as Orca CLI/native operation
 
-  MCP->>SFile: write updated model
+  STool->>SFile: write updated model
   SWatch->>SMS: model-changed
   SMS->>SMS: compare raw with lastKnownDisk
   SMS->>SMS: compute changedNodeIds + nodeDiffs
@@ -169,13 +201,13 @@ sequenceDiagram
   SMS->>SMS: followAI navigate to changed level
   SMS->>SCanvas: flash changed nodes + show before/after diff
 
-  MCP->>OFile: write updated model through mcp-tools
+  OTool->>OFile: write updated model through native operation layer
   OWatch->>OPanel: architecture:modelChanged
   OPanel->>OPanel: loadModel replaces model
   OPanel->>OPanel: keep selected edge if still present
 ```
 
-这里已从“文件级 reload”推进到“模型级理解”：Orca 会比较前后模型，生成 changed node、高亮、旧值 diff，并在 follow external changes 打开时跳到变化节点所在层级。live e2e 已覆盖 MCP 写节点后 UI 自动显示 changed glow 和 before/after diff。
+这里已从“文件级 reload”推进到“模型级理解”：Orca 会比较前后模型，生成 changed node、高亮、before/after diff，并在 follow external changes 打开时跳到变化节点所在层级。live e2e 已覆盖工具层写节点后 UI 自动显示 changed glow 和 before/after diff。
 
 ## 5. Sync/drift 时序对比
 
@@ -189,7 +221,7 @@ sequenceDiagram
   participant OSync as Orca SyncBar
   participant OMain as main/scryer/sync.ts
   participant OAgent as Orca agent terminal
-  participant OTools as Orca MCP bridge
+  participant OTools as Orca CLI/native Scryer operations
 
   User->>SSync: Sync
   SSync->>SBack: start_agent_session
@@ -203,12 +235,12 @@ sequenceDiagram
   OMain->>OMain: write presync snapshot + .implementing
   OMain-->>OSync: prompt + drift
   OSync->>OAgent: launch Orca terminal with prompt
-  OAgent->>OTools: read/write model through bridge
+  OAgent->>OTools: read/write model through native operation layer
   User->>OSync: Finish or Cancel
   OSync->>OMain: finishSync or cancelSync
 ```
 
-Orca 的差异不是错误，而是适配 Orca agent 体系后的自然结果：agent 生命周期归 Orca terminal 管，不归 Scryer runtime 管。本轮已对齐关键闭环：架构 tab 记录自己启动的 agent terminal tab，并监听 Orca `agentStatusByPaneKey`；该 tab 报告非中断 `done` 时自动 `finishSync`。用户仍可在异常或中断场景下手动 finish/cancel。
+Orca 的差异来自 agent 体系归属：agent 生命周期归 Orca terminal 管，不归 Scryer runtime 管。关键闭环是架构 tab 记录自己启动的 agent terminal tab，并监听 Orca `agentStatusByPaneKey`；该 tab 报告非中断 `done` 时自动 `finishSync`。用户仍可在异常或中断场景下手动 finish/cancel。
 
 ## 6. 模型状态机
 
@@ -222,7 +254,7 @@ stateDiagram-v2
   Drifted --> Synced: markSynced
   Loaded --> SyncRunning: beginSync
   Drifted --> SyncRunning: beginSync
-  SyncRunning --> ExternalChanged: agent/MCP writes model
+  SyncRunning --> ExternalChanged: agent/tool writes model
   ExternalChanged --> SyncRunning: watcher reload
   SyncRunning --> Synced: finishSync
   SyncRunning --> Loaded: cancelSync restores presync snapshot
@@ -230,7 +262,7 @@ stateDiagram-v2
   SyncError --> Loaded: dismiss error
 ```
 
-Scryer 已经把 `ExternalChanged` 的前端表现做得更细：高亮、diff、自动跳转、保留布局。Orca 当前只完成了文件级 reload。
+Scryer 已经把 `ExternalChanged` 的前端表现做得更细：高亮、diff、自动跳转、保留布局。Orca 现在已有文件 reload、changed glow、before/after diff 和 follow external changes 的核心链路；像素级动效和独立 AI fill 体验不属于 #28/#29 完成条件。
 
 ## 7. 差异清单
 
@@ -239,28 +271,26 @@ Scryer 已经把 `ExternalChanged` 的前端表现做得更细：高亮、diff�
 | 模型保存       | `useModelStorage` 集中保存，500ms debounce，跳过 sync 中保存           | `useArchitectureModelController` 集中读写 IPC                 | 已对齐核心链路                                     |
 | 文件监听       | `watch_project` + `model-created/model-changed` + `lastKnownDisk` 去重 | `fs.watch .scryer` + fingerprint 去重 + controller reload     | 已对齐 Orca IPC 链路                               |
 | 外部变更理解   | `changedNodeIds`、`nodeDiffs`、followAI、位置保留                      | changed glow、before/after diff、follow external changes      | 已迁移核心语义                                     |
-| undo/redo      | `useHistory` 捕获完整模型状态                                          | controller 捕获完整 `C4ModelData`                             | 已覆盖 nodes/edges/sourceMap/groups/flows 写入链路 |
+| undo/redo      | `useHistory` 捕获完整模型状态                                          | 旧整份 `C4ModelData` 捕获已不属于正常产品路径                   | 若重新引入，需作为 intent/operation 或 renderer view/session 级策略 |
 | ContextPanel   | 支持 node/edge/group、diff 展示、contract/source map/relationships     | node/edge/group 编辑、diff 展示、contract/source map/关系编辑 | 已迁移主要交互                                     |
-| FlowScriptView | steps、branches、mention、source map、排序                             | steps/branches/mention/source link/排序并持久化               | 已迁移主要交互                                     |
+| FlowScriptView | upstream 0.3 无 Architecture flow 模型                                 | Orca 历史扩展                                                  | #28 正常产品路径移除                              |
 | GroupsView     | dnd、成员、嵌套、canvas groups 模式                                    | dnd、成员、嵌套、multi-select 建组、canvas group overlay      | 已迁移主要交互                                     |
 | SyncBar        | agent-event 自动更新日志、完成后 mark synced/reload/sync_diff          | Orca terminal prompt + finish/cancel + agent done 自动 finish | 已接 Orca agent 状态                               |
 | drift          | Rust 检测 source map 和结构变化                                        | TypeScript 检测 source map 和结构变化                         | 已有真实逻辑，继续扩大 e2e                         |
-| MCP            | 外部 stdio MCP + Scryer runtime                                        | Orca 内置 MCP bridge                                          | 内置 bridge 已真实可用，外部 stdio 可后置          |
+| Scryer Operation Surface | Scryer upstream tool runtime                                 | Orca-native CLI + Native Scryer Engine                         | #41-#49 broad operation migration 和 #26-#29 产品集成固化已完成；剩余是 PR 稳定化 |
 | AI advisor     | Scryer 独立 provider、hints、fill with AI                              | 按要求未迁移                                                  | 不迁移独立 provider；可接 Orca agent 能力          |
 | Tauri shell    | Tauri desktop app                                                      | 按要求未迁移                                                  | 正确舍弃                                           |
 
-## 8. 仅为测试通过的风险点排查
+## 8. 剩余风险
 
-目前没有发现“完全空壳”的核心链路：画布、FlowScriptView、GroupsView、SyncBar、MCP bridge、drift 和 sync snapshot 都有真实读写路径。
+核心链路已有真实读写路径：画布、GroupsView、SyncBar、Native Scryer Engine operation layer、drift 和 sync snapshot。FlowScriptView 属于历史扩展，不再作为 #28/#29 完成目标。
 
-目前仍有几类“不是空壳，但要诚实记录”的差异：
+剩余差异：
 
-1. group bubble 是真实成员范围 overlay，但还不是 `bubblesets-js` 有机曲线。
-2. AI provider 不迁移是明确边界；如果要 AI fill，需要走 Orca agent，而不是 Scryer provider。
-3. 外部 stdio MCP server 未拆出；当前内置 MCP bridge 已覆盖 Orca agent 使用路径。
+1. PR 稳定化：需要把 #28/#29/docs 和相邻历史改动拆成可 review 的变更集。
+2. group bubble 是真实成员范围 overlay，但还不是 `bubblesets-js` 有机曲线。
+3. AI provider 不迁移是明确边界；如果要 AI fill，需要走 Orca agent，而不是 Scryer provider。
 4. 视觉密度和细节仍可能和 Scryer 有差异，但主要交互、状态管理、持久化和 live e2e 已覆盖。
-
-这些不是“假代码”，也不是为了测试通过写的空壳；它们是后续像素级/外部集成级增强项。
 
 ## 9. 第二阶段细粒度迁移清单完成情况
 
@@ -272,10 +302,10 @@ Scryer 已经把 `ExternalChanged` 的前端表现做得更细：高亮、diff�
 
 2. 迁移 Scryer 外部变更 diff 链
    - 记录 `lastKnownDisk`。
-   - watcher reload 时比较旧/新 nodes 和 edges。
+   - watcher reload 时比较 before/after nodes 和 links。
    - 生成 `changedNodeIds` 和 `nodeDiffs`。
-   - Canvas 节点闪烁，ContextPanel 展示旧值/新值。
-   - 状态：已完成核心链。live e2e 已通过 MCP 改节点状态并显示 changed glow 和 diff。
+   - Canvas 节点闪烁，ContextPanel 展示 before/after 值。
+   - 状态：已完成核心链。live e2e 已通过工具层改节点状态并显示 changed glow 和 diff。
 
 3. 迁移 follow AI / follow agent 导航
    - 保留用户开关。
@@ -286,11 +316,11 @@ Scryer 已经把 `ExternalChanged` 的前端表现做得更细：高亮、diff�
 4. 迁移模型 undo/redo
    - 迁移 `useHistory` 思路，但适配 Orca controller。
    - 快捷键需避开 Orca 全局快捷键冲突。
-   - 覆盖 nodes、edges、sourceMap、groups、flows。
-   - 状态：已完成 controller history；live e2e 覆盖 code-level 节点修改撤销/重做。
+   - 目标覆盖 upstream 0.3 `nodes`、`links`、`sourceMap`、`boundaries`、`groups`；`flows`/`scenarios` 不属于 upstream Scryer 0.3 Architecture 模型并已在 #28 正常产品路径中移除。
+   - 状态：#28 hard cutover 已将 renderer 语义写入收敛到 intent/operation；撤销/重做若重新引入，应作为 renderer view/session 层策略或显式 future 工作处理。
 
 5. 补 ContextPanel diff 和 group context
-   - 节点 diff old/new 展示。
+   - 节点 diff before/after 展示。
    - group identity、contract、members 编辑链路对齐 Scryer。
    - 状态：已完成主要交互；live e2e 覆盖 selected group 编辑说明和 contract ask。
 
@@ -305,15 +335,18 @@ Scryer 已经把 `ExternalChanged` 的前端表现做得更细：高亮、diff�
    - 状态：已完成真实成员范围 overlay 和 component 代码层级 rack；未做 `bubblesets-js` 有机曲线。
 
 8. 扩展 live e2e
-   - 人类操作：创建/编辑/撤销/重做节点、边、flow、group。
-   - agent 操作：MCP 写入多层级节点，UI diff/highlight/followAI。
+   - 人类操作：创建/编辑/撤销/重做节点、links、group；flow 若保留，作为 Orca extension 单独验证。
+   - agent 操作：工具层/CLI 写入多层级节点，UI diff/highlight/followAI。
    - sync 操作：begin -> agent 写 model -> 自动/手动 finish -> baseline 更新 -> drift 清空。
-   - 状态：已覆盖画布、边、flow、group、source map、drift、sync/cancel、agent done 自动 finish、重启恢复。
+   - 状态：#29 已扩大 live coverage，覆盖稳定 product path 的真实可见控件、links、source/group 编辑、standard envelope、drift、sync/cancel/finish 和重启恢复；group nesting / bulk group restore 继续用 operation-backed setup 加文件效果断言。
 
-## 10. 本轮 Orca 适配经验
+## 10. Orca 适配原则
 
 - Tauri `invoke` 不应该原样搬进 Orca；正确做法是 `preload API -> Electron IPC -> main TypeScript service`。
-- Scryer 的 AI provider 不迁移，但 Scryer 的模型语义、MCP 工具语义、drift/sync 语义要保留。
-- React 事件里直接读 state 容易读到旧值；像 source pattern、sync reload 这类路径要用 ref 或 controller 避免 stale state。
+- Scryer 的 AI provider 不迁移，但 Scryer 的模型语义、Scryer operation 语义、drift/sync 语义要保留。
+- React 事件里直接读 state 容易读到 stale value；像 source pattern、sync reload 这类路径要用 ref 或 controller 避免 stale state。
 - sync 中要有硬状态文件：`.implementing` 和 `model.presync.scry`，否则切 tab 或重启后 UI 会误以为没有任务在跑。
-- e2e 不能只点按钮，要读回 `.scryer/model.scry` 或通过 IPC/MCP 验证真实文件变化。
+- e2e 不能只点按钮，要读回 `.scryer/model.scry` 或通过 IPC/CLI 工具验证真实文件变化。
+- deep module seam 优先级高于文件拆分：`ScryerEngine.executeOperation(...)` 和 `readView(...)` 是产品调用 seam，其他模块应隐藏在 engine、view adapter 或 `ScryerEditSessionController` 后面。
+- transport adapter 不应承载 Scryer 语义：CLI/IPC/UI 只能归一化输入、调用 engine、渲染 envelope。
+- Model Edit Lease 和 Completion Gate 是 `ScryerEditSessionController` / pipeline 责任，不是普通 UI 或 CLI 调用者需要手动编排的步骤。
