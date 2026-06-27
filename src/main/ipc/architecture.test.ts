@@ -17,7 +17,7 @@ vi.mock('electron', () => ({
 }))
 
 vi.mock('fs', async (importOriginal) => {
-  const actual = await importOriginal()
+  const actual = await importOriginal<Record<string, unknown>>()
   return {
     ...actual,
     watch: watchMock
