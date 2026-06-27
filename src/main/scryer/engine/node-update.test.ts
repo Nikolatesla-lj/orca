@@ -5,9 +5,9 @@ import { describe, expect, it } from 'vitest'
 import { createScryerEngine } from './index'
 import type { ScryerOperationContext } from './types'
 
-function testContext(projectPath: string): ScryerOperationContext {
+function testContext(projectPath: string, requestId = 'req-node-update'): ScryerOperationContext {
   return {
-    requestId: 'req-node-update',
+    requestId,
     transport: 'cli',
     caller: 'human',
     cwd: projectPath,
@@ -99,5 +99,87 @@ describe('scryer.node.update', () => {
         retryable: true
       }
     })
+  })
+
+  it('deletes nodes with descendants, links, source ownership, and groups', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-engine-node-delete-'))
+    await writeModel(projectPath, {
+      version: '0.3',
+      nodes: [
+        { id: 'shop', kind: 'system', name: 'Shop' },
+        { id: 'api', kind: 'container', name: 'API', parentId: 'shop' },
+        { id: 'handler', kind: 'component', name: 'Handler', parentId: 'api' },
+        { id: 'web', kind: 'container', name: 'Web', parentId: 'shop' }
+      ],
+      links: [
+        { id: 'link-web-api', src: 'web', dst: 'api', label: 'calls' },
+        { id: 'link-shop-web', src: 'shop', dst: 'web', label: 'uses' }
+      ],
+      groups: [
+        { id: 'group-api', name: 'API group', memberIds: ['api', 'handler'], parentNodeId: 'shop' },
+        { id: 'group-web', name: 'Web group', memberIds: ['web'], parentGroupId: 'group-api' }
+      ],
+      sourceMap: { api: [{ pattern: 'src/api.ts' }] },
+      boundaries: { api: [{ pattern: 'src/**/*.ts' }] }
+    })
+
+    const result = await createScryerEngine().executeOperation(
+      'scryer.node.delete',
+      { node_ids: ['api'] },
+      testContext(projectPath, 'req-node-delete')
+    )
+
+    expect(result).toMatchObject({
+      ok: true,
+      operationId: 'scryer.node.delete',
+      requestId: 'req-node-delete',
+      result: {
+        deletedCount: 2,
+        deletedLinkCount: 1
+      }
+    })
+
+    const committed = JSON.parse(await readFile(join(projectPath, '.scryer', 'model.scry'), 'utf8'))
+    const planned = JSON.parse(await readFile(join(projectPath, '.scryer', 'planned.scry'), 'utf8'))
+    expect(committed.nodes.map((node: { id: string }) => node.id)).toEqual([
+      'shop',
+      'api',
+      'handler',
+      'web'
+    ])
+    expect(planned.nodes.map((node: { id: string }) => node.id)).toEqual(['shop', 'web'])
+    expect(planned.links).toEqual([{ id: 'link-shop-web', src: 'shop', dst: 'web', label: 'uses' }])
+    expect(planned.sourceMap).toEqual({})
+    expect(planned.boundaries).toEqual({})
+    expect(planned.groups).toEqual([{ id: 'group-web', name: 'Web group', memberIds: ['web'] }])
+  })
+
+  it('rejects missing node deletes before writing planned state', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-engine-node-delete-missing-'))
+    await writeModel(projectPath, {
+      version: '0.3',
+      nodes: [{ id: 'shop', kind: 'system', name: 'Shop' }],
+      links: [],
+      groups: [],
+      sourceMap: {},
+      boundaries: {}
+    })
+
+    const result = await createScryerEngine().executeOperation(
+      'scryer.node.delete',
+      { node_ids: ['missing-node'] },
+      testContext(projectPath, 'req-node-delete-missing')
+    )
+
+    expect(result).toMatchObject({
+      ok: false,
+      operationId: 'scryer.node.delete',
+      requestId: 'req-node-delete-missing',
+      error: {
+        code: 'not_found',
+        retryable: false
+      }
+    })
+    await expect(readFile(join(projectPath, '.scryer', 'planned.scry'), 'utf8')).rejects.toThrow()
   })
 })

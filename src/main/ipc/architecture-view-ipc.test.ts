@@ -40,7 +40,7 @@ describe('registerArchitectureHandlers native engine migration', () => {
         nodes: [],
         links: [],
         recommendedNextReads: [],
-        fullModel: {
+        model: {
           version: '0.3',
           nodes: [
             { id: 'api', kind: 'system', name: 'API', description: 'HTTP API' },
@@ -70,7 +70,7 @@ describe('registerArchitectureHandlers native engine migration', () => {
     const model = await handlers.get('architecture:readModel')!(null, { projectPath })
 
     expect(readView).toHaveBeenCalledWith(
-      { mode: 'full', layer: 'committed' },
+      { layer: 'committed' },
       expect.objectContaining({ transport: 'ipc', projectRoot: projectPath })
     )
     expect(readModel).not.toHaveBeenCalled()
@@ -191,7 +191,7 @@ describe('registerArchitectureHandlers native engine migration', () => {
             nodes: [],
             links: [],
             recommendedNextReads: [],
-            fullModel: {
+            model: {
               version: '0.3',
               nodes: [{ id: 'api', kind: 'system', name: 'API' }],
               links: [],
@@ -255,7 +255,7 @@ describe('registerArchitectureHandlers native engine migration', () => {
         nodes: [],
         links: [],
         recommendedNextReads: [],
-        fullModel: {
+        model: {
           version: '0.3',
           nodes: [{ id: 'api', kind: 'system', name: 'Public API' }],
           links: [],
@@ -290,7 +290,7 @@ describe('registerArchitectureHandlers native engine migration', () => {
       expect.objectContaining({ transport: 'ipc', projectRoot: projectPath })
     )
     expect(readView).toHaveBeenCalledWith(
-      { mode: 'full', layer: 'plan' },
+      { layer: 'plan' },
       expect.objectContaining({ transport: 'ipc', projectRoot: projectPath })
     )
     expect(patchNodeData).not.toHaveBeenCalled()

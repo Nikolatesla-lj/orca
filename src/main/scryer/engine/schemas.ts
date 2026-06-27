@@ -182,10 +182,13 @@ export const incompatibleModelDetailsSchema = z
     path: z.string(),
     expectedVersion: z.literal('0.3'),
     actualVersion: z.string().optional(),
+    fields: z.array(z.string()).optional(),
     reason: z.union([
       z.literal('missing_version'),
       z.literal('unsupported_version'),
-      z.literal('invalid_json')
+      z.literal('invalid_json'),
+      z.literal('unknown_fields'),
+      z.literal('invalid_schema')
     ])
   })
   .strict()

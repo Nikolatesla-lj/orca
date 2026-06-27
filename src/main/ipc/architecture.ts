@@ -315,11 +315,12 @@ function architectureModelFromReadView(
   if (typeof result !== 'object' || result === null) {
     return null
   }
-  const fullModel = (result as { fullModel?: unknown }).fullModel
-  if (typeof fullModel !== 'object' || fullModel === null) {
+  const readResult = result as { fullModel?: unknown; model?: unknown }
+  const rawModel = readResult.fullModel ?? readResult.model
+  if (typeof rawModel !== 'object' || rawModel === null) {
     return null
   }
-  const model = fullModel as {
+  const model = rawModel as {
     nodes?: Record<string, unknown>[]
     links?: Record<string, unknown>[]
     groups?: Record<string, unknown>[]
@@ -484,7 +485,7 @@ export function registerArchitectureHandlers(
       }
       const view = await readViewWithLockRetry(
         deps,
-        { mode: 'full', layer: 'committed' },
+        { layer: 'committed' },
         args.projectPath,
         'ipc-read'
       )
@@ -512,7 +513,7 @@ export function registerArchitectureHandlers(
       }
       const view = await readViewWithLockRetry(
         deps,
-        { mode: 'full', layer: 'committed' },
+        { layer: 'committed' },
         args.projectPath,
         'ipc-read-document'
       )
@@ -603,7 +604,7 @@ export function registerArchitectureHandlers(
           throw new Error(result.error.message)
         }
         const view = await deps.scryerEngine.readView(
-          { mode: 'full', layer: 'plan' },
+          { layer: 'plan' },
           contextForEngine(args.projectPath, 'ipc-read')
         )
         if (!view.ok) {

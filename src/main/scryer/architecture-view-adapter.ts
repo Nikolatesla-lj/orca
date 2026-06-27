@@ -72,7 +72,7 @@ function groupDto(group: ScryGroup): ArchitectureViewGroup {
 }
 
 function modelFromReadView(view: ScryerReadView): ScryModel | null {
-  return view.fullModel ?? view.model ?? null
+  return (view as ScryerReadView & { fullModel?: ScryModel }).fullModel ?? view.model ?? null
 }
 
 function pathForNode(node: ScryNode, nodesById: Map<string, ScryNode>): string {
@@ -150,7 +150,9 @@ function dtoFromModel(
         ...(node.vagrant !== undefined ? { vagrant: node.vagrant } : {})
       })),
     diagnostics: [],
-    recommendedNextReads: view.recommendedNextReads,
+    recommendedNextReads:
+      (view as ScryerReadView & { recommendedNextReads?: ArchitectureViewDto['recommendedNextReads'] })
+        .recommendedNextReads ?? [],
     ...(selectedNode
       ? {
           selectedDetails: {
@@ -178,9 +180,7 @@ export function createArchitectureViewAdapter(engine: ScryerEngine): Architectur
       const focusNodeId = input.focusNodeId?.trim() || undefined
       const result = await engine.readView(
         {
-          mode: 'full',
-          layer: input.layer ?? 'plan',
-          ...(focusNodeId ? { node_id: focusNodeId } : {})
+          layer: input.layer ?? 'plan'
         },
         {
           ...context,

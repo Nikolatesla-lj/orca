@@ -79,10 +79,99 @@ describe('callScryerTool', () => {
       }
     })
 
-    expect(update.ok).toBe(true)
+    expect(update.ok, JSON.stringify(update)).toBe(true)
     const updated = await readModel(projectPath)
     expect(updated.nodes.find((node) => node.id === 'users')?.data.status).toBe('implemented')
     expect(updated.sourceMap?.users).toEqual([{ pattern: 'src/users/**/*.ts' }])
+  })
+
+  it('updates strict Scryer nodes through catalog operations without rewriting model.scry as legacy C4', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-strict-update-'))
+    await mkdir(join(projectPath, '.scryer'), { recursive: true })
+    await writeFile(
+      getProjectModelPath(projectPath),
+      JSON.stringify(
+        {
+          version: '0.3',
+          nodes: [
+            { id: 'shop', kind: 'system', name: 'Shop' },
+            { id: 'api', kind: 'container', name: 'API', parentId: 'shop' }
+          ],
+          links: [],
+          groups: [],
+          sourceMap: {},
+          boundaries: {}
+        },
+        null,
+        2
+      ),
+      'utf8'
+    )
+
+    const update = await callScryerTool(projectPath, {
+      toolName: 'update_nodes',
+      arguments: {
+        nodes: [
+          {
+            node_id: 'api',
+            description: 'Updated through MCP bridge'
+          }
+        ]
+      }
+    })
+
+    expect(update.ok, JSON.stringify(update)).toBe(true)
+    const committed = JSON.parse(await readFile(getProjectModelPath(projectPath), 'utf8'))
+    const planned = JSON.parse(await readFile(join(projectPath, '.scryer', 'planned.scry'), 'utf8'))
+    expect(committed.version).toBe('0.3')
+    expect(committed.nodes.find((node: { id: string }) => node.id === 'api')?.data).toBeUndefined()
+    expect(planned.version).toBe('0.3')
+    expect(planned.nodes.find((node: { id: string }) => node.id === 'api')?.description).toBe(
+      'Updated through MCP bridge'
+    )
+  })
+
+  it('deletes strict Scryer nodes through catalog operations into planned state', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-strict-delete-'))
+    await mkdir(join(projectPath, '.scryer'), { recursive: true })
+    await writeFile(
+      getProjectModelPath(projectPath),
+      JSON.stringify(
+        {
+          version: '0.3',
+          nodes: [
+            { id: 'shop', kind: 'system', name: 'Shop' },
+            { id: 'api', kind: 'container', name: 'API', parentId: 'shop' },
+            { id: 'handler', kind: 'component', name: 'Handler', parentId: 'api' }
+          ],
+          links: [{ id: 'link-handler-api', src: 'handler', dst: 'api', label: 'serves' }],
+          groups: [{ id: 'api-group', name: 'API Group', memberIds: ['api', 'handler'] }],
+          sourceMap: { handler: [{ pattern: 'src/api/handler.ts' }] },
+          boundaries: { api: [{ pattern: 'src/api/**/*.ts' }] }
+        },
+        null,
+        2
+      ),
+      'utf8'
+    )
+
+    const deleted = await callScryerTool(projectPath, {
+      toolName: 'delete_nodes',
+      arguments: { node_ids: ['api'] }
+    })
+
+    expect(deleted.ok, JSON.stringify(deleted)).toBe(true)
+    const committed = JSON.parse(await readFile(getProjectModelPath(projectPath), 'utf8'))
+    const planned = JSON.parse(await readFile(join(projectPath, '.scryer', 'planned.scry'), 'utf8'))
+    expect(committed.nodes.map((node: { id: string }) => node.id)).toEqual([
+      'shop',
+      'api',
+      'handler'
+    ])
+    expect(planned.nodes.map((node: { id: string }) => node.id)).toEqual(['shop'])
+    expect(planned.links).toEqual([])
+    expect(planned.sourceMap.handler).toBeUndefined()
+    expect(planned.boundaries.api).toBeUndefined()
   })
 
   it('mirrors Scryer MCP node, edge, source-map, structure, and change semantics', async () => {
