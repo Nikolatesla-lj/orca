@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { C4ModelData } from '../../../../shared/scryer/model-types'
+import type { ArchitectureDiagramModel } from './architecture-diagram-types'
 import {
   collectInheritedExpectItems,
   getVerifiedBlockers,
@@ -7,7 +7,7 @@ import {
 } from './contract-status'
 
 describe('architecture contract status helpers', () => {
-  const model: C4ModelData = {
+  const model: ArchitectureDiagramModel = {
     nodes: [
       {
         id: 'system',
@@ -38,10 +38,9 @@ describe('architecture contract status helpers', () => {
         }
       }
     ],
-    edges: [],
+    links: [],
     sourceMap: {},
-    groups: [],
-    flows: []
+    groups: []
   }
 
   it('collects expect contract items from ancestors and the selected node', () => {

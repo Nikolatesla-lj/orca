@@ -1724,6 +1724,11 @@ const api = {
   },
 
   architecture: {
+    readArchitectureView: (args: {
+      projectPath: string
+      layer?: 'plan' | 'committed'
+      focusNodeId?: string | null
+    }): Promise<unknown> => ipcRenderer.invoke('architecture:readArchitectureView', args),
     readModel: (args: { projectPath: string; modelName?: string | null }): Promise<unknown> =>
       ipcRenderer.invoke('architecture:readModel', args),
     readModelDocument: (args: {
@@ -1795,6 +1800,17 @@ const api = {
       ipcRenderer.invoke('architecture:cancelSync', args),
     finishSync: (args: { projectPath: string }): Promise<void> =>
       ipcRenderer.invoke('architecture:finishSync', args),
+    beginEditSession: (args: { projectPath: string; agentRunId: string }): Promise<unknown> =>
+      ipcRenderer.invoke('architecture:beginEditSession', args),
+    completeEditSession: (args: {
+      projectPath: string
+      agentRunId: string
+      foldPolicy?: 'never' | 'when_gate_passes'
+    }): Promise<unknown> => ipcRenderer.invoke('architecture:completeEditSession', args),
+    cancelEditSession: (args: { projectPath: string; agentRunId: string }): Promise<void> =>
+      ipcRenderer.invoke('architecture:cancelEditSession', args),
+    readEditSession: (args: { projectPath: string }): Promise<unknown> =>
+      ipcRenderer.invoke('architecture:readEditSession', args),
     callTool: (args: { projectPath: string; call: unknown }): Promise<unknown> =>
       ipcRenderer.invoke('architecture:callTool', args),
     executeScryerOperation: (args: {
@@ -1802,7 +1818,6 @@ const api = {
       operationId: string
       input?: unknown
       requestId?: string
-      leaseToken?: string
     }): Promise<unknown> => ipcRenderer.invoke('architecture:executeScryerOperation', args),
     watchModel: (args: { projectPath: string }): Promise<void> =>
       ipcRenderer.invoke('architecture:watchModel', args),

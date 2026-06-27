@@ -1,11 +1,11 @@
 import { Ban, MessageCircle, Shield } from 'lucide-react'
-import type { Contract, ContractItem } from '../../../../../shared/scryer/model-types'
+import type { ArchitectureContract, ArchitectureContractItem } from '../architecture-diagram-types'
 
-export function contractPassed(item: ContractItem): boolean | undefined {
+export function contractPassed(item: ArchitectureContractItem): boolean | undefined {
   return typeof item === 'string' ? undefined : item.passed
 }
 
-export function contractSectionStats(items: readonly ContractItem[]): {
+export function contractSectionStats(items: readonly ArchitectureContractItem[]): {
   total: number
   passed: number
   failed: number
@@ -60,7 +60,11 @@ function SectionPill({
   )
 }
 
-export function ContractBadge({ contract }: { contract?: Contract }): React.JSX.Element | null {
+export function ContractBadge({
+  contract
+}: {
+  contract?: ArchitectureContract
+}): React.JSX.Element | null {
   if (!contract) {
     return null
   }

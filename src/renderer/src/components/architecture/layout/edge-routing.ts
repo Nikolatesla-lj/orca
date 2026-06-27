@@ -1,4 +1,7 @@
-import type { C4Edge, C4Node } from '../../../../../shared/scryer/model-types'
+import type {
+  ArchitectureDiagramLink,
+  ArchitectureDiagramNode
+} from '../architecture-diagram-types'
 
 const NODE_W = 180
 const NODE_H = 160
@@ -109,8 +112,8 @@ function axisMisalignment(handle: HandleId, dx: number, dy: number): number {
 }
 
 export function assignAllHandles(
-  nodes: readonly C4Node[],
-  edges: readonly Pick<C4Edge, 'id' | 'source' | 'target'>[]
+  nodes: readonly ArchitectureDiagramNode[],
+  edges: readonly Pick<ArchitectureDiagramLink, 'id' | 'source' | 'target'>[]
 ): Map<string, HandleAssignment> {
   const nodeMap = new Map(nodes.map((node) => [node.id, node]))
   const result = new Map<string, HandleAssignment>()

@@ -1,19 +1,27 @@
 import { describe, expect, it } from 'vitest'
-import type { C4Edge, C4Node } from '../../../../../shared/scryer/model-types'
+import type {
+  ArchitectureDiagramLink,
+  ArchitectureDiagramNode
+} from '../architecture-diagram-types'
 import { assignAllHandles } from './edge-routing'
 import { computeEdgeBundles } from './edge-bundling'
 import { autoLayoutVisibleNodes, decorateEdgesForRouting } from './architecture-layout'
 
-function node(id: string, x: number, y: number, kind: C4Node['data']['kind'] = 'system'): C4Node {
+function node(
+  id: string,
+  x: number,
+  y: number,
+  kind: ArchitectureDiagramNode['data']['kind'] = 'system'
+): ArchitectureDiagramNode {
   return {
     id,
-    type: 'c4',
+    type: 'architecture',
     position: { x, y },
     data: { name: id, description: '', kind, status: kind === 'person' ? undefined : 'proposed' }
   }
 }
 
-function edge(id: string, source: string, target: string, label = id): C4Edge {
+function edge(id: string, source: string, target: string, label = id): ArchitectureDiagramLink {
   return { id, source, target, data: { label } }
 }
 

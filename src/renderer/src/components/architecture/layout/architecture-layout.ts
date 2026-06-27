@@ -7,7 +7,11 @@ import {
   type SimulationLinkDatum,
   type SimulationNodeDatum
 } from 'd3-force'
-import type { C4Edge, C4Node, Status } from '../../../../../shared/scryer/model-types'
+import type {
+  ArchitectureDiagramLink,
+  ArchitectureDiagramNode,
+  ArchitectureStatus
+} from '../architecture-diagram-types'
 import { computeEdgeBundles } from './edge-bundling'
 import { assignAllHandles } from './edge-routing'
 
@@ -17,7 +21,7 @@ const GRID_X = 220
 const GRID_Y = 192
 const SNAP = 20
 
-const STATUS_PRIORITY: Record<Status, number> = {
+const STATUS_PRIORITY: Record<ArchitectureStatus, number> = {
   proposed: 4,
   implemented: 3,
   vagrant: 2,
@@ -29,7 +33,7 @@ type LayoutOptions = {
   fullRelayout?: boolean
 }
 
-export type RoutedC4Edge = C4Edge & {
+export type RoutedArchitectureLink = ArchitectureDiagramLink & {
   sourceHandle?: string
   targetHandle?: string
 }
@@ -43,7 +47,7 @@ type SimNode = SimulationNodeDatum & {
 
 type SimLink = SimulationLinkDatum<SimNode>
 
-function nodeSize(node: C4Node): { width: number; height: number } {
+function nodeSize(node: ArchitectureDiagramNode): { width: number; height: number } {
   const measured = node.measured as { width?: number; height?: number } | undefined
   return {
     width: measured?.width ?? NODE_W,
@@ -55,11 +59,11 @@ function snap(value: number): number {
   return Math.round(value / SNAP) * SNAP
 }
 
-function isReference(node: C4Node): boolean {
+function isReference(node: ArchitectureDiagramNode): boolean {
   return !!node.data._reference
 }
 
-function gridLayout(nodes: readonly C4Node[]): C4Node[] {
+function gridLayout(nodes: readonly ArchitectureDiagramNode[]): ArchitectureDiagramNode[] {
   const normalNodes = nodes.filter((node) => !isReference(node))
   const referenceNodes = nodes.filter(isReference)
   const cols = Math.max(1, Math.min(4, Math.ceil(Math.sqrt(normalNodes.length))))
@@ -117,10 +121,10 @@ function forceRectCollide(padding: number) {
 }
 
 function graphLayout(
-  nodes: readonly C4Node[],
-  edges: readonly C4Edge[],
+  nodes: readonly ArchitectureDiagramNode[],
+  edges: readonly ArchitectureDiagramLink[],
   fullRelayout: boolean
-): C4Node[] {
+): ArchitectureDiagramNode[] {
   const normalNodes = nodes.filter((node) => !isReference(node))
   const referenceNodes = nodes.filter(isReference)
   if (normalNodes.length === 0) {
@@ -200,17 +204,17 @@ function graphLayout(
 }
 
 export function autoLayoutVisibleNodes(
-  nodes: readonly C4Node[],
-  edges: readonly C4Edge[],
+  nodes: readonly ArchitectureDiagramNode[],
+  edges: readonly ArchitectureDiagramLink[],
   options: LayoutOptions
-): C4Node[] {
+): ArchitectureDiagramNode[] {
   if (options.codeLevel) {
     return gridLayout(nodes)
   }
   return graphLayout(nodes, edges, !!options.fullRelayout)
 }
 
-function statusForNode(node: C4Node | undefined): Status | undefined {
+function statusForNode(node: ArchitectureDiagramNode | undefined): ArchitectureStatus | undefined {
   if (!node) {
     return undefined
   }
@@ -220,7 +224,10 @@ function statusForNode(node: C4Node | undefined): Status | undefined {
   return node.data.status
 }
 
-function inferEdgeStatus(nodesById: Map<string, C4Node>, edge: C4Edge): Status | undefined {
+function inferEdgeStatus(
+  nodesById: Map<string, ArchitectureDiagramNode>,
+  edge: ArchitectureDiagramLink
+): ArchitectureStatus | undefined {
   const sourceStatus = statusForNode(nodesById.get(edge.source))
   const targetStatus = statusForNode(nodesById.get(edge.target))
   if (sourceStatus && targetStatus) {
@@ -232,9 +239,9 @@ function inferEdgeStatus(nodesById: Map<string, C4Node>, edge: C4Edge): Status |
 }
 
 export function decorateEdgesForRouting(
-  nodes: readonly C4Node[],
-  edges: readonly C4Edge[]
-): RoutedC4Edge[] {
+  nodes: readonly ArchitectureDiagramNode[],
+  edges: readonly ArchitectureDiagramLink[]
+): RoutedArchitectureLink[] {
   const handles = assignAllHandles(nodes, edges)
   const bundles = computeEdgeBundles(edges, nodes)
   const nodesById = new Map(nodes.map((node) => [node.id, node]))

@@ -28,12 +28,12 @@ import {
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type {
-  C4Kind,
-  C4Node,
-  Contract,
-  ContractItem,
-  Group
-} from '../../../../shared/scryer/model-types'
+  ArchitectureDiagramKind,
+  ArchitectureDiagramNode,
+  ArchitectureContract,
+  ArchitectureContractItem,
+  ArchitectureGroup
+} from './architecture-diagram-types'
 import { Button } from '../ui/button'
 
 type DragItem =
@@ -41,27 +41,27 @@ type DragItem =
   | { kind: 'member'; nodeId: string; sourceGroupId: string | null }
 
 type GroupsDndValue = {
-  groups: Group[]
+  groups: ArchitectureGroup[]
   onNavigateToNode: (id: string) => void
-  parentNode: C4Node | undefined
+  parentNode: ArchitectureDiagramNode | undefined
   outOfScope: string | null
-  visibleGroups: Group[]
-  nodeById: Map<string, C4Node>
-  childrenOf: Map<string | undefined, Group[]>
-  ungroupedNodes: C4Node[]
+  visibleGroups: ArchitectureGroup[]
+  nodeById: Map<string, ArchitectureDiagramNode>
+  childrenOf: Map<string | undefined, ArchitectureGroup[]>
+  ungroupedNodes: ArchitectureDiagramNode[]
   active: DragItem | null
   selectedGroupId: string | null
   onSelectedGroupChange: (groupId: string | null) => void
-  patchGroup: (id: string, patch: Partial<Group>) => void
+  patchGroup: (id: string, patch: Partial<ArchitectureGroup>) => void
   deleteGroup: (id: string) => void
   createEmptyGroup: () => string
   removeMember: (nodeId: string, sourceGroupId: string) => void
 }
 
 export type GroupsDndProviderProps = {
-  allNodes: C4Node[]
-  groups: Group[]
-  onUpdateGroups: (updater: (prev: Group[]) => Group[]) => void
+  allNodes: ArchitectureDiagramNode[]
+  groups: ArchitectureGroup[]
+  onUpdateGroups: (updater: (prev: ArchitectureGroup[]) => ArchitectureGroup[]) => void
   currentParentId: string | undefined
   onNavigateToNode: (id: string) => void
   selectedGroupId?: string | null
@@ -69,7 +69,7 @@ export type GroupsDndProviderProps = {
   children: ReactNode
 }
 
-const KIND_ICON: Record<C4Kind, LucideIcon> = {
+const KIND_ICON: Record<ArchitectureDiagramKind, LucideIcon> = {
   person: UserRound,
   system: Network,
   container: Boxes,
@@ -90,7 +90,7 @@ function useGroupsDnd(): GroupsDndValue {
   return value
 }
 
-function scopeMessage(parent: C4Node | undefined): string | null {
+function scopeMessage(parent: ArchitectureDiagramNode | undefined): string | null {
   if (!parent) {
     return 'Drill into a system or container to manage its groups.'
   }
@@ -100,7 +100,9 @@ function scopeMessage(parent: C4Node | undefined): string | null {
   return 'Groups live at the container and component level. Navigate up to a system or container.'
 }
 
-function targetChildKind(parent: C4Node | undefined): C4Kind | null {
+function targetChildKind(
+  parent: ArchitectureDiagramNode | undefined
+): ArchitectureDiagramKind | null {
   if (parent?.data.kind === 'system') {
     return 'container'
   }
@@ -149,11 +151,14 @@ export function GroupsDndProvider({
       parentNode
         ? groups.filter(
             (group) =>
-              group.memberIds.length === 0 ||
-              group.memberIds.every((memberId) => levelChildIds.has(memberId))
+              (group.parentNodeId !== undefined
+                ? group.parentNodeId === currentParentId
+                : group.memberIds.every((memberId) => levelChildIds.has(memberId))) &&
+              (group.memberIds.length === 0 ||
+                group.memberIds.every((memberId) => levelChildIds.has(memberId)))
           )
         : [],
-    [groups, levelChildIds, parentNode]
+    [currentParentId, groups, levelChildIds, parentNode]
   )
   const visibleGroupIds = useMemo(
     () => new Set(visibleGroups.map((group) => group.id)),
@@ -172,7 +177,7 @@ export function GroupsDndProvider({
   }, [visibleGroups])
 
   const childrenOf = useMemo(() => {
-    const map = new Map<string | undefined, Group[]>()
+    const map = new Map<string | undefined, ArchitectureGroup[]>()
     for (const group of visibleGroups) {
       const key =
         group.parentGroupId && visibleGroupIds.has(group.parentGroupId)
@@ -207,7 +212,7 @@ export function GroupsDndProvider({
   )
 
   const patchGroup = useCallback(
-    (id: string, patch: Partial<Group>) => {
+    (id: string, patch: Partial<ArchitectureGroup>) => {
       onUpdateGroups((prev) =>
         prev.map((group) => (group.id === id ? { ...group, ...patch } : group))
       )
@@ -233,9 +238,12 @@ export function GroupsDndProvider({
 
   const createEmptyGroup = useCallback(() => {
     const id = createGroupId()
-    onUpdateGroups((prev) => [...prev, { id, name: 'New group', memberIds: [] }])
+    onUpdateGroups((prev) => [
+      ...prev,
+      { id, name: 'New group', memberIds: [], parentNodeId: parentNode?.id ?? null }
+    ])
     return id
-  }, [onUpdateGroups])
+  }, [onUpdateGroups, parentNode?.id])
 
   const moveMember = useCallback(
     (nodeId: string, targetGroupId: string) => {
@@ -302,7 +310,15 @@ export function GroupsDndProvider({
               ...group,
               memberIds: group.memberIds.filter((memberId) => memberId !== item.nodeId)
             }))
-            return [...cleaned, { id: newId, name: 'New group', memberIds: [item.nodeId] }]
+            return [
+              ...cleaned,
+              {
+                id: newId,
+                name: 'New group',
+                memberIds: [item.nodeId],
+                parentNodeId: parentNode?.id ?? null
+              }
+            ]
           })
         }
         return
@@ -322,7 +338,7 @@ export function GroupsDndProvider({
       }
       patchGroup(item.id, { parentGroupId: targetGroupId })
     },
-    [moveMember, onUpdateGroups, patchGroup, removeMember, wouldCycle]
+    [moveMember, onUpdateGroups, parentNode?.id, patchGroup, removeMember, wouldCycle]
   )
 
   const value = useMemo<GroupsDndValue>(
@@ -493,14 +509,14 @@ function GroupCard({
   onNavigate,
   onRemoveMember
 }: {
-  group: Group
-  childrenOf: Map<string | undefined, Group[]>
-  nodeById: Map<string, C4Node>
+  group: ArchitectureGroup
+  childrenOf: Map<string | undefined, ArchitectureGroup[]>
+  nodeById: Map<string, ArchitectureDiagramNode>
   depth: number
   active: DragItem | null
   selectedGroupId: string | null
   onSelectGroup: (groupId: string | null) => void
-  onPatch: (id: string, patch: Partial<Group>) => void
+  onPatch: (id: string, patch: Partial<ArchitectureGroup>) => void
   onDelete: (id: string) => void
   onNavigate: (id: string) => void
   onRemoveMember: (nodeId: string, sourceGroupId: string) => void
@@ -520,7 +536,7 @@ function GroupCard({
   const selected = selectedGroupId === group.id
   const memberNodes = group.memberIds
     .map((memberId) => nodeById.get(memberId))
-    .filter((node): node is C4Node => !!node)
+    .filter((node): node is ArchitectureDiagramNode => !!node)
   const showDropCue = !!active && !(active.kind === 'group' && active.id === group.id)
 
   return (
@@ -566,7 +582,7 @@ function GroupCard({
           <input
             className="w-full bg-transparent text-sm font-semibold text-[var(--text)] outline-none placeholder:text-[var(--text-muted)]"
             value={group.name}
-            placeholder="Group name"
+            placeholder="ArchitectureGroup name"
             onChange={(event) => onPatch(group.id, { name: event.currentTarget.value })}
             data-testid="architecture-group-name"
           />
@@ -658,8 +674,8 @@ function GroupContractEditor({
   contract,
   onChange
 }: {
-  contract: Contract | undefined
-  onChange: (contract: Contract) => void
+  contract: ArchitectureContract | undefined
+  onChange: (contract: ArchitectureContract) => void
 }): React.JSX.Element {
   const normalized = normalizeContract(contract)
   return (
@@ -684,7 +700,7 @@ function GroupContractEditor({
   )
 }
 
-function normalizeContract(contract: Contract | undefined): Contract {
+function normalizeContract(contract: ArchitectureContract | undefined): ArchitectureContract {
   return {
     expect: contract?.expect ?? [],
     ask: contract?.ask ?? [],
@@ -692,15 +708,15 @@ function normalizeContract(contract: Contract | undefined): Contract {
   }
 }
 
-function contractItemToText(item: ContractItem): string {
+function contractItemToText(item: ArchitectureContractItem): string {
   return typeof item === 'string' ? item : item.text
 }
 
-function contractItemsToText(items: ContractItem[]): string {
+function contractItemsToText(items: ArchitectureContractItem[]): string {
   return items.map(contractItemToText).join('\n')
 }
 
-function textToContractItems(text: string): ContractItem[] {
+function textToContractItems(text: string): ArchitectureContractItem[] {
   return text
     .split('\n')
     .map((line) => line.trim())
@@ -713,7 +729,7 @@ function MemberChip({
   onNavigate,
   onRemove
 }: {
-  node: C4Node
+  node: ArchitectureDiagramNode
   groupId: string
   onNavigate: (id: string) => void
   onRemove: () => void
@@ -760,7 +776,7 @@ function PaletteItem({
   node,
   onNavigate
 }: {
-  node: C4Node
+  node: ArchitectureDiagramNode
   onNavigate: (id: string) => void
 }): React.JSX.Element {
   const Icon = KIND_ICON[node.data.kind] ?? Box
@@ -873,15 +889,15 @@ function DragGhost({
   groups
 }: {
   item: DragItem
-  nodeById: Map<string, C4Node>
-  groups: Group[]
+  nodeById: Map<string, ArchitectureDiagramNode>
+  groups: ArchitectureGroup[]
 }): React.JSX.Element {
   if (item.kind === 'group') {
     const group = groups.find((candidate) => candidate.id === item.id)
     return (
       <div className="flex items-center gap-2 rounded border border-[var(--border)] bg-[var(--surface-overlay)] px-2 py-1 text-sm font-semibold text-[var(--text)] shadow-md">
         <Folder size={14} className="text-[var(--text-muted)]" />
-        {group?.name ?? 'Group'}
+        {group?.name ?? 'ArchitectureGroup'}
       </div>
     )
   }

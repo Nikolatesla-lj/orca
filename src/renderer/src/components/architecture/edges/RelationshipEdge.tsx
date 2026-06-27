@@ -1,9 +1,9 @@
 import { EdgeLabelRenderer, type Edge, type EdgeProps } from '@xyflow/react'
-import type { C4EdgeData, Status } from '../../../../../shared/scryer/model-types'
+import type { ArchitectureDiagramLinkData, ArchitectureStatus } from '../architecture-diagram-types'
 import { statusHex } from '../nodes/status-colors'
 
-type RelationshipEdgeData = C4EdgeData & {
-  _status?: Status
+type RelationshipEdgeData = ArchitectureDiagramLinkData & {
+  _status?: ArchitectureStatus
   _highlighted?: boolean
   _dimmed?: boolean
   _mention?: boolean

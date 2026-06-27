@@ -1,56 +1,130 @@
 import { describe, expect, it } from 'vitest'
-import type { C4ModelData } from '../../../../shared/scryer/model-types'
+import type { ArchitectureDiagramModel } from './architecture-diagram-types'
 import {
   pushArchitectureUndoSnapshot,
   createEmptyArchitectureModel,
   findCompletedArchitectureSyncPane,
-  fingerprintArchitectureModel
+  fingerprintArchitectureModel,
+  modelWithNodeDrafts,
+  modelWithVisibleSourcePattern,
+  nodeUpdateInputFromDiagramPatch,
+  sourcePatternForNode
 } from './useArchitectureModelController'
 
 describe('architecture model controller helpers', () => {
   it('creates a complete empty Scryer model for the current project', () => {
     expect(createEmptyArchitectureModel('/repo')).toEqual({
       nodes: [],
-      edges: [],
+      links: [],
       startingLevel: 'system',
       sourceMap: {},
+      boundaries: {},
       projectPath: '/repo',
       refPositions: {},
-      groups: [],
-      flows: []
+      groups: []
     })
   })
 
-  it('fingerprints models after Scryer parse/serialize normalization', () => {
-    const model: C4ModelData = {
+  it('fingerprints diagram models with stable key ordering', () => {
+    const model: ArchitectureDiagramModel = {
       nodes: [
         {
           id: 'api',
-          type: 'c4',
+          type: 'architecture',
           position: { x: 10, y: 20 },
           data: { kind: 'container', name: 'API', description: '' }
         }
       ],
-      edges: [],
+      links: [],
       startingLevel: 'system',
       sourceMap: {},
+      boundaries: {},
       projectPath: '/repo',
       refPositions: {},
-      groups: [],
-      flows: []
+      groups: []
     }
     const reordered = {
-      flows: [],
       groups: [],
       refPositions: {},
       projectPath: '/repo',
+      boundaries: {},
       sourceMap: {},
       startingLevel: 'system',
-      edges: [],
+      links: [],
       nodes: model.nodes
-    } as C4ModelData
+    } as ArchitectureDiagramModel
 
     expect(fingerprintArchitectureModel(model)).toBe(fingerprintArchitectureModel(reordered))
+  })
+
+  it('resolves the source pattern for a selected node from boundaries first', () => {
+    const model = createEmptyArchitectureModel('/repo')
+    model.sourceMap = { api: [{ pattern: 'src/api.ts' }] }
+    model.boundaries = { api: [{ pattern: 'src/api/**' }] }
+
+    expect(sourcePatternForNode(model, 'api')).toBe('src/api/**')
+    expect(sourcePatternForNode({ ...model, boundaries: {} }, 'api')).toBe('src/api.ts')
+    expect(sourcePatternForNode(model, null)).toBe('')
+  })
+
+  it('merges the visible source pattern into a model snapshot for history replay', () => {
+    const model = createEmptyArchitectureModel('/repo')
+
+    const withPattern = modelWithVisibleSourcePattern(model, 'api', ' src/api/** ')
+    expect(withPattern.boundaries?.api).toEqual([{ pattern: 'src/api/**' }])
+    expect(model.boundaries?.api).toBeUndefined()
+
+    const withoutPattern = modelWithVisibleSourcePattern(withPattern, 'api', '')
+    expect(withoutPattern.boundaries?.api).toBeUndefined()
+  })
+
+  it('merges node drafts into a model snapshot for history replay', () => {
+    const model = createEmptyArchitectureModel('/repo')
+    model.nodes = [
+      {
+        id: 'api',
+        type: 'architecture',
+        position: { x: 0, y: 0 },
+        data: { kind: 'system', name: 'System 1', description: '' }
+      }
+    ]
+
+    const withDraft = modelWithNodeDrafts(
+      model,
+      new Map([['api', { name: 'Shop System', description: 'Draft description' }]])
+    )
+
+    expect(withDraft.nodes[0]?.data).toMatchObject({
+      name: 'Shop System',
+      description: 'Draft description'
+    })
+    expect(model.nodes[0]?.data.name).toBe('System 1')
+  })
+
+  it('normalizes renderer node patches into catalog node update input', () => {
+    expect(
+      nodeUpdateInputFromDiagramPatch('operation-1', {
+        kind: 'operation',
+        name: 'handleRequest',
+        description: '',
+        technology: 'TypeScript',
+        properties: [{ label: 'id', description: 'identifier' }],
+        _needsLayout: true
+      })
+    ).toEqual({
+      nodes: [
+        {
+          node_id: 'operation-1',
+          kind: 'symbol',
+          name: 'handleRequest',
+          description: '',
+          technology: 'TypeScript',
+          properties: [{ label: 'id', description: 'identifier' }]
+        }
+      ]
+    })
+
+    expect(nodeUpdateInputFromDiagramPatch('api', { _needsLayout: true })).toBeNull()
   })
 
   it('detects the launched sync agent reporting done on its tab', () => {
@@ -125,7 +199,7 @@ describe('architecture model controller helpers', () => {
     const snapshots = Array.from({ length: 12 }, (_, index) =>
       createEmptyArchitectureModel(`/repo-${index}`)
     )
-    let stack: C4ModelData[] = []
+    let stack: ArchitectureDiagramModel[] = []
     let batchStartedAt: number | null = null
 
     for (const [index, snapshot] of snapshots.entries()) {

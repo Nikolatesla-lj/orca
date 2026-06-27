@@ -6,32 +6,25 @@ import { launchAgentInNewTab } from '../../lib/launch-agent-in-new-tab'
 import { useAppStore } from '../../store'
 import type { AgentStatusEntry } from '../../../../shared/agent-status-types'
 import type { ArchitectureWorkspace } from '../../../../shared/types'
-import { parseModelData, serializeModelData } from '../../../../shared/scryer/parse-model'
 import type {
-  C4Edge,
-  C4Kind,
-  C4ModelData,
-  C4Node,
-  C4NodeData,
-  DriftReport,
-  Flow,
-  Group,
-  SourceLocation
-} from '../../../../shared/scryer/model-types'
+  ArchitectureDriftReport,
+  ArchitectureGroup,
+  ArchitectureDiagramKind,
+  ArchitectureDiagramModel,
+  ArchitectureDiagramNode,
+  ArchitectureDiagramNodeData,
+  ArchitectureSourceLocation
+} from './architecture-diagram-types'
+import type { ScryerCompletionGateResult } from '../../../../shared/scryer/edit-session'
 import { resolveSourceLocationTarget } from '../../../../shared/scryer/source-map-paths'
 import type { ModelUpdater } from './ArchitectureCanvas'
 import type { SyncStatus } from './SyncBar'
 import {
-  addMembersToGroupInModel,
   analyzeExternalModelUpdate,
-  createGroupFromSelectedNodes,
-  createNodeForParent,
-  deleteEdgesFromModel,
-  deleteNodesFromModel,
   isExpandableKind,
-  reconcileExpandedPath,
-  updateEdgeDataInModel
-} from './c4-model'
+  nextKindForParent,
+  reconcileExpandedPath
+} from './architecture-diagram-model'
 import {
   sanitizeClientModelName,
   useArchitectureModelSession,
@@ -44,12 +37,31 @@ export type {
   ArchitectureTemplateEntry
 } from './useArchitectureModelSession'
 
-export type ArchitectureMode = 'topology' | 'flows' | 'groups'
+export type ArchitectureMode = 'topology' | 'groups'
 
 type SyncSessionStatus = SyncStatus
+type ArchitectureOperationEnvelope =
+  | { ok: true; requestId: string; result?: unknown; meta?: unknown }
+  | { ok: false; error: { message: string }; requestId?: string; meta?: unknown }
 const EMPTY_PTY_IDS: string[] = []
 export const ARCHITECTURE_HISTORY_LIMIT = 10
 export const ARCHITECTURE_HISTORY_BATCH_MS = 1_000
+
+function firstAddedId(envelope: ArchitectureOperationEnvelope | null): string | null {
+  if (!envelope?.ok || !envelope.result || typeof envelope.result !== 'object') {
+    return null
+  }
+  const added = (envelope.result as { added?: unknown }).added
+  if (!Array.isArray(added)) {
+    return null
+  }
+  const first = added[0]
+  if (!first || typeof first !== 'object') {
+    return null
+  }
+  const id = (first as { id?: unknown }).id
+  return typeof id === 'string' ? id : null
+}
 
 type ActiveArchitectureSyncTerminal = {
   projectPath: string
@@ -57,13 +69,14 @@ type ActiveArchitectureSyncTerminal = {
   ptyIds: Set<string>
   startedAt: number
   finishing: boolean
+  finish: () => void
 }
 
 export function pushArchitectureUndoSnapshot(
-  stack: C4ModelData[],
-  snapshot: C4ModelData,
+  stack: ArchitectureDiagramModel[],
+  snapshot: ArchitectureDiagramModel,
   args: { batchStartedAt: number | null; now: number }
-): { stack: C4ModelData[]; batchStartedAt: number; captured: boolean } {
+): { stack: ArchitectureDiagramModel[]; batchStartedAt: number; captured: boolean } {
   if (
     args.batchStartedAt !== null &&
     args.now - args.batchStartedAt < ARCHITECTURE_HISTORY_BATCH_MS
@@ -120,8 +133,7 @@ function finishTrackedArchitectureSync(
     return
   }
   session.finishing = true
-  void window.api.architecture
-    .finishSync({ projectPath: session.projectPath })
+  void Promise.resolve(session.finish())
     .catch((error: unknown) => {
       console.error('[architecture] auto finish sync failed', error)
     })
@@ -174,14 +186,19 @@ function ensureArchitectureSyncTerminalWatchers(): void {
   }
 }
 
-function trackArchitectureSyncTerminal(projectPath: string, tabId: string): void {
+function trackArchitectureSyncTerminal(
+  projectPath: string,
+  tabId: string,
+  finish: () => void
+): void {
   const state = useAppStore.getState()
   const session: ActiveArchitectureSyncTerminal = {
     projectPath,
     tabId,
     ptyIds: new Set(state.ptyIdsByTabId[tabId] ?? []),
     startedAt: Date.now(),
-    finishing: false
+    finishing: false,
+    finish
   }
   activeArchitectureSyncTerminals.set(tabId, session)
   ensureArchitectureSyncTerminalWatchers()
@@ -195,11 +212,7 @@ function readInitialFollowExternalChanges(): boolean {
   }
 }
 
-function createFlowId(): string {
-  return `flow-${globalThis.crypto.randomUUID()}`
-}
-
-function buildAncestorPath(model: C4ModelData, nodeId: string): string[] {
+function buildAncestorPath(model: ArchitectureDiagramModel, nodeId: string): string[] {
   const path: string[] = []
   let current = model.nodes.find((node) => node.id === nodeId)?.parentId ?? undefined
   while (current) {
@@ -209,16 +222,16 @@ function buildAncestorPath(model: C4ModelData, nodeId: string): string[] {
   return path
 }
 
-export function createEmptyArchitectureModel(projectPath: string): C4ModelData {
+export function createEmptyArchitectureModel(projectPath: string): ArchitectureDiagramModel {
   return {
     nodes: [],
-    edges: [],
+    links: [],
     startingLevel: 'system',
     sourceMap: {},
+    boundaries: {},
     projectPath,
     refPositions: {},
-    groups: [],
-    flows: []
+    groups: []
   }
 }
 
@@ -239,11 +252,11 @@ function stableFingerprintValue(value: unknown): unknown {
   return result
 }
 
-export function fingerprintArchitectureModel(model: C4ModelData): string {
-  return JSON.stringify(stableFingerprintValue(parseModelData(serializeModelData(model))))
+export function fingerprintArchitectureModel(model: ArchitectureDiagramModel): string {
+  return JSON.stringify(stableFingerprintValue(model))
 }
 
-function fingerprintNodeData(data: C4NodeData): string {
+function fingerprintNodeData(data: ArchitectureDiagramNodeData): string {
   return JSON.stringify(stableFingerprintValue(data))
 }
 
@@ -253,6 +266,128 @@ function nodeDiffDismissalKey(modelName: string, nodeId: string): string {
 
 function stringArraysEqual(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index])
+}
+
+function boundarySourcesFromLocations(
+  locations: ArchitectureSourceLocation[]
+): { pattern: string; comment?: string }[] {
+  return locations
+    .map((location) => ({
+      pattern: location.pattern.trim(),
+      comment: location.command?.trim() || undefined
+    }))
+    .filter((source) => source.pattern)
+}
+
+function sourceMapLocationsFromRows(
+  locations: ArchitectureSourceLocation[]
+): ArchitectureSourceLocation[] {
+  return locations
+    .map((location) => ({
+      pattern: location.pattern.trim(),
+      ...(location.symbol?.trim() ? { symbol: location.symbol.trim() } : {}),
+      ...(location.line !== undefined ? { line: location.line } : {}),
+      ...(location.endLine !== undefined ? { endLine: location.endLine } : {}),
+      ...(location.command?.trim() ? { command: location.command.trim() } : {})
+    }))
+    .filter((location) => location.pattern)
+}
+
+export function sourcePatternForNode(
+  model: ArchitectureDiagramModel,
+  nodeId: string | null
+): string {
+  if (!nodeId) {
+    return ''
+  }
+  return model.boundaries?.[nodeId]?.[0]?.pattern ?? model.sourceMap?.[nodeId]?.[0]?.pattern ?? ''
+}
+
+export function modelWithVisibleSourcePattern(
+  model: ArchitectureDiagramModel,
+  nodeId: string | null,
+  rawPattern: string
+): ArchitectureDiagramModel {
+  if (!nodeId) {
+    return model
+  }
+  const pattern = rawPattern.trim()
+  const boundaries = { ...model.boundaries }
+  if (pattern) {
+    boundaries[nodeId] = [{ pattern }]
+  } else {
+    delete boundaries[nodeId]
+  }
+  return { ...model, boundaries }
+}
+
+export function modelWithNodeDrafts(
+  model: ArchitectureDiagramModel,
+  drafts: Map<string, Partial<ArchitectureDiagramNode['data']>>
+): ArchitectureDiagramModel {
+  if (drafts.size === 0) {
+    return model
+  }
+  return {
+    ...model,
+    nodes: model.nodes.map((node) => {
+      const draft = drafts.get(node.id)
+      return draft ? { ...node, data: { ...node.data, ...draft } } : node
+    })
+  }
+}
+
+function scryerKindForDiagramKind(kind: ArchitectureDiagramKind): string {
+  return kind === 'operation' || kind === 'process' || kind === 'model' ? 'symbol' : kind
+}
+
+export function nodeUpdateInputFromDiagramPatch(
+  nodeId: string,
+  patch: Partial<ArchitectureDiagramNodeData>
+): { nodes: Record<string, unknown>[] } | null {
+  const node: Record<string, unknown> = { node_id: nodeId }
+  if (typeof patch.name === 'string') {
+    node.name = patch.name
+  }
+  if (typeof patch.description === 'string') {
+    node.description = patch.description
+  }
+  if (typeof patch.technology === 'string') {
+    node.technology = patch.technology
+  }
+  if (typeof patch.external === 'boolean') {
+    node.external = patch.external
+  }
+  if (Array.isArray(patch.properties)) {
+    node.properties = patch.properties
+  }
+  if (typeof patch.kind === 'string') {
+    node.kind = scryerKindForDiagramKind(patch.kind)
+  }
+  return Object.keys(node).length > 1 ? { nodes: [node] } : null
+}
+
+function nodeUpdatesForHistorySnapshot(model: ArchitectureDiagramModel): Record<string, unknown>[] {
+  return model.nodes.map((node) => ({
+    node_id: node.id,
+    kind: scryerKindForDiagramKind(node.data.kind),
+    name: node.data.name,
+    description: node.data.description,
+    ...(node.data.technology !== undefined ? { technology: node.data.technology } : {}),
+    ...(node.data.external !== undefined ? { external: node.data.external } : {}),
+    ...(node.data.properties !== undefined ? { properties: node.data.properties } : {}),
+    ...(node.data.visual !== undefined ? { visual: node.data.visual } : {}),
+    ...(node.parentId !== undefined ? { parent_id: node.parentId } : {})
+  }))
+}
+
+function boundaryUpdatesForHistorySnapshot(
+  model: ArchitectureDiagramModel
+): Record<string, unknown>[] {
+  return model.nodes.map((node) => ({
+    node_id: node.id,
+    sources: model.boundaries?.[node.id] ?? []
+  }))
 }
 
 function isArchitecturePanelEditableTarget(target: EventTarget | null): boolean {
@@ -277,29 +412,35 @@ export function useArchitectureModelController({
   const setArchitectureModelRef = useAppStore((state) => state.setArchitectureModelRef)
   const settingsDefaultAgent = useAppStore((state) => state.settings?.defaultTuiAgent)
   const detectedAgentIds = useAppStore((state) => state.detectedAgentIds)
-  const [model, setModel] = useState<C4ModelData | null>(null)
-  const modelRef = useRef<C4ModelData | null>(null)
+  const [model, setModel] = useState<ArchitectureDiagramModel | null>(null)
+  const modelRef = useRef<ArchitectureDiagramModel | null>(null)
+  const visibleModelRef = useRef<ArchitectureDiagramModel | null>(null)
+  const nodeDraftsRef = useRef<Map<string, Partial<ArchitectureDiagramNode['data']>>>(new Map())
   const loadRequestIdRef = useRef(0)
+  const viewMutationEpochRef = useRef(0)
+  const architectureWriteQueueRef = useRef<Promise<unknown>>(Promise.resolve())
   const lastKnownModelFingerprintRef = useRef('')
-  const undoStackRef = useRef<C4ModelData[]>([])
-  const redoStackRef = useRef<C4ModelData[]>([])
+  const undoStackRef = useRef<ArchitectureDiagramModel[]>([])
+  const redoStackRef = useRef<ArchitectureDiagramModel[]>([])
   const historyBatchStartedAtRef = useRef<number | null>(null)
   const expandedPathRef = useRef<string[]>([])
   const lastCodeLevelParentIdRef = useRef<string | null>(null)
   const followExternalChangesRef = useRef(true)
   const selectedNodeIdRef = useRef<string | null>(null)
   const sourcePatternSyncRef = useRef<{ nodeId: string | null; pattern: string } | null>(null)
+  const visibleSourcePatternRef = useRef('')
   const selectedEdgeIdRef = useRef<string | null>(null)
+  const syncTerminalTabIdRef = useRef<string | null>(null)
   const syncTerminalHadPtyRef = useRef(false)
   const syncTerminalPtyIdsRef = useRef<Set<string>>(new Set())
   const autoFinishingSyncRef = useRef(false)
   const syncResolutionRef = useRef<'cancel' | 'finish' | null>(null)
+  const finishSyncRef = useRef<() => Promise<void>>(async () => undefined)
   const activeModelReloadRef = useRef<() => void>(() => {})
   const activeModelRemovedRef = useRef<
     (removedModelName: string, knownModels: ArchitectureProjectModelEntry[]) => void
   >(() => {})
   const [architectureMode, setArchitectureMode] = useState<ArchitectureMode>('topology')
-  const [activeFlowId, setActiveFlowId] = useState<string | null>(null)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
@@ -310,20 +451,32 @@ export function useArchitectureModelController({
     readInitialFollowExternalChanges
   )
   const [changedNodeIds, setChangedNodeIds] = useState<Set<string>>(new Set())
-  const [nodeDiffs, setNodeDiffs] = useState<Map<string, C4NodeData>>(new Map())
+  const [nodeDiffs, setNodeDiffs] = useState<Map<string, ArchitectureDiagramNodeData>>(new Map())
   const dismissedNodeDiffKeysRef = useRef<Map<string, string>>(new Map())
   const [targetNodeId, setTargetNodeId] = useState<string>('')
-  const [sourcePattern, setSourcePattern] = useState('')
-  const [drift, setDrift] = useState<DriftReport | null>(null)
+  const [sourcePattern, setSourcePatternState] = useState('')
+  const [drift, setDrift] = useState<ArchitectureDriftReport | null>(null)
   const [implementing, setImplementing] = useState(false)
   const [syncStatus, setSyncStatus] = useState<SyncSessionStatus>('idle')
   const [syncMessage, setSyncMessage] = useState<string | null>(null)
   const [syncLog, setSyncLog] = useState<string[]>([])
   const [syncTerminalTabId, setSyncTerminalTabId] = useState<string | null>(null)
+  const [completionGate, setCompletionGate] = useState<ScryerCompletionGateResult | null>(null)
   const [historyRevision, setHistoryRevision] = useState(0)
   const [message, setMessage] = useState<string>('')
   const [error, setError] = useState<string>('')
   const aiRunSession = useArchitectureAiRunSession()
+
+  const setSourcePattern = useCallback((pattern: string) => {
+    visibleSourcePatternRef.current = pattern
+    setSourcePatternState(pattern)
+  }, [])
+
+  const enqueueArchitectureWrite = useCallback(<T>(operation: () => Promise<T>): Promise<T> => {
+    const run = architectureWriteQueueRef.current.catch(() => undefined).then(operation)
+    architectureWriteQueueRef.current = run.catch(() => undefined)
+    return run
+  }, [])
 
   const handleModelSessionError = useCallback((sessionError: unknown) => {
     setError(sessionError instanceof Error ? sessionError.message : String(sessionError))
@@ -344,12 +497,10 @@ export function useArchitectureModelController({
     activeModelNameRef,
     projectModels,
     templates,
-    readModelDocument,
-    acceptLoadedModelDocument,
+    readArchitectureViewDocument,
+    acceptLoadedArchitectureViewDocument,
     refreshProjectModels,
-    scheduleModelWrite,
-    writePendingModelNow,
-    patchActiveNodeData
+    flushPendingArchitectureViewWork
   } = modelSession
 
   const currentParentId = expandedPath.at(-1)
@@ -370,7 +521,7 @@ export function useArchitectureModelController({
     [model, selectedNodeId]
   )
   const selectedEdge = useMemo(
-    () => model?.edges.find((edge) => edge.id === selectedEdgeId) ?? null,
+    () => model?.links.find((edge) => edge.id === selectedEdgeId) ?? null,
     [model, selectedEdgeId]
   )
   const selectedGroup = useMemo(
@@ -383,10 +534,6 @@ export function useArchitectureModelController({
     [drift]
   )
 
-  const activeFlow = useMemo(
-    () => (model?.flows ?? []).find((flow) => flow.id === activeFlowId) ?? null,
-    [activeFlowId, model]
-  )
   const codeLevelNodes = useMemo(
     () =>
       model && currentParentKind === 'component' && currentParentId
@@ -414,7 +561,9 @@ export function useArchitectureModelController({
     )
   }, [codeLevelNodes, currentParentKind, selectedNodeById])
   const selectedSourcePattern = selectedNode
-    ? (model?.sourceMap?.[selectedNode.id]?.[0]?.pattern ?? '')
+    ? (model?.boundaries?.[selectedNode.id]?.[0]?.pattern ??
+      model?.sourceMap?.[selectedNode.id]?.[0]?.pattern ??
+      '')
     : ''
 
   const activeAgent = useMemo(() => {
@@ -444,6 +593,10 @@ export function useArchitectureModelController({
   useEffect(() => {
     selectedEdgeIdRef.current = selectedEdgeId
   }, [selectedEdgeId])
+
+  useEffect(() => {
+    syncTerminalTabIdRef.current = syncTerminalTabId
+  }, [syncTerminalTabId])
 
   useEffect(() => {
     expandedPathRef.current = expandedPath
@@ -489,6 +642,7 @@ export function useArchitectureModelController({
           return
         }
         modelRef.current = emptyModel
+        visibleModelRef.current = emptyModel
         setModel(emptyModel)
         setError('Architecture tabs need a worktree path.')
         return
@@ -498,7 +652,7 @@ export function useArchitectureModelController({
       )
       try {
         setError('')
-        const loadedDocument = await readModelDocument(nextActiveModelName)
+        const loadedDocument = await readArchitectureViewDocument(nextActiveModelName)
         if (requestId !== loadRequestIdRef.current) {
           return
         }
@@ -510,7 +664,7 @@ export function useArchitectureModelController({
         const nodeStillSelected =
           !!currentSelectedNodeId && loaded.nodes.some((node) => node.id === currentSelectedNodeId)
         const edgeStillSelected =
-          !!currentSelectedEdgeId && loaded.edges.some((edge) => edge.id === currentSelectedEdgeId)
+          !!currentSelectedEdgeId && loaded.links.some((edge) => edge.id === currentSelectedEdgeId)
 
         let nextModel = loaded
         let nextExpandedPath: string[] | null = null
@@ -570,14 +724,13 @@ export function useArchitectureModelController({
         }
 
         lastKnownModelFingerprintRef.current = loadedFingerprint
-        acceptLoadedModelDocument(nextActiveModelName, loadedDocument.revision)
+        acceptLoadedArchitectureViewDocument(nextActiveModelName, loadedDocument.revision)
+        const visibleNextModel = modelWithNodeDrafts(nextModel, nodeDraftsRef.current)
         modelRef.current = nextModel
-        setModel(nextModel)
-        setExpandedPath((current) => nextExpandedPath ?? reconcileExpandedPath(nextModel, current))
-        setActiveFlowId((current) =>
-          current && (nextModel.flows ?? []).some((flow) => flow.id === current)
-            ? current
-            : (nextModel.flows?.[0]?.id ?? null)
+        visibleModelRef.current = visibleNextModel
+        setModel(visibleNextModel)
+        setExpandedPath(
+          (current) => nextExpandedPath ?? reconcileExpandedPath(visibleNextModel, current)
         )
         const nextSelectedNodeId =
           nextExternalNodeId ??
@@ -617,10 +770,10 @@ export function useArchitectureModelController({
       }
     },
     [
-      acceptLoadedModelDocument,
+      acceptLoadedArchitectureViewDocument,
       activeModelNameRef,
       projectPath,
-      readModelDocument,
+      readArchitectureViewDocument,
       refreshProjectModels
     ]
   )
@@ -644,9 +797,38 @@ export function useArchitectureModelController({
     [loadModel, projectPath, refreshProjectModels]
   )
 
+  const executeArchitectureWrite = useCallback(
+    async (operationId: string, input: unknown, nextMessage: string) => {
+      if (!projectPath) {
+        return null
+      }
+      const epoch = viewMutationEpochRef.current
+      const result = await enqueueArchitectureWrite(async () => {
+        if (viewMutationEpochRef.current !== epoch) {
+          return null
+        }
+        const envelope = (await window.api.architecture.executeScryerOperation({
+          projectPath,
+          operationId,
+          input
+        })) as ArchitectureOperationEnvelope
+        if (!envelope.ok) {
+          throw new Error(envelope.error.message)
+        }
+        if (viewMutationEpochRef.current === epoch) {
+          await loadModel('model')
+        }
+        return envelope
+      })
+      setMessage(nextMessage)
+      return result
+    },
+    [enqueueArchitectureWrite, loadModel, projectPath]
+  )
+
   const persist = useCallback(
     async (
-      nextModel: C4ModelData,
+      nextModel: ArchitectureDiagramModel,
       nextMessage: string,
       options: { captureHistory?: boolean } = {}
     ) => {
@@ -670,16 +852,16 @@ export function useArchitectureModelController({
       }
       const nextFingerprint = fingerprintArchitectureModel(nextModel)
       modelRef.current = nextModel
+      visibleModelRef.current = nextModel
       setModel(nextModel)
       lastKnownModelFingerprintRef.current = nextFingerprint
-      scheduleModelWrite(nextModel)
       setMessage(nextMessage)
     },
-    [projectPath, scheduleModelWrite]
+    [projectPath]
   )
 
   const applyModelChange = useCallback(
-    async (change: C4ModelData | ModelUpdater, nextMessage: string) => {
+    async (change: ArchitectureDiagramModel | ModelUpdater, nextMessage: string) => {
       const current = modelRef.current
       if (!current) {
         return
@@ -693,55 +875,117 @@ export function useArchitectureModelController({
     [persist]
   )
 
+  const persistHistorySnapshot = useCallback(
+    async (snapshot: ArchitectureDiagramModel, nextMessage: string) => {
+      const nodes = nodeUpdatesForHistorySnapshot(snapshot)
+      if (nodes.length > 0) {
+        await executeArchitectureWrite('scryer.node.update', { nodes }, nextMessage)
+      }
+      const boundaries = boundaryUpdatesForHistorySnapshot(snapshot)
+      if (boundaries.length > 0) {
+        await executeArchitectureWrite('scryer.source.update', { boundaries }, nextMessage)
+      }
+    },
+    [executeArchitectureWrite]
+  )
+
   const undoModelChange = useCallback(async () => {
     if (editingLocked) {
       return
     }
-    const current = modelRef.current
+    const visibleCurrent = model ?? visibleModelRef.current ?? modelRef.current
+    const currentWithDrafts = visibleCurrent
+      ? modelWithNodeDrafts(visibleCurrent, nodeDraftsRef.current)
+      : null
+    const current = currentWithDrafts
+      ? modelWithVisibleSourcePattern(
+          currentWithDrafts,
+          selectedNodeIdRef.current,
+          visibleSourcePatternRef.current
+        )
+      : null
     const snapshot = undoStackRef.current.at(-1)
     if (!current || !snapshot) {
       return
     }
+    viewMutationEpochRef.current += 1
+    nodeDraftsRef.current.clear()
     undoStackRef.current = undoStackRef.current.slice(0, -1)
     redoStackRef.current = [...redoStackRef.current, current].slice(-ARCHITECTURE_HISTORY_LIMIT)
     historyBatchStartedAtRef.current = null
     setHistoryRevision((revision) => revision + 1)
-    await persist(snapshot, 'Undid architecture change', { captureHistory: false })
-    setExpandedPath((path) => reconcileExpandedPath(snapshot, path))
-    setSelectedNodeId((selected) =>
-      selected && snapshot.nodes.some((node) => node.id === selected)
-        ? selected
+    const currentSelectedNodeId = selectedNodeIdRef.current
+    const currentSelectedEdgeId = selectedEdgeIdRef.current
+    const nextSelectedNodeId =
+      currentSelectedNodeId && snapshot.nodes.some((node) => node.id === currentSelectedNodeId)
+        ? currentSelectedNodeId
         : (snapshot.nodes[0]?.id ?? null)
-    )
-    setSelectedEdgeId((selected) =>
-      selected && snapshot.edges.some((edge) => edge.id === selected) ? selected : null
-    )
-  }, [editingLocked, persist])
+    const nextSelectedEdgeId =
+      !nextSelectedNodeId &&
+      currentSelectedEdgeId &&
+      snapshot.links.some((edge) => edge.id === currentSelectedEdgeId)
+        ? currentSelectedEdgeId
+        : null
+    selectedNodeIdRef.current = nextSelectedNodeId
+    selectedEdgeIdRef.current = nextSelectedEdgeId
+    setSelectedNodeId(nextSelectedNodeId)
+    setSelectedEdgeId(nextSelectedEdgeId)
+    const nextSourcePattern = sourcePatternForNode(snapshot, nextSelectedNodeId)
+    setSourcePattern(nextSourcePattern)
+    sourcePatternSyncRef.current = { nodeId: nextSelectedNodeId, pattern: nextSourcePattern }
+    await persist(snapshot, 'Undid architecture change', { captureHistory: false })
+    await persistHistorySnapshot(snapshot, 'Undid architecture change')
+    setExpandedPath((path) => reconcileExpandedPath(snapshot, path))
+  }, [editingLocked, model, persist, persistHistorySnapshot])
 
   const redoModelChange = useCallback(async () => {
     if (editingLocked) {
       return
     }
-    const current = modelRef.current
+    const visibleCurrent = model ?? visibleModelRef.current ?? modelRef.current
+    const currentWithDrafts = visibleCurrent
+      ? modelWithNodeDrafts(visibleCurrent, nodeDraftsRef.current)
+      : null
+    const current = currentWithDrafts
+      ? modelWithVisibleSourcePattern(
+          currentWithDrafts,
+          selectedNodeIdRef.current,
+          visibleSourcePatternRef.current
+        )
+      : null
     const snapshot = redoStackRef.current.at(-1)
     if (!current || !snapshot) {
       return
     }
+    viewMutationEpochRef.current += 1
+    nodeDraftsRef.current.clear()
     redoStackRef.current = redoStackRef.current.slice(0, -1)
     undoStackRef.current = [...undoStackRef.current, current].slice(-ARCHITECTURE_HISTORY_LIMIT)
     historyBatchStartedAtRef.current = null
     setHistoryRevision((revision) => revision + 1)
-    await persist(snapshot, 'Redid architecture change', { captureHistory: false })
-    setExpandedPath((path) => reconcileExpandedPath(snapshot, path))
-    setSelectedNodeId((selected) =>
-      selected && snapshot.nodes.some((node) => node.id === selected)
-        ? selected
+    const currentSelectedNodeId = selectedNodeIdRef.current
+    const currentSelectedEdgeId = selectedEdgeIdRef.current
+    const nextSelectedNodeId =
+      currentSelectedNodeId && snapshot.nodes.some((node) => node.id === currentSelectedNodeId)
+        ? currentSelectedNodeId
         : (snapshot.nodes[0]?.id ?? null)
-    )
-    setSelectedEdgeId((selected) =>
-      selected && snapshot.edges.some((edge) => edge.id === selected) ? selected : null
-    )
-  }, [editingLocked, persist])
+    const nextSelectedEdgeId =
+      !nextSelectedNodeId &&
+      currentSelectedEdgeId &&
+      snapshot.links.some((edge) => edge.id === currentSelectedEdgeId)
+        ? currentSelectedEdgeId
+        : null
+    selectedNodeIdRef.current = nextSelectedNodeId
+    selectedEdgeIdRef.current = nextSelectedEdgeId
+    setSelectedNodeId(nextSelectedNodeId)
+    setSelectedEdgeId(nextSelectedEdgeId)
+    const nextSourcePattern = sourcePatternForNode(snapshot, nextSelectedNodeId)
+    setSourcePattern(nextSourcePattern)
+    sourcePatternSyncRef.current = { nodeId: nextSelectedNodeId, pattern: nextSourcePattern }
+    await persist(snapshot, 'Redid architecture change', { captureHistory: false })
+    await persistHistorySnapshot(snapshot, 'Redid architecture change')
+    setExpandedPath((path) => reconcileExpandedPath(snapshot, path))
+  }, [editingLocked, model, persist, persistHistorySnapshot])
 
   useEffect(() => {
     void loadModel()
@@ -800,7 +1044,7 @@ export function useArchitectureModelController({
       redoStackRef.current = []
       historyBatchStartedAtRef.current = null
       setHistoryRevision((revision) => revision + 1)
-      await writePendingModelNow()
+      await flushPendingArchitectureViewWork()
       if (projectPath && scope === 'global') {
         const result = await window.api.architecture.migrateGlobalModel({ projectPath, modelName })
         await loadModel(result.modelName)
@@ -808,7 +1052,7 @@ export function useArchitectureModelController({
       }
       await loadModel(modelName)
     },
-    [editingLocked, loadModel, projectPath, writePendingModelNow]
+    [editingLocked, flushPendingArchitectureViewWork, loadModel, projectPath]
   )
 
   const saveCurrentModelAs = useCallback(
@@ -816,7 +1060,7 @@ export function useArchitectureModelController({
       if (!projectPath || editingLocked) {
         return
       }
-      await writePendingModelNow()
+      await flushPendingArchitectureViewWork()
       const result = await window.api.architecture.saveModelAs({
         projectPath,
         fromModelName: activeModelNameRef.current,
@@ -828,7 +1072,7 @@ export function useArchitectureModelController({
       setHistoryRevision((revision) => revision + 1)
       await loadModel(result.modelName)
     },
-    [activeModelNameRef, editingLocked, loadModel, projectPath, writePendingModelNow]
+    [activeModelNameRef, editingLocked, flushPendingArchitectureViewWork, loadModel, projectPath]
   )
 
   const deleteProjectModelByName = useCallback(
@@ -836,12 +1080,12 @@ export function useArchitectureModelController({
       if (!projectPath || editingLocked) {
         return
       }
-      await writePendingModelNow()
+      await flushPendingArchitectureViewWork()
       const removedModelName = sanitizeClientModelName(modelName)
       await window.api.architecture.deleteModel({ projectPath, modelName })
       await loadFallbackModelAfterRemoval(removedModelName)
     },
-    [editingLocked, loadFallbackModelAfterRemoval, projectPath, writePendingModelNow]
+    [editingLocked, flushPendingArchitectureViewWork, loadFallbackModelAfterRemoval, projectPath]
   )
 
   useEffect(() => {
@@ -938,26 +1182,59 @@ export function useArchitectureModelController({
     setSelectedNodeId(fallbackNodeId)
   }, [architectureMode, model, selectedEdgeId, selectedNodeId])
 
+  const addNodeForParent = useCallback(
+    async (parentNode: ArchitectureDiagramNode | null) => {
+      if (!model || editingLocked) {
+        return
+      }
+      const kind = nextKindForParent(parentNode)
+      if (kind === 'operation' || kind === 'process' || kind === 'model') {
+        setMessage('Code-level symbols require a source file before they can be added.')
+        return
+      }
+      const sameKindCount = model.nodes.filter((node) => node.data.kind === kind).length
+      const name = `${kind[0].toUpperCase()}${kind.slice(1)} ${sameKindCount + 1}`
+      const item =
+        kind === 'system'
+          ? { name, description: '' }
+          : { parent_id: parentNode?.id, name, description: '' }
+      try {
+        const result = await executeArchitectureWrite(
+          `scryer.${kind}.add`,
+          { items: [item] },
+          `Added ${name}`
+        )
+        const addedId = firstAddedId(result)
+        setSelectedEdgeId(null)
+        setSelectedGroupId(null)
+        if (parentNode && !parentNode.data.external && isExpandableKind(parentNode.data.kind)) {
+          setExpandedPath((current) =>
+            current.at(-1) === parentNode.id ? current : [...current, parentNode.id]
+          )
+        }
+        if (addedId) {
+          selectedNodeIdRef.current = addedId
+          setSelectedNodeId(addedId)
+        }
+      } catch (addError) {
+        const text = addError instanceof Error ? addError.message : String(addError)
+        setError(text)
+        toast.error(text)
+      }
+    },
+    [editingLocked, executeArchitectureWrite, model]
+  )
+
   const addNode = useCallback(async () => {
-    if (!model || editingLocked) {
-      return
-    }
-    const node = createNodeForParent(model, selectedNode)
-    const nextModel = { ...model, nodes: [...model.nodes, node] }
-    selectedNodeIdRef.current = node.id
-    selectedEdgeIdRef.current = null
-    await persist(nextModel, `Added ${node.data.name}`)
-    setSelectedNodeId(node.id)
-    setSelectedEdgeId(null)
-    if (selectedNode && !selectedNode.data.external && isExpandableKind(selectedNode.data.kind)) {
-      setExpandedPath((current) =>
-        current.at(-1) === selectedNode.id ? current : [...current, selectedNode.id]
-      )
-    }
-  }, [editingLocked, model, persist, selectedNode])
+    await addNodeForParent(selectedNode)
+  }, [addNodeForParent, selectedNode])
+
+  const addNodeAtCurrentLevel = useCallback(async () => {
+    await addNodeForParent(currentParent)
+  }, [addNodeForParent, currentParent])
 
   const persistNodePatchById = useCallback(
-    async (nodeId: string, patch: Partial<C4Node['data']>) => {
+    async (nodeId: string, patch: Partial<ArchitectureDiagramNode['data']>) => {
       const current = modelRef.current ?? model
       if (!current || editingLocked) {
         return
@@ -966,6 +1243,7 @@ export function useArchitectureModelController({
       if (!target) {
         return
       }
+      const epoch = viewMutationEpochRef.current
       if (
         fingerprintArchitectureModel(current) !==
         fingerprintArchitectureModel({
@@ -984,12 +1262,32 @@ export function useArchitectureModelController({
         redoStackRef.current = []
         setHistoryRevision((revision) => revision + 1)
       }
+      const input = nodeUpdateInputFromDiagramPatch(nodeId, patch)
+      if (!input) {
+        return
+      }
       try {
-        const result = await patchActiveNodeData(nodeId, patch, target.data)
-        const nextFingerprint = fingerprintArchitectureModel(result.model)
-        modelRef.current = result.model
-        setModel(result.model)
-        lastKnownModelFingerprintRef.current = nextFingerprint
+        const result = await enqueueArchitectureWrite(async () => {
+          if (viewMutationEpochRef.current !== epoch) {
+            return null
+          }
+          return (await window.api.architecture.executeScryerOperation({
+            projectPath,
+            operationId: 'scryer.node.update',
+            input
+          })) as ArchitectureOperationEnvelope
+        })
+        if (!result) {
+          return
+        }
+        if (!result.ok) {
+          throw new Error(result.error.message)
+        }
+        if (viewMutationEpochRef.current !== epoch) {
+          return
+        }
+        nodeDraftsRef.current.delete(nodeId)
+        await loadModel('model')
         setMessage(`Saved ${target.data.name}`)
       } catch (patchError) {
         const text = patchError instanceof Error ? patchError.message : String(patchError)
@@ -997,11 +1295,11 @@ export function useArchitectureModelController({
         toast.error(text)
       }
     },
-    [editingLocked, model, patchActiveNodeData]
+    [editingLocked, enqueueArchitectureWrite, loadModel, model, projectPath]
   )
 
   const updateSelectedNode = useCallback(
-    async (patch: Partial<C4Node['data']>) => {
+    async (patch: Partial<ArchitectureDiagramNode['data']>) => {
       if (!selectedNode) {
         return
       }
@@ -1010,18 +1308,22 @@ export function useArchitectureModelController({
     [persistNodePatchById, selectedNode]
   )
 
-  const updateSelectedNodeDraft = useCallback((nodeId: string, patch: Partial<C4Node['data']>) => {
-    setModel((current) =>
-      current
-        ? {
-            ...current,
-            nodes: current.nodes.map((node) =>
-              node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node
-            )
-          }
-        : current
-    )
-  }, [])
+  const updateSelectedNodeDraft = useCallback(
+    (nodeId: string, patch: Partial<ArchitectureDiagramNode['data']>) => {
+      nodeDraftsRef.current.set(nodeId, {
+        ...nodeDraftsRef.current.get(nodeId),
+        ...patch
+      })
+      const current = visibleModelRef.current ?? modelRef.current
+      if (!current) {
+        return
+      }
+      const nextModel = modelWithNodeDrafts(current, nodeDraftsRef.current)
+      visibleModelRef.current = nextModel
+      setModel(nextModel)
+    },
+    []
+  )
 
   const selectNode = useCallback((nodeId: string | null) => {
     selectedNodeIdRef.current = nodeId
@@ -1066,48 +1368,87 @@ export function useArchitectureModelController({
       if (!modelRef.current || !selectedEdge || editingLocked) {
         return
       }
-      await persist(
-        updateEdgeDataInModel(modelRef.current, selectedEdge.id, patch),
-        `Saved ${selectedEdge.id}`
-      )
+      try {
+        await executeArchitectureWrite(
+          'scryer.link.update',
+          { links: [{ link_id: selectedEdge.id, ...patch }] },
+          `Saved ${selectedEdge.id}`
+        )
+      } catch (edgeError) {
+        const text = edgeError instanceof Error ? edgeError.message : String(edgeError)
+        setError(text)
+        toast.error(text)
+      }
     },
-    [editingLocked, persist, selectedEdge]
+    [editingLocked, executeArchitectureWrite, selectedEdge]
   )
 
   const saveSourcePattern = useCallback(
     async (rawPattern: string) => {
-      const current = modelRef.current ?? model
-      if (!current || !selectedNode || editingLocked) {
+      if (!selectedNode || editingLocked) {
         return
       }
-      const sourceMap = { ...current.sourceMap }
       const pattern = rawPattern.trim()
-      if (pattern) {
-        sourceMap[selectedNode.id] = [{ pattern }]
-      } else {
-        delete sourceMap[selectedNode.id]
+      try {
+        await executeArchitectureWrite(
+          'scryer.source.update',
+          {
+            boundaries: [
+              {
+                node_id: selectedNode.id,
+                sources: pattern ? [{ pattern }] : []
+              }
+            ]
+          },
+          `Saved source boundary for ${selectedNode.data.name}`
+        )
+      } catch (sourceError) {
+        const text = sourceError instanceof Error ? sourceError.message : String(sourceError)
+        setError(text)
+        toast.error(text)
       }
-      await persist({ ...current, sourceMap }, `Saved source map for ${selectedNode.data.name}`)
     },
-    [editingLocked, model, persist, selectedNode]
+    [editingLocked, executeArchitectureWrite, selectedNode]
   )
 
   const saveSourceLocations = useCallback(
-    async (nodeId: string, locations: SourceLocation[]) => {
+    async (nodeId: string, locations: ArchitectureSourceLocation[]) => {
       const current = modelRef.current ?? model
       if (!current || editingLocked) {
         return
       }
       const node = current.nodes.find((candidate) => candidate.id === nodeId)
-      const sourceMap = { ...current.sourceMap }
-      if (locations.length > 0) {
-        sourceMap[nodeId] = locations
-      } else {
-        delete sourceMap[nodeId]
+      const input =
+        node && (node.data.properties?.length ?? 0) > 0
+          ? {
+              schemas: [
+                {
+                  node_id: nodeId,
+                  locations: sourceMapLocationsFromRows(locations)
+                }
+              ]
+            }
+          : {
+              boundaries: [
+                {
+                  node_id: nodeId,
+                  sources: boundarySourcesFromLocations(locations)
+                }
+              ]
+            }
+      try {
+        await executeArchitectureWrite(
+          'scryer.source.update',
+          input,
+          `Saved source for ${node?.data.name ?? nodeId}`
+        )
+      } catch (sourceError) {
+        const text = sourceError instanceof Error ? sourceError.message : String(sourceError)
+        setError(text)
+        toast.error(text)
       }
-      await persist({ ...current, sourceMap }, `Saved source map for ${node?.data.name ?? nodeId}`)
     },
-    [editingLocked, model, persist]
+    [editingLocked, executeArchitectureWrite, model]
   )
 
   const addEdge = useCallback(
@@ -1133,55 +1474,94 @@ export function useArchitectureModelController({
         return
       }
       const id = `edge-${sourceNodeId}-${nextTargetNodeId}`
-      if (current.edges.some((edge) => edge.id === id)) {
+      if (current.links.some((edge) => edge.id === id)) {
         setMessage('Edge already exists')
         return
       }
-      const edge: C4Edge = {
-        id,
-        source: sourceNodeId,
-        target: nextTargetNodeId,
-        data: { label: 'depends on' }
+      try {
+        await executeArchitectureWrite(
+          'scryer.link.add',
+          { links: [{ src: sourceNodeId, dst: nextTargetNodeId, label: 'depends on' }] },
+          'Saved architecture link'
+        )
+      } catch (edgeError) {
+        const text = edgeError instanceof Error ? edgeError.message : String(edgeError)
+        setError(text)
+        toast.error(text)
       }
-      await persist({ ...current, edges: [...current.edges, edge] }, 'Saved architecture edge')
     },
-    [editingLocked, model, persist, selectedNode, targetNodeId]
+    [editingLocked, executeArchitectureWrite, model, selectedNode, targetNodeId]
   )
 
   const deleteSelected = useCallback(async () => {
     if (!model || !selectedNode || editingLocked) {
       return
     }
-    const nextModel = deleteNodesFromModel(model, [selectedNode.id])
-    await persist(nextModel, `Deleted ${selectedNode.data.name}`)
-    setSelectedNodeId(nextModel.nodes[0]?.id ?? null)
-    setSelectedEdgeId(null)
-  }, [editingLocked, model, persist, selectedNode])
+    try {
+      await executeArchitectureWrite(
+        'scryer.node.delete',
+        { node_ids: [selectedNode.id] },
+        `Deleted ${selectedNode.data.name}`
+      )
+      setSelectedNodeId(null)
+      setSelectedEdgeId(null)
+    } catch (deleteError) {
+      const text = deleteError instanceof Error ? deleteError.message : String(deleteError)
+      setError(text)
+      toast.error(text)
+    }
+  }, [editingLocked, executeArchitectureWrite, model, selectedNode])
 
   const deleteSelectedEdge = useCallback(async () => {
     if (!model || !selectedEdge || editingLocked) {
       return
     }
-    const nextModel = deleteEdgesFromModel(model, [selectedEdge.id])
-    await persist(nextModel, `Deleted ${selectedEdge.id}`)
-    setSelectedEdgeId(null)
-  }, [editingLocked, model, persist, selectedEdge])
+    try {
+      await executeArchitectureWrite(
+        'scryer.link.delete',
+        { link_ids: [selectedEdge.id] },
+        `Deleted ${selectedEdge.id}`
+      )
+      setSelectedEdgeId(null)
+    } catch (edgeError) {
+      const text = edgeError instanceof Error ? edgeError.message : String(edgeError)
+      setError(text)
+      toast.error(text)
+    }
+  }, [editingLocked, executeArchitectureWrite, model, selectedEdge])
+
+  const deleteEdgeById = useCallback(
+    async (edgeId: string) => {
+      const current = modelRef.current
+      if (!current || editingLocked) {
+        return
+      }
+      const target = current.links.find((edge) => edge.id === edgeId)
+      try {
+        await executeArchitectureWrite(
+          'scryer.link.delete',
+          { link_ids: [edgeId] },
+          target ? `Deleted ${target.id}` : 'Deleted architecture link'
+        )
+        setSelectedEdgeId((selected) => (selected === edgeId ? null : selected))
+      } catch (edgeError) {
+        const text = edgeError instanceof Error ? edgeError.message : String(edgeError)
+        setError(text)
+        toast.error(text)
+      }
+    },
+    [editingLocked, executeArchitectureWrite]
+  )
 
   const addCodeLevelNode = useCallback(
-    async (kind: C4Kind) => {
+    async (kind: ArchitectureDiagramKind) => {
       const current = modelRef.current
       if (!current || !currentParent || editingLocked) {
         return
       }
-      const node = createNodeForParent(current, currentParent, kind)
-      const nextModel = { ...current, nodes: [...current.nodes, node] }
-      selectedNodeIdRef.current = node.id
-      selectedEdgeIdRef.current = null
-      await persist(nextModel, `Added ${node.data.name}`)
-      setSelectedNodeId(node.id)
-      setSelectedEdgeId(null)
+      setMessage(`${kind} symbols require a source file before they can be added.`)
     },
-    [currentParent, editingLocked, persist]
+    [currentParent, editingLocked]
   )
 
   const deleteNodeById = useCallback(
@@ -1191,14 +1571,21 @@ export function useArchitectureModelController({
         return
       }
       const target = current.nodes.find((node) => node.id === nodeId)
-      const nextModel = deleteNodesFromModel(current, [nodeId])
-      await persist(nextModel, target ? `Deleted ${target.data.name}` : 'Deleted node')
-      setSelectedNodeId((selected) =>
-        selected === nodeId ? (nextModel.nodes[0]?.id ?? null) : selected
-      )
-      setSelectedEdgeId(null)
+      try {
+        await executeArchitectureWrite(
+          'scryer.node.delete',
+          { node_ids: [nodeId] },
+          target ? `Deleted ${target.data.name}` : 'Deleted node'
+        )
+        setSelectedNodeId((selected) => (selected === nodeId ? null : selected))
+        setSelectedEdgeId(null)
+      } catch (deleteError) {
+        const text = deleteError instanceof Error ? deleteError.message : String(deleteError)
+        setError(text)
+        toast.error(text)
+      }
     },
-    [editingLocked, persist]
+    [editingLocked, executeArchitectureWrite]
   )
 
   const runDriftCheck = useCallback(async () => {
@@ -1250,86 +1637,27 @@ export function useArchitectureModelController({
     [model]
   )
 
-  const createFlow = useCallback(async () => {
-    const current = modelRef.current
-    if (!current || editingLocked) {
-      return
-    }
-    const id = createFlowId()
-    const flow: Flow = {
-      id,
-      name: `Flow ${((current.flows ?? []).length ?? 0) + 1}`,
-      description: '',
-      steps: []
-    }
-    await persist({ ...current, flows: [...(current.flows ?? []), flow] }, `Created ${flow.name}`)
-    setActiveFlowId(id)
-    setArchitectureMode('flows')
-  }, [editingLocked, persist])
-
-  const updateFlow = useCallback(
-    async (updated: Flow) => {
-      if (editingLocked) {
-        return
-      }
-      await applyModelChange((current) => {
-        const flows = current.flows ?? []
-        let found = false
-        const nextFlows = flows.map((flow) => {
-          if (flow.id !== updated.id) {
-            return flow
-          }
-          found = true
-          return updated
-        })
-        if (!found) {
-          nextFlows.push(updated)
-        }
-        return { ...current, flows: nextFlows }
-      }, `Saved ${updated.name}`)
-    },
-    [applyModelChange, editingLocked]
-  )
-
-  const deleteActiveFlow = useCallback(async () => {
-    const current = modelRef.current
-    const targetId = activeFlowId ?? current?.flows?.[0]?.id ?? null
-    if (!current || !targetId || editingLocked) {
-      return
-    }
-    const flows = current.flows ?? []
-    const targetIndex = flows.findIndex((flow) => flow.id === targetId)
-    if (targetIndex < 0) {
-      return
-    }
-    const nextFlows = flows.filter((flow) => flow.id !== targetId)
-    const nextActive = nextFlows[Math.min(targetIndex, nextFlows.length - 1)]?.id ?? null
-    const sourceMap = { ...current.sourceMap }
-    delete sourceMap[targetId]
-    await persist(
-      {
-        ...current,
-        flows: nextFlows,
-        sourceMap
-      },
-      `Deleted ${flows[targetIndex].name}`
-    )
-    setActiveFlowId(nextActive)
-  }, [activeFlowId, editingLocked, persist])
-
   const updateGroups = useCallback(
-    (updater: (prev: Group[]) => Group[]) => {
+    (updater: (prev: ArchitectureGroup[]) => ArchitectureGroup[]) => {
       const current = modelRef.current
       if (!current || editingLocked) {
         return
       }
       const nextGroups = updater(current.groups ?? [])
-      void persist({ ...current, groups: nextGroups }, 'Saved architecture groups')
+      void executeArchitectureWrite(
+        'scryer.group.set',
+        { data: nextGroups },
+        'Saved architecture groups'
+      ).catch((groupError: unknown) => {
+        const text = groupError instanceof Error ? groupError.message : String(groupError)
+        setError(text)
+        toast.error(text)
+      })
       setSelectedGroupId((selected) =>
         selected && nextGroups.some((group) => group.id === selected) ? selected : null
       )
     },
-    [editingLocked, persist]
+    [editingLocked, executeArchitectureWrite]
   )
 
   const createGroupFromSelection = useCallback(
@@ -1338,18 +1666,29 @@ export function useArchitectureModelController({
       if (!current || editingLocked || multiSelectedNodeIds.length < 2) {
         return
       }
-      const id = `group-${globalThis.crypto.randomUUID()}`
-      const nextModel = createGroupFromSelectedNodes(current, {
-        id,
-        name,
-        memberIds: multiSelectedNodeIds
-      })
-      await persist(nextModel, `Created ${name.trim() || 'New group'}`)
-      setSelectedGroupId(id)
-      setMultiSelectedNodeIds([])
-      setTotalSelected(0)
+      try {
+        await executeArchitectureWrite(
+          'scryer.group.add',
+          {
+            items: [
+              {
+                parent_id: currentParentId,
+                name: name.trim() || 'New group',
+                member_ids: multiSelectedNodeIds
+              }
+            ]
+          },
+          `Created ${name.trim() || 'New group'}`
+        )
+        setMultiSelectedNodeIds([])
+        setTotalSelected(0)
+      } catch (groupError) {
+        const text = groupError instanceof Error ? groupError.message : String(groupError)
+        setError(text)
+        toast.error(text)
+      }
     },
-    [editingLocked, multiSelectedNodeIds, persist]
+    [currentParentId, editingLocked, executeArchitectureWrite, multiSelectedNodeIds]
   )
 
   const addSelectionToGroup = useCallback(
@@ -1358,32 +1697,60 @@ export function useArchitectureModelController({
       if (!current || editingLocked || multiSelectedNodeIds.length < 2) {
         return
       }
-      const nextModel = addMembersToGroupInModel(current, groupId, multiSelectedNodeIds)
-      await persist(nextModel, 'Added selected nodes to group')
-      setSelectedGroupId(groupId)
-      setMultiSelectedNodeIds([])
-      setTotalSelected(0)
+      const target = (current.groups ?? []).find((group) => group.id === groupId)
+      if (!target) {
+        return
+      }
+      try {
+        await executeArchitectureWrite(
+          'scryer.group.update',
+          {
+            items: [
+              { group_id: groupId, member_ids: [...target.memberIds, ...multiSelectedNodeIds] }
+            ]
+          },
+          'Added selected nodes to group'
+        )
+        setSelectedGroupId(groupId)
+        setMultiSelectedNodeIds([])
+        setTotalSelected(0)
+      } catch (groupError) {
+        const text = groupError instanceof Error ? groupError.message : String(groupError)
+        setError(text)
+        toast.error(text)
+      }
     },
-    [editingLocked, multiSelectedNodeIds, persist]
+    [editingLocked, executeArchitectureWrite, multiSelectedNodeIds]
   )
 
   const patchSelectedGroup = useCallback(
-    async (patch: Partial<Group>) => {
+    async (patch: Partial<ArchitectureGroup>) => {
       const current = modelRef.current
       if (!current || !selectedGroup || editingLocked) {
         return
       }
-      await persist(
-        {
-          ...current,
-          groups: (current.groups ?? []).map((group) =>
-            group.id === selectedGroup.id ? { ...group, ...patch } : group
-          )
-        },
-        `Saved ${selectedGroup.name}`
-      )
+      try {
+        await executeArchitectureWrite(
+          'scryer.group.update',
+          {
+            items: [
+              {
+                group_id: selectedGroup.id,
+                ...(patch.name !== undefined ? { name: patch.name } : {}),
+                ...(patch.description !== undefined ? { description: patch.description } : {}),
+                ...(patch.memberIds !== undefined ? { member_ids: patch.memberIds } : {})
+              }
+            ]
+          },
+          `Saved ${selectedGroup.name}`
+        )
+      } catch (groupError) {
+        const text = groupError instanceof Error ? groupError.message : String(groupError)
+        setError(text)
+        toast.error(text)
+      }
     },
-    [editingLocked, persist, selectedGroup]
+    [editingLocked, executeArchitectureWrite, selectedGroup]
   )
 
   const removeSelectedGroupMember = useCallback(
@@ -1392,19 +1759,26 @@ export function useArchitectureModelController({
       if (!current || !selectedGroup || editingLocked) {
         return
       }
-      await persist(
-        {
-          ...current,
-          groups: (current.groups ?? []).map((group) =>
-            group.id === selectedGroup.id
-              ? { ...group, memberIds: group.memberIds.filter((memberId) => memberId !== nodeId) }
-              : group
-          )
-        },
-        `Saved ${selectedGroup.name}`
-      )
+      try {
+        await executeArchitectureWrite(
+          'scryer.group.update',
+          {
+            items: [
+              {
+                group_id: selectedGroup.id,
+                member_ids: selectedGroup.memberIds.filter((memberId) => memberId !== nodeId)
+              }
+            ]
+          },
+          `Saved ${selectedGroup.name}`
+        )
+      } catch (groupError) {
+        const text = groupError instanceof Error ? groupError.message : String(groupError)
+        setError(text)
+        toast.error(text)
+      }
     },
-    [editingLocked, persist, selectedGroup]
+    [editingLocked, executeArchitectureWrite, selectedGroup]
   )
 
   const deleteSelectedGroup = useCallback(async () => {
@@ -1412,21 +1786,19 @@ export function useArchitectureModelController({
     if (!current || !selectedGroup || editingLocked) {
       return
     }
-    await persist(
-      {
-        ...current,
-        groups: (current.groups ?? [])
-          .filter((group) => group.id !== selectedGroup.id)
-          .map((group) =>
-            group.parentGroupId === selectedGroup.id
-              ? { ...group, parentGroupId: selectedGroup.parentGroupId }
-              : group
-          )
-      },
-      `Deleted ${selectedGroup.name}`
-    )
-    setSelectedGroupId(null)
-  }, [editingLocked, persist, selectedGroup])
+    try {
+      await executeArchitectureWrite(
+        'scryer.group.delete',
+        { group_id: selectedGroup.id },
+        `Deleted ${selectedGroup.name}`
+      )
+      setSelectedGroupId(null)
+    } catch (groupError) {
+      const text = groupError instanceof Error ? groupError.message : String(groupError)
+      setError(text)
+      toast.error(text)
+    }
+  }, [editingLocked, executeArchitectureWrite, selectedGroup])
 
   const toggleLock = useCallback(async () => {
     if (!projectPath) {
@@ -1458,7 +1830,7 @@ export function useArchitectureModelController({
   }, [implementing, projectPath, runDriftCheck])
 
   const openSourceLocation = useCallback(
-    async (location: SourceLocation) => {
+    async (location: ArchitectureSourceLocation) => {
       if (!projectPath) {
         return
       }
@@ -1531,7 +1903,7 @@ export function useArchitectureModelController({
       return
     }
     try {
-      await writePendingModelNow()
+      await flushPendingArchitectureViewWork()
       const result = await window.api.architecture.prepareInitialModelPrompt({
         projectPath,
         modelName: activeModelNameRef.current
@@ -1553,7 +1925,7 @@ export function useArchitectureModelController({
     aiRunSession,
     launchArchitectureAgentPrompt,
     projectPath,
-    writePendingModelNow
+    flushPendingArchitectureViewWork
   ])
 
   const fillNodeWithAi = useCallback(
@@ -1565,7 +1937,7 @@ export function useArchitectureModelController({
         return
       }
       try {
-        await writePendingModelNow()
+        await flushPendingArchitectureViewWork()
         const result = await window.api.architecture.prepareNodeFillPrompt({
           projectPath,
           modelName: activeModelNameRef.current,
@@ -1589,7 +1961,7 @@ export function useArchitectureModelController({
       aiRunSession,
       launchArchitectureAgentPrompt,
       projectPath,
-      writePendingModelNow
+      flushPendingArchitectureViewWork
     ]
   )
 
@@ -1601,7 +1973,7 @@ export function useArchitectureModelController({
       return
     }
     try {
-      await writePendingModelNow()
+      await flushPendingArchitectureViewWork()
       const result = await window.api.architecture.prepareAdvisorPrompt({
         projectPath,
         modelName: activeModelNameRef.current
@@ -1623,7 +1995,7 @@ export function useArchitectureModelController({
     aiRunSession,
     launchArchitectureAgentPrompt,
     projectPath,
-    writePendingModelNow
+    flushPendingArchitectureViewWork
   ])
 
   const writeMcpConfig = useCallback(async () => {
@@ -1640,6 +2012,18 @@ export function useArchitectureModelController({
     }
   }, [projectPath])
 
+  const resolveActiveSyncAgentRunId = useCallback(async (): Promise<string | null> => {
+    const localAgentRunId = syncTerminalTabIdRef.current ?? syncTerminalTabId
+    if (localAgentRunId) {
+      return localAgentRunId
+    }
+    if (!projectPath) {
+      return null
+    }
+    const session = await window.api.architecture.readEditSession({ projectPath }).catch(() => null)
+    return session?.activeLease?.agentRunId ?? null
+  }, [projectPath, syncTerminalTabId])
+
   const startSync = useCallback(async () => {
     if (!projectPath || syncStatus === 'running') {
       return
@@ -1650,8 +2034,9 @@ export function useArchitectureModelController({
     let began = false
     try {
       setError('')
-      await writePendingModelNow()
+      await flushPendingArchitectureViewWork()
       syncResolutionRef.current = null
+      setCompletionGate(null)
       setSyncStatus('running')
       setSyncMessage(null)
       setSyncLog(['Preparing architecture sync prompt'])
@@ -1675,17 +2060,42 @@ export function useArchitectureModelController({
       if (!launched.tabId) {
         throw new Error('Architecture sync agent launch did not return a terminal tab id.')
       }
+      await window.api.architecture.beginEditSession({
+        projectPath,
+        agentRunId: launched.tabId
+      })
       aiRunSession.markRun('sync', 'running', 'Architecture sync is running')
       syncTerminalHadPtyRef.current = false
+      syncTerminalTabIdRef.current = launched.tabId
       setSyncTerminalTabId(launched.tabId)
-      trackArchitectureSyncTerminal(projectPath, launched.tabId)
+      trackArchitectureSyncTerminal(projectPath, launched.tabId, () => {
+        if (autoFinishingSyncRef.current) {
+          return
+        }
+        autoFinishingSyncRef.current = true
+        setSyncLog((current) => [
+          ...current,
+          'Agent reported done. Checking Scryer completion gate.'
+        ])
+        setSyncMessage('Agent reported done. Checking Scryer completion gate.')
+        void finishSyncRef.current().finally(() => {
+          autoFinishingSyncRef.current = false
+        })
+      })
       setSyncLog((current) => [...current, `Sync prompt sent to ${agent}`])
     } catch (syncError) {
       if (began) {
+        const agentRunId = syncTerminalTabIdRef.current
+        if (agentRunId) {
+          await window.api.architecture
+            .cancelEditSession({ projectPath, agentRunId })
+            .catch(() => undefined)
+        }
         await window.api.architecture.cancelSync({ projectPath }).catch(() => null)
       }
       setSyncStatus('error')
       setImplementing(false)
+      syncTerminalTabIdRef.current = null
       const text = syncError instanceof Error ? syncError.message : String(syncError)
       setError(text)
       setSyncMessage(text)
@@ -1699,7 +2109,7 @@ export function useArchitectureModelController({
     projectPath,
     syncStatus,
     workspace.worktreeId,
-    writePendingModelNow
+    flushPendingArchitectureViewWork
   ])
 
   const cancelSync = useCallback(async () => {
@@ -1711,20 +2121,22 @@ export function useArchitectureModelController({
     }
     syncResolutionRef.current = 'cancel'
     try {
-      const restored = await window.api.architecture.cancelSync({ projectPath })
-      modelRef.current = restored
-      setModel(restored)
+      const agentRunId = await resolveActiveSyncAgentRunId()
+      if (agentRunId) {
+        await window.api.architecture
+          .cancelEditSession({ projectPath, agentRunId })
+          .catch(() => undefined)
+      }
+      await window.api.architecture.cancelSync({ projectPath })
+      await loadModel('model')
       setChangedNodeIds(new Set())
       setNodeDiffs(new Map())
-      setSelectedNodeId((current) =>
-        current && restored.nodes.some((node) => node.id === current)
-          ? current
-          : (restored.nodes[0]?.id ?? null)
-      )
       setSelectedEdgeId(null)
       setSyncStatus('idle')
       setSyncLog([])
+      syncTerminalTabIdRef.current = null
       setSyncTerminalTabId(null)
+      setCompletionGate(null)
       setImplementing(false)
       setSyncMessage('Restored pre-sync architecture model')
       aiRunSession.markRun('sync', 'cancelled', 'Architecture sync cancelled')
@@ -1738,7 +2150,7 @@ export function useArchitectureModelController({
     } finally {
       syncResolutionRef.current = null
     }
-  }, [aiRunSession, projectPath])
+  }, [aiRunSession, loadModel, projectPath, resolveActiveSyncAgentRunId])
 
   const finishSync = useCallback(async () => {
     if (!projectPath) {
@@ -1749,9 +2161,21 @@ export function useArchitectureModelController({
     }
     syncResolutionRef.current = 'finish'
     try {
+      let gate: ScryerCompletionGateResult | null = null
+      const agentRunId = await resolveActiveSyncAgentRunId()
+      if (agentRunId) {
+        gate = await window.api.architecture.completeEditSession({
+          projectPath,
+          agentRunId
+        })
+      }
       await window.api.architecture.finishSync({ projectPath })
+      if (gate) {
+        setCompletionGate(gate)
+      }
       setSyncStatus('idle')
       setSyncLog([])
+      syncTerminalTabIdRef.current = null
       setSyncTerminalTabId(null)
       setImplementing(false)
       setDrift({ nodes: [], structureChanged: false })
@@ -1769,7 +2193,11 @@ export function useArchitectureModelController({
     } finally {
       syncResolutionRef.current = null
     }
-  }, [aiRunSession, projectPath])
+  }, [aiRunSession, projectPath, resolveActiveSyncAgentRunId])
+
+  useEffect(() => {
+    finishSyncRef.current = finishSync
+  }, [finishSync])
 
   const dismissSyncMessage = useCallback(() => {
     setSyncMessage(null)
@@ -1855,9 +2283,8 @@ export function useArchitectureModelController({
   const dismissNodeDiff = useCallback(
     (nodeId: string) => {
       setNodeDiffs((current) => {
-        const previousData = current.get(nodeId)
         const currentNode = modelRef.current?.nodes.find((node) => node.id === nodeId)
-        if (previousData && currentNode) {
+        if (currentNode) {
           dismissedNodeDiffKeysRef.current.set(
             nodeDiffDismissalKey(activeModelNameRef.current, nodeId),
             fingerprintNodeData(currentNode.data)
@@ -1879,8 +2306,6 @@ export function useArchitectureModelController({
     [activeModelNameRef]
   )
 
-  const flows = model?.flows ?? []
-
   return {
     projectPath,
     model,
@@ -1889,9 +2314,6 @@ export function useArchitectureModelController({
     templates,
     architectureMode,
     setArchitectureMode,
-    activeFlow,
-    activeFlowId,
-    setActiveFlowId,
     selectedNode,
     selectedEdge,
     selectedGroup,
@@ -1917,12 +2339,12 @@ export function useArchitectureModelController({
     syncStatus,
     syncMessage,
     syncLog,
+    completionGate,
     activeAgent,
     editingLocked,
     canUndo,
     canRedo,
     driftedNodeIds,
-    flows,
     codeLevelNodes,
     message,
     error,
@@ -1942,6 +2364,7 @@ export function useArchitectureModelController({
     undoModelChange,
     redoModelChange,
     addNode,
+    addNodeAtCurrentLevel,
     updateSelectedNode,
     persistNodePatchById,
     updateSelectedNodeDraft,
@@ -1954,15 +2377,13 @@ export function useArchitectureModelController({
     addEdge,
     deleteSelected,
     deleteSelectedEdge,
+    deleteEdgeById,
     addCodeLevelNode,
     deleteNodeById,
     runDriftCheck,
     markSynced,
     navigateToNode,
     drillIntoNode,
-    createFlow,
-    updateFlow,
-    deleteActiveFlow,
     updateGroups,
     createGroupFromSelection,
     addSelectionToGroup,

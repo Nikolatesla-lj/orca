@@ -1,4 +1,7 @@
-import type { C4Kind, C4Shape } from '../../../../../shared/scryer/model-types'
+import type {
+  ArchitectureDiagramKind,
+  ArchitectureDiagramShape
+} from '../architecture-diagram-types'
 import {
   baseRectPath,
   bucketParts,
@@ -13,7 +16,7 @@ import {
 const W = 180
 const H = 160
 
-const KIND_DEFAULTS: Record<C4Kind, C4Shape> = {
+const KIND_DEFAULTS: Record<ArchitectureDiagramKind, ArchitectureDiagramShape> = {
   person: 'person',
   system: 'rectangle',
   container: 'rectangle',
@@ -23,7 +26,10 @@ const KIND_DEFAULTS: Record<C4Kind, C4Shape> = {
   model: 'rectangle'
 }
 
-export function resolveShape(kind: C4Kind, shape?: C4Shape): C4Shape {
+export function resolveShape(
+  kind: ArchitectureDiagramKind,
+  shape?: ArchitectureDiagramShape
+): ArchitectureDiagramShape {
   return shape ?? KIND_DEFAULTS[kind]
 }
 
@@ -34,7 +40,7 @@ function ShapePaths({
   strokeWidth,
   strokeDasharray
 }: {
-  shape: C4Shape
+  shape: ArchitectureDiagramShape
   fill: string
   stroke: string
   strokeWidth: number
@@ -103,8 +109,8 @@ export function ShapeBackground({
   selected,
   statusStroke
 }: {
-  shape: C4Shape
-  kind: C4Kind
+  shape: ArchitectureDiagramShape
+  kind: ArchitectureDiagramKind
   external?: boolean
   changed?: boolean
   selected?: boolean

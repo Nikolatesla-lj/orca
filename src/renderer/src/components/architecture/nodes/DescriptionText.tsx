@@ -1,10 +1,10 @@
 import type { ReactNode } from 'react'
-import type { Status } from '../../../../../shared/scryer/model-types'
+import type { ArchitectureStatus } from '../architecture-diagram-types'
 import { STATUS_COLORS } from './status-colors'
 
 export type MentionNodeInfo = {
   kind: string
-  status?: Status
+  status?: ArchitectureStatus
 }
 
 const REF_RE = /@\[([^\]]+)\]/g

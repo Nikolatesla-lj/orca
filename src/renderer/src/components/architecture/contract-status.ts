@@ -1,4 +1,8 @@
-import type { C4ModelData, C4Node, ContractItem } from '../../../../shared/scryer/model-types'
+import type {
+  ArchitectureContractItem,
+  ArchitectureDiagramModel,
+  ArchitectureDiagramNode
+} from './architecture-diagram-types'
 
 export type NormalizedContractItem = {
   text: string
@@ -11,18 +15,18 @@ export type NormalizedContractItem = {
   }
 }
 
-export function contractItemText(item: ContractItem): string {
+export function contractItemText(item: ArchitectureContractItem): string {
   return typeof item === 'string' ? item : item.text
 }
 
-export function normalizeContractItem(item: ContractItem): NormalizedContractItem {
+export function normalizeContractItem(item: ArchitectureContractItem): NormalizedContractItem {
   return typeof item === 'string' ? { text: item } : { ...item }
 }
 
 export function setContractItemPassed(
-  item: ContractItem,
+  item: ArchitectureContractItem,
   passed: boolean | undefined
-): ContractItem {
+): ArchitectureContractItem {
   const normalized = normalizeContractItem(item)
   return passed === undefined
     ? {
@@ -36,11 +40,11 @@ export function setContractItemPassed(
 }
 
 export function collectInheritedExpectItems(
-  model: C4ModelData,
+  model: ArchitectureDiagramModel,
   nodeId: string
 ): NormalizedContractItem[] {
   const byId = new Map(model.nodes.map((node) => [node.id, node]))
-  const chain: C4Node[] = []
+  const chain: ArchitectureDiagramNode[] = []
   let current = byId.get(nodeId)
   while (current) {
     chain.unshift(current)
@@ -51,7 +55,7 @@ export function collectInheritedExpectItems(
   )
 }
 
-export function getVerifiedBlockers(model: C4ModelData, nodeId: string): string[] {
+export function getVerifiedBlockers(model: ArchitectureDiagramModel, nodeId: string): string[] {
   return collectInheritedExpectItems(model, nodeId)
     .filter((item) => item.passed !== true)
     .map((item) => item.text)

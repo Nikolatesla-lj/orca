@@ -1,6 +1,5 @@
-/* eslint-disable max-lines -- Why: this suite keeps the Scryer C4 view, external diff, grouping, and layout helper assertions together for migration parity. */
 import { describe, expect, it } from 'vitest'
-import type { C4ModelData } from '../../../../shared/scryer/model-types'
+import type { ArchitectureDiagramModel } from './architecture-diagram-types'
 import {
   addMembersToGroupInModel,
   analyzeExternalModelUpdate,
@@ -15,46 +14,46 @@ import {
   getVisibleArchitectureView,
   reconcileExpandedPath,
   updateEdgeDataInModel
-} from './c4-model'
+} from './architecture-diagram-model'
 
-function fixtureModel(): C4ModelData {
+function fixtureModel(): ArchitectureDiagramModel {
   return {
     nodes: [
       {
         id: 'user',
-        type: 'c4',
+        type: 'architecture',
         position: { x: 0, y: 0 },
         data: { name: 'User', description: '', kind: 'person' }
       },
       {
         id: 'shop',
-        type: 'c4',
+        type: 'architecture',
         position: { x: 240, y: 0 },
         data: { name: 'Shop', description: '', kind: 'system', status: 'proposed' }
       },
       {
         id: 'payments',
-        type: 'c4',
+        type: 'architecture',
         position: { x: 520, y: 0 },
         data: { name: 'Payments', description: '', kind: 'system', external: true }
       },
       {
         id: 'web',
-        type: 'c4',
+        type: 'architecture',
         parentId: 'shop',
         position: { x: 0, y: 0 },
         data: { name: 'Web', description: '', kind: 'container', status: 'implemented' }
       },
       {
         id: 'api',
-        type: 'c4',
+        type: 'architecture',
         parentId: 'shop',
         position: { x: 260, y: 0 },
         data: { name: 'API', description: '', kind: 'container', status: 'proposed' }
       },
       {
         id: 'handler',
-        type: 'c4',
+        type: 'architecture',
         parentId: 'api',
         position: { x: 0, y: 0 },
         data: { name: 'Handler', description: '', kind: 'component', status: 'proposed' }
@@ -67,7 +66,7 @@ function fixtureModel(): C4ModelData {
         data: { name: 'listUsers', description: '', kind: 'operation', status: 'proposed' }
       }
     ],
-    edges: [
+    links: [
       { id: 'edge-user-shop', source: 'user', target: 'shop', data: { label: 'uses' } },
       {
         id: 'edge-shop-payments',
@@ -83,6 +82,10 @@ function fixtureModel(): C4ModelData {
       handler: [{ pattern: 'src/api/handler.ts' }],
       operation: [{ pattern: 'src/api/handler.ts', line: 12 }]
     },
+    boundaries: {
+      api: [{ pattern: 'src/api/**', comment: 'api source boundary' }],
+      handler: [{ pattern: 'src/api/handler.ts' }]
+    },
     refPositions: { 'shop/user': { x: 10, y: -180 } },
     groups: [
       {
@@ -91,13 +94,12 @@ function fixtureModel(): C4ModelData {
         memberIds: ['api'],
         contract: { expect: ['thin handlers'], ask: [], never: [] }
       }
-    ],
-    flows: []
+    ]
   }
 }
 
-describe('C4 model view helpers', () => {
-  it('shows root nodes and only root-level edges when no node is expanded', () => {
+describe('architecture diagram model view helpers', () => {
+  it('shows root nodes and only root-level links when no node is expanded', () => {
     const view = getVisibleArchitectureView({
       model: fixtureModel(),
       expandedPath: [],
@@ -140,12 +142,13 @@ describe('C4 model view helpers', () => {
     expect(web?.data._drifted).toBe(true)
   })
 
-  it('cascades node deletion through descendants, edges, source map, and groups', () => {
+  it('cascades node deletion through descendants, edges, source ownership, and groups', () => {
     const model = deleteNodesFromModel(fixtureModel(), ['api'])
 
     expect(model.nodes.map((node) => node.id)).toEqual(['user', 'shop', 'payments', 'web'])
-    expect(model.edges.map((edge) => edge.id)).toEqual(['edge-user-shop', 'edge-shop-payments'])
+    expect(model.links.map((edge) => edge.id)).toEqual(['edge-user-shop', 'edge-shop-payments'])
     expect(model.sourceMap).toEqual({})
+    expect(model.boundaries).toEqual({})
     expect(model.groups).toEqual([])
   })
 
@@ -155,10 +158,10 @@ describe('C4 model view helpers', () => {
       method: ''
     })
 
-    expect(model.edges.find((edge) => edge.id === 'edge-shop-payments')?.data).toEqual({
+    expect(model.links.find((edge) => edge.id === 'edge-shop-payments')?.data).toEqual({
       label: 'publishes event'
     })
-    expect(model.edges.find((edge) => edge.id === 'edge-user-shop')?.data).toEqual({
+    expect(model.links.find((edge) => edge.id === 'edge-user-shop')?.data).toEqual({
       label: 'uses'
     })
   })
@@ -168,7 +171,7 @@ describe('C4 model view helpers', () => {
 
     expect(model.nodes.map((node) => node.id)).toContain('shop')
     expect(model.nodes.map((node) => node.id)).toContain('payments')
-    expect(model.edges.map((edge) => edge.id)).toEqual([
+    expect(model.links.map((edge) => edge.id)).toEqual([
       'edge-user-shop',
       'edge-web-api',
       'edge-api-handler'
@@ -194,9 +197,13 @@ describe('C4 model view helpers', () => {
       handler: [{ pattern: 'src/api/handler.ts' }],
       operation: [{ pattern: 'src/api/handler.ts', line: 12 }]
     })
+    expect(context.boundaries).toEqual({
+      api: [{ pattern: 'src/api/**', comment: 'api source boundary' }],
+      handler: [{ pattern: 'src/api/handler.ts' }]
+    })
   })
 
-  it('creates the next C4 kind for the selected parent', () => {
+  it('creates the next diagram kind for the selected parent', () => {
     const model = fixtureModel()
     const shop = model.nodes.find((node) => node.id === 'shop')!
     const api = model.nodes.find((node) => node.id === 'api')!
@@ -260,7 +267,7 @@ describe('C4 model view helpers', () => {
     const model = deleteReferenceEdgesFromModel(fixtureModel(), 'shop', ['payments'])
 
     expect(model.nodes.map((node) => node.id)).toContain('payments')
-    expect(model.edges.map((edge) => edge.id)).toEqual([
+    expect(model.links.map((edge) => edge.id)).toEqual([
       'edge-user-shop',
       'edge-web-api',
       'edge-api-handler'
@@ -308,7 +315,7 @@ describe('C4 model view helpers', () => {
 
   it('summarizes external model updates with changed node ids, old node data, and follow path', () => {
     const previous = fixtureModel()
-    const incoming: C4ModelData = {
+    const incoming: ArchitectureDiagramModel = {
       ...previous,
       nodes: previous.nodes.map((node) =>
         node.id === 'operation'
@@ -341,7 +348,7 @@ describe('C4 model view helpers', () => {
 
   it('keeps the current path when follow external changes is disabled', () => {
     const previous = fixtureModel()
-    const incoming: C4ModelData = {
+    const incoming: ArchitectureDiagramModel = {
       ...previous,
       nodes: previous.nodes.map((node) =>
         node.id === 'handler' ? { ...node, data: { ...node.data, status: 'implemented' } } : node

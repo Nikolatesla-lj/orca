@@ -9,6 +9,10 @@ import type {
   HostedReviewProvider
 } from '../shared/hosted-review'
 import type { NativeFileDropPayload } from '../shared/native-file-drop'
+import type {
+  ScryerCompletionGateResult,
+  ScryerEditSessionStatus
+} from '../shared/scryer/edit-session'
 import type { ReadClipboardTextOptions } from '../shared/clipboard-text'
 import type { AppIdentity } from '../shared/app-identity'
 import type { TerminalPaneSplitSource } from '../shared/feature-education-telemetry'
@@ -400,6 +404,7 @@ import type {
   ScryerToolCall,
   ScryerToolResult
 } from '../shared/scryer/model-types'
+import type { ArchitectureViewReadResult } from '../shared/scryer/architecture-view'
 
 export type BrowserApi = {
   registerGuest: (args: {
@@ -759,6 +764,11 @@ export type AppApi = {
 }
 
 export type ArchitectureApi = {
+  readArchitectureView: (args: {
+    projectPath: string
+    layer?: 'plan' | 'committed'
+    focusNodeId?: string | null
+  }) => Promise<ArchitectureViewReadResult>
   readModel: (args: { projectPath: string; modelName?: string | null }) => Promise<C4ModelData>
   readModelDocument: (args: { projectPath: string; modelName?: string | null }) => Promise<{
     model: C4ModelData
@@ -835,13 +845,23 @@ export type ArchitectureApi = {
   }) => Promise<{ prompt: string; drift: DriftReport; snapshot: C4ModelData }>
   cancelSync: (args: { projectPath: string }) => Promise<C4ModelData>
   finishSync: (args: { projectPath: string }) => Promise<void>
+  beginEditSession: (args: {
+    projectPath: string
+    agentRunId: string
+  }) => Promise<{ projectPath: string; agentRunId: string }>
+  completeEditSession: (args: {
+    projectPath: string
+    agentRunId: string
+    foldPolicy?: 'never' | 'when_gate_passes'
+  }) => Promise<ScryerCompletionGateResult>
+  cancelEditSession: (args: { projectPath: string; agentRunId: string }) => Promise<void>
+  readEditSession: (args: { projectPath: string }) => Promise<ScryerEditSessionStatus>
   callTool: (args: { projectPath: string; call: ScryerToolCall }) => Promise<ScryerToolResult>
   executeScryerOperation: (args: {
     projectPath: string
     operationId: string
     input?: unknown
     requestId?: string
-    leaseToken?: string
   }) => Promise<unknown>
   watchModel: (args: { projectPath: string }) => Promise<void>
   onModelChanged: (

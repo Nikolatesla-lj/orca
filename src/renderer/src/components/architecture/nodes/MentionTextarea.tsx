@@ -1,13 +1,13 @@
 import { createPortal } from 'react-dom'
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
-import type { Status } from '../../../../../shared/scryer/model-types'
+import type { ArchitectureStatus } from '../architecture-diagram-types'
 import { STATUS_COLORS } from './status-colors'
 
 export type MentionItem = {
   name: string
   insertValue?: string
   kind: 'person' | 'system' | 'container' | 'component' | 'operation' | 'process' | 'model' | 'step'
-  status?: Status
+  status?: ArchitectureStatus
   ref?: boolean
 }
 

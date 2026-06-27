@@ -1,7 +1,7 @@
-import type { Status } from '../../../../../shared/scryer/model-types'
+import type { ArchitectureStatus } from '../architecture-diagram-types'
 
 export const STATUS_COLORS: Record<
-  Status,
+  ArchitectureStatus,
   { stroke: string; dimStroke: string; text: string; fill: string; label: string }
 > = {
   proposed: {
@@ -34,6 +34,6 @@ export const STATUS_COLORS: Record<
   }
 }
 
-export function statusHex(status: Status | undefined): string | undefined {
+export function statusHex(status: ArchitectureStatus | undefined): string | undefined {
   return status ? STATUS_COLORS[status]?.stroke : undefined
 }

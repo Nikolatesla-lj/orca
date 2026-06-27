@@ -20,20 +20,15 @@ import type {
 import { Bot, ChevronRight, LayoutGrid, Maximize, Minus, Plus, Trash2, ZoomIn } from 'lucide-react'
 import '@xyflow/react/dist/style.css'
 import type {
-  C4Edge,
-  C4ModelData,
-  C4Node,
-  SourceLocation
-} from '../../../../shared/scryer/model-types'
+  ArchitectureDiagramModel,
+  ArchitectureDiagramNode,
+  ArchitectureSourceLocation
+} from './architecture-diagram-types'
 import {
   applyNodePositionChangesToModel,
-  createNodeForParent,
-  deleteEdgesFromModel,
-  deleteNodesFromModel,
-  deleteReferenceEdgesFromModel,
   getVisibleGroupBubbles,
   getVisibleArchitectureView
-} from './c4-model'
+} from './architecture-diagram-model'
 import { Button } from '../ui/button'
 import { edgeTypes, type ArchitectureFlowEdge } from './edges'
 import { autoLayoutVisibleNodes, decorateEdgesForRouting } from './layout/architecture-layout'
@@ -41,7 +36,7 @@ import { nodeTypes, type ArchitectureFlowNode } from './nodes'
 import { createArchitecturePerformanceRecorder } from './architecture-performance'
 
 type ArchitectureCanvasProps = {
-  model: C4ModelData
+  model: ArchitectureDiagramModel
   syncing: boolean
   expandedPath: string[]
   selectedNodeId: string | null
@@ -53,17 +48,37 @@ type ArchitectureCanvasProps = {
   onSelectedNodeChange: (nodeId: string | null) => void
   onSelectedEdgeChange: (edgeId: string | null) => void
   onMultiSelectionChange: (nodeIds: string[], totalSelected: number) => void
-  onModelChange: (change: C4ModelData | ModelUpdater, message: string) => void | Promise<void>
-  onOpenSourceLocation: (location: SourceLocation) => void | Promise<void>
+  onModelChange: (
+    change: ArchitectureDiagramModel | ModelUpdater,
+    message: string
+  ) => void | Promise<void>
+  onAddNode: () => void | Promise<void>
+  onAddEdge: (sourceNodeId: string, targetNodeId: string) => void | Promise<void>
+  onDeleteNode: (nodeId: string) => void | Promise<void>
+  onDeleteEdge: (edgeId: string) => void | Promise<void>
+  onOpenSourceLocation: (location: ArchitectureSourceLocation) => void | Promise<void>
   onFillNodeWithAi?: (nodeId: string) => void | Promise<void>
   onCreateGroupFromSelection?: (name: string) => void | Promise<void>
   onAddSelectionToGroup?: (groupId: string) => void | Promise<void>
 }
 
-export type ModelUpdater = (current: C4ModelData) => C4ModelData | null
+export type ModelUpdater = (current: ArchitectureDiagramModel) => ArchitectureDiagramModel | null
 
 const defaultEdgeOptions: DefaultEdgeOptions = {
   type: 'relationship'
+}
+
+function sourceLocationsForNode(
+  model: ArchitectureDiagramModel,
+  nodeId: string
+): ArchitectureSourceLocation[] {
+  const locations = model.sourceMap?.[nodeId] ?? []
+  const boundaryLocations =
+    model.boundaries?.[nodeId]?.map((source) => ({
+      pattern: source.pattern,
+      ...(source.comment ? { command: source.comment } : {})
+    })) ?? []
+  return [...locations, ...boundaryLocations]
 }
 
 export function ArchitectureCanvas(props: ArchitectureCanvasProps): React.JSX.Element {
@@ -88,6 +103,10 @@ function ArchitectureCanvasInner({
   onSelectedEdgeChange,
   onMultiSelectionChange,
   onModelChange,
+  onAddNode,
+  onAddEdge,
+  onDeleteNode,
+  onDeleteEdge,
   onOpenSourceLocation,
   onFillNodeWithAi,
   onCreateGroupFromSelection,
@@ -111,7 +130,7 @@ function ArchitectureCanvasInner({
     ? (model.nodes.find((node) => node.id === selectedNodeId) ?? null)
     : null
   const selectedEdge = selectedEdgeId
-    ? (model.edges.find((edge) => edge.id === selectedEdgeId) ?? null)
+    ? (model.links.find((edge) => edge.id === selectedEdgeId) ?? null)
     : null
   const selectedVisibleNode = selectedNodeId
     ? (view.visibleNodes.find((node) => node.id === selectedNodeId) ?? null)
@@ -123,7 +142,7 @@ function ArchitectureCanvasInner({
         toFlowNode(node, {
           selected: node.id === selectedNodeId || multiSelectedNodeIds.includes(node.id),
           data: {
-            sourceLocations: model.sourceMap?.[node.id] ?? [],
+            sourceLocations: sourceLocationsForNode(model, node.id),
             onExpand: () => onExpandedPathChange([...expandedPath, node.id]),
             onOpenSourceLocation
           }
@@ -131,7 +150,7 @@ function ArchitectureCanvasInner({
       ),
     [
       expandedPath,
-      model.sourceMap,
+      model,
       onExpandedPathChange,
       onOpenSourceLocation,
       selectedNodeId,
@@ -187,19 +206,21 @@ function ArchitectureCanvasInner({
           : []
       )
       if (removedIds.length > 0 || removedReferenceIds.length > 0) {
-        void onModelChange(
-          (current) => {
-            let next = current
-            if (removedReferenceIds.length > 0) {
-              next = deleteReferenceEdgesFromModel(next, view.currentParentId, removedReferenceIds)
-            }
-            if (removedIds.length > 0) {
-              next = deleteNodesFromModel(next, removedIds)
-            }
-            return next
-          },
-          removedIds.length > 0 ? 'Deleted architecture nodes' : 'Disconnected reference nodes'
-        )
+        const referenceEdgeIds = model.links
+          .filter(
+            (link) =>
+              view.currentParentId &&
+              removedReferenceIds.some(
+                (nodeId) =>
+                  (link.source === view.currentParentId && link.target === nodeId) ||
+                  (link.target === view.currentParentId && link.source === nodeId)
+              )
+          )
+          .map((link) => link.id)
+        void Promise.all([
+          ...referenceEdgeIds.map((edgeId) => onDeleteEdge(edgeId)),
+          ...removedIds.map((nodeId) => onDeleteNode(nodeId))
+        ])
         return
       }
       void onModelChange(
@@ -208,7 +229,15 @@ function ArchitectureCanvasInner({
         'Saved canvas layout'
       )
     },
-    [onModelChange, syncing, view.currentParentId, view.refNodeIds]
+    [
+      model.links,
+      onDeleteEdge,
+      onDeleteNode,
+      onModelChange,
+      syncing,
+      view.currentParentId,
+      view.refNodeIds
+    ]
   )
 
   const onEdgesChange = useCallback<OnEdgesChange<ArchitectureFlowEdge>>(
@@ -224,16 +253,13 @@ function ArchitectureCanvasInner({
         changes.filter((change) => change.type === 'remove').map((change) => change.id)
       )
       if (removedIds.size > 0) {
-        void onModelChange(
-          (current) => deleteEdgesFromModel(current, [...removedIds]),
-          'Saved architecture edges'
-        )
+        void Promise.all([...removedIds].map((edgeId) => onDeleteEdge(edgeId)))
         if (selectedEdgeId && removedIds.has(selectedEdgeId)) {
           onSelectedEdgeChange(null)
         }
       }
     },
-    [onModelChange, onSelectedEdgeChange, selectedEdgeId, syncing]
+    [onDeleteEdge, onSelectedEdgeChange, selectedEdgeId, syncing]
   )
 
   const onConnect = useCallback<OnConnect>(
@@ -246,59 +272,27 @@ function ArchitectureCanvasInner({
       ) {
         return
       }
-      const edgeId = `edge-${connection.source}-${connection.target}`
-      void onModelChange((current) => {
-        if (current.edges.some((edge) => edge.id === edgeId)) {
-          return null
-        }
-        const nextEdges: C4Edge[] = [
-          ...current.edges,
-          {
-            id: edgeId,
-            source: connection.source,
-            target: connection.target,
-            data: { label: '' }
-          }
-        ]
-        return { ...current, edges: nextEdges }
-      }, 'Saved architecture edge')
+      void onAddEdge(connection.source, connection.target)
     },
-    [onModelChange, syncing]
+    [onAddEdge, syncing]
   )
 
   const addNodeAtLevel = useCallback(() => {
     if (syncing) {
       return
     }
-    const parent = view.currentParentId
-      ? (model.nodes.find((node) => node.id === view.currentParentId) ?? null)
-      : null
-    const node = createNodeForParent(model, parent)
-    void onModelChange({ ...model, nodes: [...model.nodes, node] }, `Added ${node.data.name}`)
-    onSelectedNodeChange(node.id)
-  }, [model, onModelChange, onSelectedNodeChange, syncing, view.currentParentId])
+    void onAddNode()
+  }, [onAddNode, syncing])
 
   const addNodeAtCanvasPoint = useCallback(
-    (clientX: number, clientY: number) => {
+    (_clientX: number, _clientY: number) => {
       if (syncing) {
         return
       }
-      const parent = view.currentParentId
-        ? (model.nodes.find((node) => node.id === view.currentParentId) ?? null)
-        : null
-      const flowPoint = reactFlow.screenToFlowPosition({ x: clientX, y: clientY })
-      const node = {
-        ...createNodeForParent(model, parent),
-        position: {
-          x: Math.round(flowPoint.x / 20) * 20,
-          y: Math.round(flowPoint.y / 20) * 20
-        }
-      }
-      void onModelChange({ ...model, nodes: [...model.nodes, node] }, `Added ${node.data.name}`)
-      onSelectedNodeChange(node.id)
+      void onAddNode()
       setContextMenu(null)
     },
-    [model, onModelChange, onSelectedNodeChange, reactFlow, syncing, view.currentParentId]
+    [onAddNode, syncing]
   )
 
   const deleteNodeFromMenu = useCallback(
@@ -306,12 +300,11 @@ function ArchitectureCanvasInner({
       if (syncing) {
         return
       }
-      const nextModel = deleteNodesFromModel(model, [nodeId])
-      void onModelChange(nextModel, 'Deleted architecture node')
+      void onDeleteNode(nodeId)
       onSelectedNodeChange(null)
       setContextMenu(null)
     },
-    [model, onModelChange, onSelectedNodeChange, syncing]
+    [onDeleteNode, onSelectedNodeChange, syncing]
   )
 
   const deleteEdgeFromMenu = useCallback(
@@ -319,11 +312,11 @@ function ArchitectureCanvasInner({
       if (syncing) {
         return
       }
-      void onModelChange(deleteEdgesFromModel(model, [edgeId]), 'Deleted architecture edge')
+      void onDeleteEdge(edgeId)
       onSelectedEdgeChange(null)
       setContextMenu(null)
     },
-    [model, onModelChange, onSelectedEdgeChange, syncing]
+    [onDeleteEdge, onSelectedEdgeChange, syncing]
   )
 
   const deleteSelected = useCallback(() => {
@@ -331,30 +324,31 @@ function ArchitectureCanvasInner({
       return
     }
     if (selectedVisibleNode?.data._reference) {
-      void onModelChange(
-        (current) =>
-          deleteReferenceEdgesFromModel(current, view.currentParentId, [selectedVisibleNode.id]),
-        'Disconnected reference node'
-      )
+      const referenceEdgeIds = model.links
+        .filter(
+          (link) =>
+            view.currentParentId &&
+            ((link.source === view.currentParentId && link.target === selectedVisibleNode.id) ||
+              (link.target === view.currentParentId && link.source === selectedVisibleNode.id))
+        )
+        .map((link) => link.id)
+      void Promise.all(referenceEdgeIds.map((edgeId) => onDeleteEdge(edgeId)))
       onSelectedNodeChange(null)
       return
     }
     if (selectedNode) {
-      const nextModel = deleteNodesFromModel(model, [selectedNode.id])
-      void onModelChange(nextModel, `Deleted ${selectedNode.data.name}`)
-      onSelectedNodeChange(nextModel.nodes[0]?.id ?? null)
+      void onDeleteNode(selectedNode.id)
+      onSelectedNodeChange(null)
       return
     }
     if (selectedEdge) {
-      void onModelChange(
-        deleteEdgesFromModel(model, [selectedEdge.id]),
-        `Deleted ${selectedEdge.id}`
-      )
+      void onDeleteEdge(selectedEdge.id)
       onSelectedEdgeChange(null)
     }
   }, [
-    model,
-    onModelChange,
+    model.links,
+    onDeleteEdge,
+    onDeleteNode,
     onSelectedEdgeChange,
     onSelectedNodeChange,
     selectedEdge,
@@ -759,12 +753,12 @@ function ArchitectureCanvasInner({
 }
 
 function toFlowNode(
-  node: C4Node,
+  node: ArchitectureDiagramNode,
   options: { selected: boolean; data: Record<string, unknown> }
 ): ArchitectureFlowNode {
   return {
     id: node.id,
-    type: node.type ?? 'c4',
+    type: node.type ?? 'architecture',
     position: node.position ?? { x: 0, y: 0 },
     dragHandle: '.architecture-node-title',
     data: {

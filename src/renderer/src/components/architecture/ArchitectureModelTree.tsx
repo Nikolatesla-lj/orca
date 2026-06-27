@@ -1,26 +1,25 @@
 import type React from 'react'
-import { Boxes, ChevronRight, GitBranch, Network } from 'lucide-react'
-import type { C4ModelData, C4Node } from '../../../../shared/scryer/model-types'
-import { isExpandableKind } from './c4-model'
+import { Boxes, ChevronRight, Network } from 'lucide-react'
+import type {
+  ArchitectureDiagramModel,
+  ArchitectureDiagramNode
+} from './architecture-diagram-types'
+import { isExpandableKind } from './architecture-diagram-model'
 
 type ArchitectureModelTreeProps = {
-  model: C4ModelData
+  model: ArchitectureDiagramModel
   selectedNodeId: string | null
-  activeFlowId: string | null
   onSelectNode: (nodeId: string) => void
   onDrillNode: (nodeId: string) => void
-  onSelectFlow: (flowId: string) => void
 }
 
 export function ArchitectureModelTree({
   model,
   selectedNodeId,
-  activeFlowId,
   onSelectNode,
-  onDrillNode,
-  onSelectFlow
+  onDrillNode
 }: ArchitectureModelTreeProps): React.JSX.Element {
-  const childrenByParent = new Map<string, C4Node[]>()
+  const childrenByParent = new Map<string, ArchitectureDiagramNode[]>()
   for (const node of model.nodes) {
     const key = node.parentId ?? ''
     childrenByParent.set(key, [...(childrenByParent.get(key) ?? []), node])
@@ -60,33 +59,6 @@ export function ArchitectureModelTree({
             </div>
           ) : null}
         </section>
-
-        <section className="grid gap-1 border-t border-border pt-2">
-          <div className="flex items-center gap-1.5 px-1 py-1 font-medium text-muted-foreground">
-            <GitBranch className="size-3.5" />
-            Flow tree
-          </div>
-          {(model.flows ?? []).map((flow) => (
-            <button
-              key={flow.id}
-              type="button"
-              className={`flex items-center gap-1 rounded px-2 py-1 text-left hover:bg-accent ${
-                flow.id === activeFlowId ? 'bg-accent text-foreground' : 'text-muted-foreground'
-              }`}
-              onClick={() => onSelectFlow(flow.id)}
-              data-testid="architecture-flow-tree-node"
-            >
-              <GitBranch className="size-3" />
-              <span className="min-w-0 flex-1 truncate">{flow.name || flow.id}</span>
-              <span>{flow.steps.length}</span>
-            </button>
-          ))}
-          {(model.flows ?? []).length === 0 ? (
-            <div className="rounded border border-dashed border-border px-2 py-3 text-center text-muted-foreground">
-              No flows
-            </div>
-          ) : null}
-        </section>
       </div>
     </aside>
   )
@@ -100,9 +72,9 @@ function TreeNode({
   onSelectNode,
   onDrillNode
 }: {
-  node: C4Node
+  node: ArchitectureDiagramNode
   depth: number
-  childrenByParent: Map<string, C4Node[]>
+  childrenByParent: Map<string, ArchitectureDiagramNode[]>
   selectedNodeId: string | null
   onSelectNode: (nodeId: string) => void
   onDrillNode: (nodeId: string) => void

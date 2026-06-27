@@ -1,4 +1,7 @@
-import type { C4Edge, C4Node } from '../../../../../shared/scryer/model-types'
+import type {
+  ArchitectureDiagramLink,
+  ArchitectureDiagramNode
+} from '../architecture-diagram-types'
 
 const NODE_W = 180
 const NODE_H = 160
@@ -10,7 +13,7 @@ export type BundleInfo = {
   hubIsSource: boolean
 }
 
-function measuredSize(node: C4Node): { width: number; height: number } {
+function measuredSize(node: ArchitectureDiagramNode): { width: number; height: number } {
   const measured = node.measured as { width?: number; height?: number } | undefined
   return {
     width: measured?.width ?? NODE_W,
@@ -18,7 +21,7 @@ function measuredSize(node: C4Node): { width: number; height: number } {
   }
 }
 
-function nodeCenter(node: C4Node): { x: number; y: number } {
+function nodeCenter(node: ArchitectureDiagramNode): { x: number; y: number } {
   const position = node.position ?? { x: 0, y: 0 }
   const { width, height } = measuredSize(node)
   return { x: position.x + width / 2, y: position.y + height / 2 }
@@ -49,11 +52,11 @@ const MAGNET_DIRECTIONS = [
 ]
 
 export function computeEdgeBundles(
-  edges: readonly Pick<C4Edge, 'id' | 'source' | 'target'>[],
-  nodes: readonly C4Node[]
+  edges: readonly Pick<ArchitectureDiagramLink, 'id' | 'source' | 'target'>[],
+  nodes: readonly ArchitectureDiagramNode[]
 ): Map<string, BundleInfo> {
   const nodeMap = new Map(nodes.map((node) => [node.id, node]))
-  const nodeEdges = new Map<string, Pick<C4Edge, 'id' | 'source' | 'target'>[]>()
+  const nodeEdges = new Map<string, Pick<ArchitectureDiagramLink, 'id' | 'source' | 'target'>[]>()
   const result = new Map<string, BundleInfo>()
 
   for (const edge of edges) {
@@ -78,12 +81,10 @@ export function computeEdgeBundles(
 
     const hubCenter = nodeCenter(hub)
     const hubSize = measuredSize(hub)
-    const buckets: { edge: Pick<C4Edge, 'id' | 'source' | 'target'>; hubIsSource: boolean }[][] = [
-      [],
-      [],
-      [],
-      []
-    ]
+    const buckets: {
+      edge: Pick<ArchitectureDiagramLink, 'id' | 'source' | 'target'>
+      hubIsSource: boolean
+    }[][] = [[], [], [], []]
 
     for (const edge of hubEdges) {
       if (result.has(edge.id)) {

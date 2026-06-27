@@ -1,17 +1,22 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { ArrowUp, Code, Plus, Table, Trash2, Workflow } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import type { C4Kind, C4Node, ModelProperty, Status } from '../../../../shared/scryer/model-types'
+import type {
+  ArchitectureDiagramKind,
+  ArchitectureDiagramNode,
+  ArchitectureModelProperty,
+  ArchitectureStatus
+} from './architecture-diagram-types'
 import { Button } from '../ui/button'
 import { DescriptionText } from './nodes/DescriptionText'
 
-const COLUMNS: { kind: C4Kind; title: string; icon: LucideIcon }[] = [
+const COLUMNS: { kind: ArchitectureDiagramKind; title: string; icon: LucideIcon }[] = [
   { kind: 'model', title: 'Models', icon: Table },
   { kind: 'operation', title: 'Operations', icon: Code },
   { kind: 'process', title: 'Processes', icon: Workflow }
 ]
 
-const STATUS_DOT: Partial<Record<Status, string>> = {
+const STATUS_DOT: Partial<Record<ArchitectureStatus, string>> = {
   proposed: 'bg-slate-400',
   implemented: 'bg-blue-400',
   verified: 'bg-emerald-400',
@@ -19,13 +24,13 @@ const STATUS_DOT: Partial<Record<Status, string>> = {
 }
 
 export type CodeLevelRackProps = {
-  nodes: C4Node[]
+  nodes: ArchitectureDiagramNode[]
   selectedNodeId: string | null
   syncing: boolean
   parentName: string
   onNavigateUp: () => void
   onSelectNode: (nodeId: string) => void
-  onAddNode: (kind: C4Kind) => void | Promise<void>
+  onAddNode: (kind: ArchitectureDiagramKind) => void | Promise<void>
   onDeleteNode: (nodeId: string) => void | Promise<void>
 }
 
@@ -40,7 +45,7 @@ export function CodeLevelRack({
   onDeleteNode
 }: CodeLevelRackProps): React.JSX.Element {
   const nodesByKind = useMemo(() => {
-    const result = new Map<C4Kind, C4Node[]>()
+    const result = new Map<ArchitectureDiagramKind, ArchitectureDiagramNode[]>()
     for (const node of nodes) {
       const list = result.get(node.data.kind) ?? []
       list.push(node)
@@ -67,7 +72,7 @@ export function CodeLevelRack({
   const previousSelectedIdRef = useRef(selectedNodeId)
   const previousNodeIdsRef = useRef<string[]>([])
   const nodeMap = useMemo(() => {
-    const map = new Map<string, { kind: string; status?: Status }>()
+    const map = new Map<string, { kind: string; status?: ArchitectureStatus }>()
     for (const node of nodes) {
       map.set(node.data.name, { kind: node.data.kind, status: node.data.status })
       map.set(node.id, { kind: node.data.kind, status: node.data.status })
@@ -179,10 +184,10 @@ function CodeLevelCard({
   onSelect,
   onDelete
 }: {
-  node: C4Node
+  node: ArchitectureDiagramNode
   selected: boolean
   syncing: boolean
-  nodeMap: Map<string, { kind: string; status?: Status }>
+  nodeMap: Map<string, { kind: string; status?: ArchitectureStatus }>
   onSelect: () => void
   onDelete: () => void
 }): React.JSX.Element {
@@ -236,7 +241,11 @@ function CodeLevelCard({
   )
 }
 
-function PropertyList({ properties }: { properties: ModelProperty[] }): React.JSX.Element {
+function PropertyList({
+  properties
+}: {
+  properties: ArchitectureModelProperty[]
+}): React.JSX.Element {
   return (
     <div className="mt-2 space-y-1">
       {properties.map((property) => (

@@ -1,12 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ArchitectureWorkspace } from '../../../../shared/types'
-import type { C4ModelData, C4NodeData } from '../../../../shared/scryer/model-types'
 import { joinPath } from '../../lib/path'
-import {
-  hasRecentArchitectureSelfWrite,
-  recordArchitectureSelfWrite
-} from './architecture-self-write-registry'
-import { createArchitecturePerformanceRecorder } from './architecture-performance'
+import { hasRecentArchitectureSelfWrite } from './architecture-self-write-registry'
+import { architectureViewToDiagramModel } from './architecture-view-model'
+import type { ArchitectureDiagramModel } from './architecture-diagram-types'
 
 export type ArchitectureProjectModelEntry = {
   name: string
@@ -21,16 +18,22 @@ export type ArchitectureTemplateEntry = {
   name: string
 }
 
-export type ArchitectureModelDocument = {
-  model: C4ModelData
+export type ArchitectureViewDocument = {
+  model: ArchitectureDiagramModel
   revision: string
 }
 
-type PendingModelWrite = {
-  projectPath: string
-  modelName: string
-  model: C4ModelData
-  baseRevision: string | null
+function emptyDiagramModel(projectPath: string): ArchitectureDiagramModel {
+  return {
+    nodes: [],
+    links: [],
+    startingLevel: 'system',
+    sourceMap: {},
+    boundaries: {},
+    projectPath,
+    refPositions: {},
+    groups: []
+  }
 }
 
 export function sanitizeClientModelName(modelName?: string | null): string {
@@ -40,6 +43,20 @@ export function sanitizeClientModelName(modelName?: string | null): string {
     .replace(/[^a-z0-9_-]+/g, '-')
     .replace(/^-+|-+$/g, '')
   return sanitized || 'model'
+}
+
+export function isActiveArchitectureModelChange(
+  fileName: string,
+  activeModelName: string
+): boolean {
+  const activeName = sanitizeClientModelName(activeModelName)
+  return (
+    fileName === `${activeName}.scry` || (activeName === 'model' && fileName === 'planned.scry')
+  )
+}
+
+function isCommittedArchitectureModelChange(fileName: string, activeModelName: string): boolean {
+  return fileName === `${sanitizeClientModelName(activeModelName)}.scry`
 }
 
 export function useArchitectureModelSession({
@@ -63,15 +80,11 @@ export function useArchitectureModelSession({
   onError: (error: unknown) => void
 }) {
   const activeModelNameRef = useRef(sanitizeClientModelName(workspace.modelRef))
-  const revisionRef = useRef<string | null>(null)
-  const pendingModelWriteRef = useRef<PendingModelWrite | null>(null)
-  const pendingModelWriteTimerRef = useRef<number | null>(null)
   const [activeModelName, setActiveModelName] = useState(() =>
     sanitizeClientModelName(workspace.modelRef)
   )
   const [projectModels, setProjectModels] = useState<ArchitectureProjectModelEntry[]>([])
   const [templates, setTemplates] = useState<ArchitectureTemplateEntry[]>([])
-  const performanceRecorderRef = useRef(createArchitecturePerformanceRecorder())
 
   const refreshProjectModels = useCallback(async () => {
     if (!projectPath) {
@@ -87,112 +100,47 @@ export function useArchitectureModelSession({
     setTemplates(nextTemplates)
   }, [projectPath])
 
-  const readModelDocument = useCallback(
-    (requestedModelName?: string | null) => {
+  const readArchitectureViewDocument = useCallback(
+    async (requestedModelName?: string | null): Promise<ArchitectureViewDocument> => {
       const modelName = sanitizeClientModelName(requestedModelName ?? activeModelNameRef.current)
-      return window.api.architecture.readModelDocument({ projectPath, modelName })
+      if (modelName !== 'model') {
+        throw new Error('Only the default Scryer 0.3 Architecture model is supported.')
+      }
+      const result = await window.api.architecture.readArchitectureView({
+        projectPath,
+        layer: 'plan'
+      })
+      if (!result.ok) {
+        if (
+          result.error.code === 'incompatible_model' &&
+          result.error.message.includes('Missing Scryer model file')
+        ) {
+          return {
+            model: emptyDiagramModel(projectPath),
+            revision: result.requestId
+          }
+        }
+        throw new Error(result.error.message)
+      }
+      return {
+        model: architectureViewToDiagramModel(result.result, projectPath),
+        revision: result.requestId
+      }
     },
     [projectPath]
   )
 
-  const acceptLoadedModelDocument = useCallback(
-    (modelName: string, revision: string) => {
+  const acceptLoadedArchitectureViewDocument = useCallback(
+    (modelName: string, _revision: string) => {
       const sanitized = sanitizeClientModelName(modelName)
       activeModelNameRef.current = sanitized
-      revisionRef.current = revision
       setActiveModelName(sanitized)
       setArchitectureModelRef(workspace.id, sanitized)
     },
     [setArchitectureModelRef, workspace.id]
   )
 
-  const writePendingModelNow = useCallback(async () => {
-    const pending = pendingModelWriteRef.current
-    if (!pending) {
-      return
-    }
-    pendingModelWriteRef.current = null
-    if (pendingModelWriteTimerRef.current !== null) {
-      window.clearTimeout(pendingModelWriteTimerRef.current)
-      pendingModelWriteTimerRef.current = null
-    }
-    try {
-      const selfWritePath = joinPath(
-        joinPath(pending.projectPath, '.scryer'),
-        `${pending.modelName}.scry`
-      )
-      recordArchitectureSelfWrite(selfWritePath)
-      const result = await performanceRecorderRef.current.measureAsync('save', () =>
-        window.api.architecture.writeModelDocument({
-          projectPath: pending.projectPath,
-          model: pending.model,
-          modelName: pending.modelName,
-          baseRevision: pending.baseRevision
-        })
-      )
-      revisionRef.current = result.revision
-    } catch (writeError) {
-      onError(writeError)
-      throw writeError
-    }
-  }, [onError])
-
-  const scheduleModelWrite = useCallback(
-    (nextModel: C4ModelData) => {
-      if (!projectPath) {
-        return
-      }
-      pendingModelWriteRef.current = {
-        projectPath,
-        modelName: activeModelNameRef.current,
-        model: nextModel,
-        baseRevision: revisionRef.current
-      }
-      if (pendingModelWriteTimerRef.current !== null) {
-        window.clearTimeout(pendingModelWriteTimerRef.current)
-      }
-      pendingModelWriteTimerRef.current = window.setTimeout(() => {
-        void writePendingModelNow()
-      }, 500)
-    },
-    [projectPath, writePendingModelNow]
-  )
-
-  const patchActiveNodeData = useCallback(
-    async (
-      nodeId: string,
-      patch: Partial<C4NodeData>,
-      baseNodeData: C4NodeData
-    ): Promise<ArchitectureModelDocument> => {
-      await writePendingModelNow()
-      const selfWritePath = joinPath(
-        joinPath(projectPath, '.scryer'),
-        `${activeModelNameRef.current}.scry`
-      )
-      recordArchitectureSelfWrite(selfWritePath)
-      const result = await window.api.architecture.patchNodeData({
-        projectPath,
-        modelName: activeModelNameRef.current,
-        nodeId,
-        patch,
-        baseRevision: revisionRef.current,
-        baseNodeData
-      })
-      revisionRef.current = result.revision
-      return result
-    },
-    [projectPath, writePendingModelNow]
-  )
-
-  useEffect(
-    () => () => {
-      if (pendingModelWriteTimerRef.current !== null) {
-        window.clearTimeout(pendingModelWriteTimerRef.current)
-      }
-      void writePendingModelNow()
-    },
-    [writePendingModelNow]
-  )
+  const flushPendingArchitectureViewWork = useCallback(async () => {}, [])
 
   useEffect(() => {
     if (!projectPath) {
@@ -207,11 +155,18 @@ export function useArchitectureModelSession({
       if (hasRecentArchitectureSelfWrite(changedPath)) {
         return
       }
-      if (event.fileName !== `${activeModelNameRef.current}.scry`) {
+      if (!isActiveArchitectureModelChange(event.fileName, activeModelNameRef.current)) {
         void refreshProjectModels()
         return
       }
       void (async () => {
+        if (!isCommittedArchitectureModelChange(event.fileName, activeModelNameRef.current)) {
+          void refreshProjectModels()
+          if (!isActiveModelEditableTarget()) {
+            onActiveModelReload()
+          }
+          return
+        }
         const remaining = await window.api.architecture.listModels({ projectPath })
         if (!remaining.some((entry) => entry.fileName === event.fileName)) {
           setProjectModels(remaining)
@@ -239,11 +194,9 @@ export function useArchitectureModelSession({
     activeModelNameRef,
     projectModels,
     templates,
-    readModelDocument,
-    acceptLoadedModelDocument,
+    readArchitectureViewDocument,
+    acceptLoadedArchitectureViewDocument,
     refreshProjectModels,
-    scheduleModelWrite,
-    writePendingModelNow,
-    patchActiveNodeData
+    flushPendingArchitectureViewWork
   }
 }

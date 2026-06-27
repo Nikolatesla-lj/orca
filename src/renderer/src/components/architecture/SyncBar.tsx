@@ -10,6 +10,7 @@ import {
   Unlock,
   X
 } from 'lucide-react'
+import type { ScryerCompletionGateResult } from '../../../../shared/scryer/edit-session'
 
 type DriftInfo = { nodeId: string; nodeName: string; patterns: string[] }
 
@@ -23,6 +24,7 @@ export type SyncBarProps = {
   syncStatus: SyncStatus
   syncMessage: string | null
   syncLog: string[]
+  completionGate?: ScryerCompletionGateResult | null
   projectPath: string | undefined
   onSync: () => void | Promise<void>
   onCancelSync: () => void | Promise<void>
@@ -50,6 +52,7 @@ export function SyncBar({
   syncStatus,
   syncMessage,
   syncLog,
+  completionGate,
   projectPath,
   onSync,
   onCancelSync,
@@ -81,6 +84,7 @@ export function SyncBar({
   }, [syncStatus])
 
   const isSuccess = syncStatus === 'idle' && !!syncMessage && !hasDrift
+  const completionGateMessage = completionGate ? formatCompletionGateMessage(completionGate) : null
   const dismissRef = useRef(onDismissMessage)
   dismissRef.current = onDismissMessage
   useEffect(() => {
@@ -198,6 +202,22 @@ export function SyncBar({
               <X className="size-3" />
             </button>
           </>
+        ) : completionGateMessage && !hasDrift ? (
+          <div
+            className={`flex min-w-0 items-center gap-1.5 ${
+              completionGate?.ok
+                ? 'text-emerald-600 dark:text-emerald-400'
+                : 'text-amber-600 dark:text-amber-400'
+            }`}
+            data-testid="architecture-sync-completion-gate"
+          >
+            {completionGate?.ok ? (
+              <Check className="size-3 shrink-0" />
+            ) : (
+              <AlertCircle className="size-3 shrink-0" />
+            )}
+            <span className="truncate">{completionGateMessage}</span>
+          </div>
         ) : syncMessage && !hasDrift ? (
           <div className="flex min-w-0 items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
             <Check className="size-3 shrink-0" />
@@ -344,4 +364,23 @@ export function SyncBar({
       ) : null}
     </div>
   )
+}
+
+export function formatCompletionGateMessage(gate: ScryerCompletionGateResult): string {
+  switch (gate.nextAction) {
+    case 'nothing_to_fold':
+      return 'No model changes to fold'
+    case 'fold_allowed': {
+      const count = gate.pending.total
+      return `${count} pending change${count === 1 ? '' : 's'} ready to fold`
+    }
+    case 'fix_validation': {
+      const count = gate.validation.blockingCount
+      return `Fix ${count} validation error${count === 1 ? '' : 's'} before folding`
+    }
+    case 'manual_review':
+      return 'Manual review required before folding'
+    case 'blocked_by_lease':
+      return 'Edit session blocked by another lease'
+  }
 }

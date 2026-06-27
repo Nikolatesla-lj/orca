@@ -1,18 +1,7 @@
 /* eslint-disable max-lines -- Why: this panel still composes the migrated C4 canvas, flow, group, sync, and inspector surfaces while controller logic now lives in useArchitectureModelController. */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type React from 'react'
-import {
-  Bot,
-  Boxes,
-  Command,
-  GitBranch,
-  Network,
-  Plug,
-  Plus,
-  Redo2,
-  RefreshCw,
-  Undo2
-} from 'lucide-react'
+import { Bot, Boxes, Command, Network, Plug, Plus, Redo2, RefreshCw, Undo2 } from 'lucide-react'
 import type { ArchitectureWorkspace } from '../../../../shared/types'
 import { Button } from '../ui/button'
 import { ArchitectureCanvas } from './ArchitectureCanvas'
@@ -22,7 +11,6 @@ import { ArchitectureModelTree } from './ArchitectureModelTree'
 import { ArchitectureSectionBoundary } from './ArchitectureSectionBoundary'
 import { ArchitectureThemeEditor } from './ArchitectureThemeEditor'
 import { CodeLevelRack } from './CodeLevelRack'
-import { FlowScriptView } from './FlowScriptView'
 import { GroupsDndProvider, GroupsMain } from './GroupsView'
 import { SyncBar } from './SyncBar'
 import {
@@ -80,9 +68,6 @@ export default function ArchitecturePanel({
     templates,
     architectureMode,
     setArchitectureMode,
-    activeFlow,
-    activeFlowId,
-    setActiveFlowId,
     selectedNode,
     selectedEdge,
     selectedGroup,
@@ -108,12 +93,12 @@ export default function ArchitecturePanel({
     syncStatus,
     syncMessage,
     syncLog,
+    completionGate,
     activeAgent,
     editingLocked,
     canUndo,
     canRedo,
     driftedNodeIds,
-    flows,
     codeLevelNodes,
     message,
     error,
@@ -133,6 +118,7 @@ export default function ArchitecturePanel({
     undoModelChange,
     redoModelChange,
     addNode,
+    addNodeAtCurrentLevel,
     updateSelectedNode,
     persistNodePatchById,
     updateSelectedNodeDraft,
@@ -145,15 +131,13 @@ export default function ArchitecturePanel({
     addEdge,
     deleteSelected,
     deleteSelectedEdge,
+    deleteEdgeById,
     addCodeLevelNode,
     deleteNodeById,
     runDriftCheck,
     markSynced,
     navigateToNode,
     drillIntoNode,
-    createFlow,
-    updateFlow,
-    deleteActiveFlow,
     updateGroups,
     createGroupFromSelection,
     addSelectionToGroup,
@@ -219,73 +203,11 @@ export default function ArchitecturePanel({
     architectureMode === 'topology' && !!model && model.nodes.length === 0 && !!projectPath
 
   const mainContent = error ? (
-    <div className="flex-1 p-4 text-sm text-destructive">{error}</div>
+    <div className="flex-1 p-4 text-sm text-destructive" data-testid="architecture-error">
+      {error}
+    </div>
   ) : model ? (
-    architectureMode === 'flows' ? (
-      <div className="flex min-h-0 flex-1 flex-col bg-[var(--surface)]">
-        <div
-          className="flex h-9 shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-3"
-          data-testid="architecture-flow-tabs"
-        >
-          {flows.length === 0 ? (
-            <span className="mr-auto text-xs text-muted-foreground">No flows yet</span>
-          ) : (
-            flows.map((flow) => (
-              <button
-                key={flow.id}
-                type="button"
-                className={`max-w-44 shrink-0 truncate rounded px-2 py-1 text-xs transition-colors ${
-                  flow.id === activeFlow?.id
-                    ? 'bg-accent text-foreground'
-                    : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
-                }`}
-                onClick={() => setActiveFlowId(flow.id)}
-                data-testid="architecture-flow-tab"
-                data-flow-id={flow.id}
-              >
-                {flow.name || flow.id}
-              </button>
-            ))
-          )}
-          <Button
-            variant="outline"
-            size="xs"
-            onClick={() => void createFlow()}
-            disabled={editingLocked}
-            data-testid="architecture-flow-create"
-          >
-            <Plus className="size-3" />
-            Flow
-          </Button>
-        </div>
-        {activeFlow ? (
-          <FlowScriptView
-            flow={activeFlow}
-            allNodes={model.nodes}
-            sourceMap={model.sourceMap ?? {}}
-            onUpdate={updateFlow}
-            onDelete={deleteActiveFlow}
-            onNavigateToNode={navigateToNode}
-            onSwitchToTopology={() => setArchitectureMode('topology')}
-            onOpenSourceLocation={openSourceLocation}
-            onUpdateSourceMap={saveSourceLocations}
-          />
-        ) : (
-          <div className="flex flex-1 items-center justify-center">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void createFlow()}
-              disabled={editingLocked}
-              data-testid="architecture-flow-empty-create"
-            >
-              <Plus className="size-3.5" />
-              New flow
-            </Button>
-          </div>
-        )}
-      </div>
-    ) : architectureMode === 'groups' ? (
+    architectureMode === 'groups' ? (
       <GroupsMain />
     ) : currentParentKind === 'component' && currentParentId ? (
       <CodeLevelRack
@@ -319,6 +241,10 @@ export default function ArchitecturePanel({
         onSelectedEdgeChange={selectEdge}
         onMultiSelectionChange={selectManyNodes}
         onModelChange={applyModelChange}
+        onAddNode={addNodeAtCurrentLevel}
+        onAddEdge={addEdge}
+        onDeleteNode={deleteNodeById}
+        onDeleteEdge={deleteEdgeById}
         onOpenSourceLocation={openSourceLocation}
         onFillNodeWithAi={fillNodeWithAi}
         onCreateGroupFromSelection={createGroupFromSelection}
@@ -367,16 +293,6 @@ export default function ArchitecturePanel({
           >
             <Network className="size-3" />
             Topology
-          </button>
-          <button
-            type="button"
-            className={modeButtonClass(architectureMode, 'flows')}
-            aria-pressed={architectureMode === 'flows'}
-            onClick={() => setArchitectureMode('flows')}
-            data-testid="architecture-mode-flows"
-          >
-            <GitBranch className="size-3" />
-            Flows
           </button>
           {canShowGroups || architectureMode === 'groups' ? (
             <button
@@ -476,7 +392,7 @@ export default function ArchitecturePanel({
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         <ArchitectureSectionBoundary
           name="Architecture workspace"
-          resetKey={`${activeModelName}:${architectureMode}:${activeFlowId ?? ''}:${currentParentId ?? ''}`}
+          resetKey={`${activeModelName}:${architectureMode}:${currentParentId ?? ''}`}
         >
           {mainContent}
         </ArchitectureSectionBoundary>
@@ -535,6 +451,7 @@ export default function ArchitecturePanel({
         syncStatus={syncStatus}
         syncMessage={syncMessage}
         syncLog={syncLog}
+        completionGate={completionGate}
         projectPath={projectPath ?? undefined}
         onSync={startSync}
         onCancelSync={cancelSync}
@@ -581,6 +498,7 @@ export default function ArchitecturePanel({
         onSaveSourcePattern={saveSourcePattern}
         onSaveSourceLocations={saveSourceLocations}
         onTargetNodeChange={setTargetNodeId}
+        onSelectEdge={selectEdge}
         onAddEdge={addEdge}
         onCreateGroupFromSelection={createGroupFromSelection}
         onAddSelectionToGroup={addSelectionToGroup}
@@ -599,16 +517,11 @@ export default function ArchitecturePanel({
       <ArchitectureModelTree
         model={model}
         selectedNodeId={selectedNodeId}
-        activeFlowId={activeFlowId}
         onSelectNode={(nodeId) => {
           setArchitectureMode('topology')
           navigateToNode(nodeId)
         }}
         onDrillNode={drillIntoNode}
-        onSelectFlow={(flowId) => {
-          setArchitectureMode('flows')
-          setActiveFlowId(flowId)
-        }}
       />
     </ArchitectureSectionBoundary>
   ) : null

@@ -2,20 +2,20 @@
 import { Boxes, Plus, Save, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
-  C4Edge,
-  C4ModelData,
-  C4Node,
-  C4Shape,
-  Contract,
-  ContractItem,
-  Group,
-  ModelProperty,
-  SourceLocation,
-  Status
-} from '../../../../shared/scryer/model-types'
+  ArchitectureDiagramLink,
+  ArchitectureDiagramModel,
+  ArchitectureDiagramNode,
+  ArchitectureDiagramShape,
+  ArchitectureContract,
+  ArchitectureContractItem,
+  ArchitectureGroup,
+  ArchitectureModelProperty,
+  ArchitectureSourceLocation,
+  ArchitectureStatus
+} from './architecture-diagram-types'
 import { Button } from '../ui/button'
 import { GroupsPalette } from './GroupsView'
-import { getNodeContextForModel } from './c4-model'
+import { getNodeContextForModel } from './architecture-diagram-model'
 import {
   contractItemText as getContractItemText,
   getVerifiedBlockers,
@@ -24,8 +24,8 @@ import {
 } from './contract-status'
 import { MentionTextarea, type MentionItem } from './nodes/MentionTextarea'
 
-const STATUS_OPTIONS: Status[] = ['proposed', 'implemented', 'verified', 'vagrant']
-const SHAPE_OPTIONS: C4Shape[] = [
+const STATUS_OPTIONS: ArchitectureStatus[] = ['proposed', 'implemented', 'verified', 'vagrant']
+const SHAPE_OPTIONS: ArchitectureDiagramShape[] = [
   'rectangle',
   'person',
   'cylinder',
@@ -38,10 +38,10 @@ const INSPECTOR_PANEL_CLASS =
   'flex w-80 shrink-0 flex-col border-l border-border bg-background text-sm xl:w-96'
 
 type ArchitectureContextPanelProps = {
-  model: C4ModelData | null
-  selectedNode: C4Node | null
-  selectedEdge: C4Edge | null
-  selectedGroup: Group | null
+  model: ArchitectureDiagramModel | null
+  selectedNode: ArchitectureDiagramNode | null
+  selectedEdge: ArchitectureDiagramLink | null
+  selectedGroup: ArchitectureGroup | null
   multiSelectedNodeIds: string[]
   totalSelected: number
   canGroupSelection: boolean
@@ -52,22 +52,29 @@ type ArchitectureContextPanelProps = {
   onSave: () => void | Promise<void>
   onDeleteNode: () => void | Promise<void>
   onDeleteEdge: () => void | Promise<void>
-  onUpdateNodeDraft: (nodeId: string, patch: Partial<C4Node['data']>) => void
-  onUpdateNode: (patch: Partial<C4Node['data']>) => void | Promise<void>
-  onPersistNodeById: (nodeId: string, patch: Partial<C4Node['data']>) => void | Promise<void>
+  onUpdateNodeDraft: (nodeId: string, patch: Partial<ArchitectureDiagramNode['data']>) => void
+  onUpdateNode: (patch: Partial<ArchitectureDiagramNode['data']>) => void | Promise<void>
+  onPersistNodeById: (
+    nodeId: string,
+    patch: Partial<ArchitectureDiagramNode['data']>
+  ) => void | Promise<void>
   onUpdateEdge: (patch: { label?: string; method?: string }) => void | Promise<void>
   onSourcePatternChange: (pattern: string) => void
   onSaveSourcePattern: (pattern: string) => void | Promise<void>
-  onSaveSourceLocations: (nodeId: string, locations: SourceLocation[]) => void | Promise<void>
+  onSaveSourceLocations: (
+    nodeId: string,
+    locations: ArchitectureSourceLocation[]
+  ) => void | Promise<void>
   onTargetNodeChange: (nodeId: string) => void
+  onSelectEdge: (edgeId: string) => void
   onAddEdge: (sourceNodeId: string, targetNodeId: string) => void | Promise<void>
   onCreateGroupFromSelection: (name: string) => void | Promise<void>
   onAddSelectionToGroup: (groupId: string) => void | Promise<void>
-  onUpdateGroup: (patch: Partial<Group>) => void | Promise<void>
+  onUpdateGroup: (patch: Partial<ArchitectureGroup>) => void | Promise<void>
   onDeleteGroup: () => void | Promise<void>
   onRemoveGroupMember: (nodeId: string) => void | Promise<void>
   groupsPaletteMode?: boolean
-  nodeDiff?: C4Node['data']
+  nodeDiff?: ArchitectureDiagramNode['data']
   onDismissNodeDiff?: (nodeId: string) => void
 }
 
@@ -94,6 +101,7 @@ export function ArchitectureContextPanel({
   onSaveSourcePattern,
   onSaveSourceLocations,
   onTargetNodeChange,
+  onSelectEdge,
   onAddEdge,
   onCreateGroupFromSelection,
   onAddSelectionToGroup,
@@ -172,6 +180,7 @@ export function ArchitectureContextPanel({
             onSaveSourcePattern={onSaveSourcePattern}
             onSaveSourceLocations={onSaveSourceLocations}
             onTargetNodeChange={onTargetNodeChange}
+            onSelectEdge={onSelectEdge}
             onAddEdge={onAddEdge}
             onDeleteNode={onDeleteNode}
             nodeDiff={nodeDiff}
@@ -208,7 +217,7 @@ function MultiSelectionPanel({
 }: {
   selectedIds: string[]
   totalSelected: number
-  groups: Group[]
+  groups: ArchitectureGroup[]
   canGroup: boolean
   syncing: boolean
   onCreateGroup: (name: string) => void | Promise<void>
@@ -292,20 +301,20 @@ function GroupEditor({
   onDeleteGroup,
   onRemoveGroupMember
 }: {
-  group: Group
-  model: C4ModelData
+  group: ArchitectureGroup
+  model: ArchitectureDiagramModel
   syncing: boolean
-  onUpdateGroup: (patch: Partial<Group>) => void | Promise<void>
+  onUpdateGroup: (patch: Partial<ArchitectureGroup>) => void | Promise<void>
   onDeleteGroup: () => void | Promise<void>
   onRemoveGroupMember: (nodeId: string) => void | Promise<void>
 }): React.JSX.Element {
   const memberNodes = group.memberIds
     .map((memberId) => model.nodes.find((node) => node.id === memberId))
-    .filter((node): node is C4Node => !!node)
+    .filter((node): node is ArchitectureDiagramNode => !!node)
   return (
     <div className="grid gap-4" data-testid="architecture-selected-group-editor">
       <section className="grid gap-3">
-        <PanelTitle title="Group" />
+        <PanelTitle title="ArchitectureGroup" />
         <ReadOnlyField label="id" value={group.id} />
         <label className="grid gap-1">
           <span className="text-xs text-muted-foreground">Name</span>
@@ -387,8 +396,8 @@ function EdgeEditor({
   onUpdateEdge,
   onDeleteEdge
 }: {
-  edge: C4Edge
-  model: C4ModelData
+  edge: ArchitectureDiagramLink
+  model: ArchitectureDiagramModel
   syncing: boolean
   onUpdateEdge: (patch: { label?: string; method?: string }) => void | Promise<void>
   onDeleteEdge: () => void | Promise<void>
@@ -432,6 +441,7 @@ function EdgeEditor({
         className="border-destructive/40 text-destructive hover:text-destructive"
         onClick={() => void onDeleteEdge()}
         disabled={syncing}
+        data-testid="architecture-edge-delete"
       >
         <Trash2 className="size-3.5" />
         Delete relationship
@@ -453,44 +463,58 @@ function NodeEditor({
   onSaveSourcePattern,
   onSaveSourceLocations,
   onTargetNodeChange,
+  onSelectEdge,
   onAddEdge,
   onDeleteNode,
   nodeDiff,
   onDismissNodeDiff
 }: {
-  node: C4Node
-  model: C4ModelData
+  node: ArchitectureDiagramNode
+  model: ArchitectureDiagramModel
   targetNodeId: string
   sourcePattern: string
   syncing: boolean
-  onUpdateNodeDraft: (nodeId: string, patch: Partial<C4Node['data']>) => void
-  onUpdateNode: (patch: Partial<C4Node['data']>) => void | Promise<void>
-  onPersistNodeById: (nodeId: string, patch: Partial<C4Node['data']>) => void | Promise<void>
+  onUpdateNodeDraft: (nodeId: string, patch: Partial<ArchitectureDiagramNode['data']>) => void
+  onUpdateNode: (patch: Partial<ArchitectureDiagramNode['data']>) => void | Promise<void>
+  onPersistNodeById: (
+    nodeId: string,
+    patch: Partial<ArchitectureDiagramNode['data']>
+  ) => void | Promise<void>
   onSourcePatternChange: (pattern: string) => void
   onSaveSourcePattern: (pattern: string) => void | Promise<void>
-  onSaveSourceLocations: (nodeId: string, locations: SourceLocation[]) => void | Promise<void>
+  onSaveSourceLocations: (
+    nodeId: string,
+    locations: ArchitectureSourceLocation[]
+  ) => void | Promise<void>
   onTargetNodeChange: (nodeId: string) => void
+  onSelectEdge: (edgeId: string) => void
   onAddEdge: (sourceNodeId: string, targetNodeId: string) => void | Promise<void>
   onDeleteNode: () => void | Promise<void>
-  nodeDiff?: C4Node['data']
+  nodeDiff?: ArchitectureDiagramNode['data']
   onDismissNodeDiff?: (nodeId: string) => void
 }): React.JSX.Element {
   const context = useMemo(() => getNodeContextForModel(model, node.id), [model, node.id])
-  const [sourceRows, setSourceRows] = useState<SourceLocation[]>([])
+  const [sourceRows, setSourceRows] = useState<ArchitectureSourceLocation[]>([])
   const [sourceRowsDirty, setSourceRowsDirty] = useState(false)
   const sourceRowsNodeIdRef = useRef(node.id)
-  const [propertyRows, setPropertyRows] = useState<ModelProperty[]>([])
+  const [propertyRows, setPropertyRows] = useState<ArchitectureModelProperty[]>([])
   const [propertyRowsDirty, setPropertyRowsDirty] = useState(false)
   const propertyRowsNodeIdRef = useRef(node.id)
   const propertyRowsRef = useRef<HTMLDivElement | null>(null)
   const edgeTargetSelectRef = useRef<HTMLSelectElement | null>(null)
   const edgeTargetIdRef = useRef(targetNodeId)
   const skipAddEdgeClickRef = useRef(false)
-  const [statusDraft, setStatusDraft] = useState<Status | ''>(node.data.status ?? '')
+  const [statusDraft, setStatusDraft] = useState<ArchitectureStatus | ''>(node.data.status ?? '')
   const [statusReason, setStatusReason] = useState('')
   const nodeSourceLocations = useMemo(
-    () => model.sourceMap?.[node.id] ?? [],
-    [model.sourceMap, node.id]
+    () => [
+      ...(model.sourceMap?.[node.id] ?? []),
+      ...(model.boundaries?.[node.id]?.map((source) => ({
+        pattern: source.pattern,
+        ...(source.comment ? { command: source.comment } : {})
+      })) ?? [])
+    ],
+    [model.boundaries, model.sourceMap, node.id]
   )
   const nodeProperties = useMemo(() => node.data.properties ?? [], [node.data.properties])
   const verifiedBlockers = useMemo(() => getVerifiedBlockers(model, node.id), [model, node.id])
@@ -508,6 +532,7 @@ function NodeEditor({
   const statusChanged = statusDraft !== (node.data.status ?? '')
   const statusReasonRequired = statusChanged && !!statusDraft
   const verifiedBlocked = statusDraft === 'verified' && verifiedBlockers.length > 0
+  const nodeEdges = model.links.filter((edge) => edge.source === node.id || edge.target === node.id)
   const addRelationship = () => {
     void onAddEdge(node.id, edgeTargetIdRef.current || edgeTargetSelectRef.current?.value || '')
   }
@@ -547,12 +572,14 @@ function NodeEditor({
     }
   }, [node.id, nodeProperties, propertyRowsDirty])
 
-  const updateSourceRows = (updater: (rows: SourceLocation[]) => SourceLocation[]): void => {
+  const updateSourceRows = (
+    updater: (rows: ArchitectureSourceLocation[]) => ArchitectureSourceLocation[]
+  ): void => {
     setSourceRows((rows) => updater(rows))
     setSourceRowsDirty(true)
   }
 
-  const normalizePropertyRows = (rows: ModelProperty[]): ModelProperty[] =>
+  const normalizePropertyRows = (rows: ArchitectureModelProperty[]): ArchitectureModelProperty[] =>
     rows
       .map((property) => ({
         label: property.label.trim(),
@@ -560,7 +587,9 @@ function NodeEditor({
       }))
       .filter((property) => property.label)
 
-  const updatePropertyRows = (updater: (rows: ModelProperty[]) => ModelProperty[]): void => {
+  const updatePropertyRows = (
+    updater: (rows: ArchitectureModelProperty[]) => ArchitectureModelProperty[]
+  ): void => {
     setPropertyRows((rows) => {
       const nextRows = updater(rows)
       void onPersistNodeById(node.id, {
@@ -678,7 +707,7 @@ function NodeEditor({
               onChange={(event) =>
                 void onUpdateNode({
                   shape: event.currentTarget.value
-                    ? (event.currentTarget.value as C4Shape)
+                    ? (event.currentTarget.value as ArchitectureDiagramShape)
                     : undefined
                 })
               }
@@ -800,11 +829,13 @@ function NodeEditor({
 
         {node.data.kind !== 'person' && !node.data.external ? (
           <div className="grid gap-2">
-            <span className="text-xs text-muted-foreground">Status</span>
+            <span className="text-xs text-muted-foreground">ArchitectureStatus</span>
             <select
               className="rounded border border-border bg-background px-2 py-1"
               value={statusDraft}
-              onChange={(event) => setStatusDraft(event.currentTarget.value as Status | '')}
+              onChange={(event) =>
+                setStatusDraft(event.currentTarget.value as ArchitectureStatus | '')
+              }
               disabled={syncing}
               data-testid="architecture-node-status"
             >
@@ -1021,6 +1052,32 @@ function NodeEditor({
             Add
           </Button>
         </div>
+        {nodeEdges.length > 0 ? (
+          <div className="grid gap-1">
+            {nodeEdges.map((edge) => {
+              const source = model.nodes.find((candidate) => candidate.id === edge.source)
+              const target = model.nodes.find((candidate) => candidate.id === edge.target)
+              return (
+                <button
+                  key={edge.id}
+                  type="button"
+                  className="min-w-0 rounded border border-border px-2 py-1 text-left text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+                  onClick={() => onSelectEdge(edge.id)}
+                  disabled={syncing}
+                  data-testid="architecture-existing-edge"
+                >
+                  <span className="font-medium text-foreground/80">
+                    {source?.data.name ?? edge.source}
+                    {' -> '}
+                    {target?.data.name ?? edge.target}
+                  </span>
+                  {edge.data?.label ? <span> - {edge.data.label}</span> : null}
+                  {edge.data?.method ? <span> [{edge.data.method}]</span> : null}
+                </button>
+              )
+            })}
+          </div>
+        ) : null}
       </section>
 
       <NotesEditor
@@ -1045,6 +1102,7 @@ function NodeEditor({
         className="border-destructive/40 text-destructive hover:text-destructive"
         onClick={() => void onDeleteNode()}
         disabled={syncing}
+        data-testid="architecture-node-delete"
       >
         <Trash2 className="size-3.5" />
         Delete node
@@ -1107,8 +1165,8 @@ function NodeDiffPanel({
   current,
   onDismiss
 }: {
-  previous: C4Node['data']
-  current: C4Node['data']
+  previous: ArchitectureDiagramNode['data']
+  current: ArchitectureDiagramNode['data']
   onDismiss: () => void
 }): React.JSX.Element {
   const rows = [
@@ -1171,13 +1229,13 @@ function ContractEditor({
   syncing,
   onChange
 }: {
-  contract: Contract | undefined
+  contract: ArchitectureContract | undefined
   syncing: boolean
-  onChange: (contract: Contract) => void
+  onChange: (contract: ArchitectureContract) => void
 }): React.JSX.Element {
   const incoming = useMemo(() => normalizeContract(contract), [contract])
-  const [draft, setDraft] = useState<Contract>(incoming)
-  const draftRef = useRef<Contract>(incoming)
+  const [draft, setDraft] = useState<ArchitectureContract>(incoming)
+  const draftRef = useRef<ArchitectureContract>(incoming)
   const pendingDraftKeyRef = useRef<string | null>(null)
   const incomingKey = JSON.stringify(incoming)
 
@@ -1192,7 +1250,7 @@ function ContractEditor({
     }
   }, [incoming, incomingKey])
 
-  const commitDraft = (next: Contract): void => {
+  const commitDraft = (next: ArchitectureContract): void => {
     draftRef.current = next
     setDraft(next)
     pendingDraftKeyRef.current = JSON.stringify(next)
@@ -1200,8 +1258,8 @@ function ContractEditor({
   }
 
   const updateItems = (
-    key: keyof Contract,
-    updater: (items: ContractItem[]) => ContractItem[]
+    key: keyof ArchitectureContract,
+    updater: (items: ArchitectureContractItem[]) => ArchitectureContractItem[]
   ): void => {
     const current = draftRef.current
     commitDraft({ ...current, [key]: updater(current[key]) })
@@ -1228,9 +1286,9 @@ function GroupContractEditor({
   syncing,
   onChange
 }: {
-  contract: Contract | undefined
+  contract: ArchitectureContract | undefined
   syncing: boolean
-  onChange: (contract: Contract) => void
+  onChange: (contract: ArchitectureContract) => void
 }): React.JSX.Element {
   const normalized = normalizeContract(contract)
   return (
@@ -1260,10 +1318,10 @@ function ContractList({
   syncing,
   onChange
 }: {
-  label: keyof Contract
-  items: ContractItem[]
+  label: keyof ArchitectureContract
+  items: ArchitectureContractItem[]
   syncing: boolean
-  onChange: (updater: (items: ContractItem[]) => ContractItem[]) => void
+  onChange: (updater: (items: ArchitectureContractItem[]) => ArchitectureContractItem[]) => void
 }): React.JSX.Element {
   const readUrlFromRow = (element: Element): string | undefined => {
     const row = element.closest('[data-contract-item-row]')
@@ -1489,7 +1547,7 @@ function ContextLine({ label, value }: { label: string; value: string }): React.
   )
 }
 
-function normalizeContract(contract: Contract | undefined): Contract {
+function normalizeContract(contract: ArchitectureContract | undefined): ArchitectureContract {
   return {
     expect: contract?.expect ?? [],
     ask: contract?.ask ?? [],
@@ -1497,11 +1555,14 @@ function normalizeContract(contract: Contract | undefined): Contract {
   }
 }
 
-function contractItemText(item: ContractItem): string {
+function contractItemText(item: ArchitectureContractItem): string {
   return getContractItemText(item)
 }
 
-function updateContractItemText(item: ContractItem, text: string): ContractItem {
+function updateContractItemText(
+  item: ArchitectureContractItem,
+  text: string
+): ArchitectureContractItem {
   const normalized = normalizeContractItem(item)
   if (!normalized.passed && !normalized.url && !normalized.image) {
     return text
@@ -1509,7 +1570,10 @@ function updateContractItemText(item: ContractItem, text: string): ContractItem 
   return { ...normalized, text }
 }
 
-function updateContractItemUrl(item: ContractItem, url: string): ContractItem {
+function updateContractItemUrl(
+  item: ArchitectureContractItem,
+  url: string
+): ArchitectureContractItem {
   const normalized = normalizeContractItem(item)
   const nextUrl = url.trim() || undefined
   if (!normalized.passed && !nextUrl && !normalized.image) {
@@ -1519,9 +1583,9 @@ function updateContractItemUrl(item: ContractItem, url: string): ContractItem {
 }
 
 function updateContractItemImage(
-  item: ContractItem,
+  item: ArchitectureContractItem,
   image: ReturnType<typeof normalizeContractItem>['image'] | undefined
-): ContractItem {
+): ArchitectureContractItem {
   const normalized = normalizeContractItem(item)
   if (!normalized.passed && !normalized.url && !image) {
     return normalized.text
@@ -1529,11 +1593,11 @@ function updateContractItemImage(
   return { ...normalized, image }
 }
 
-function contractItemsToText(items: ContractItem[]): string {
+function contractItemsToText(items: ArchitectureContractItem[]): string {
   return items.map(contractItemText).join('\n')
 }
 
-function textToContractItems(text: string): ContractItem[] {
+function textToContractItems(text: string): ArchitectureContractItem[] {
   return text
     .split('\n')
     .map((line) => line.trim())
@@ -1545,7 +1609,10 @@ function numberOrUndefined(value: string): number | undefined {
   return Number.isFinite(number) && number > 0 ? number : undefined
 }
 
-function buildMentionItems(model: C4ModelData, node: C4Node): MentionItem[] {
+function buildMentionItems(
+  model: ArchitectureDiagramModel,
+  node: ArchitectureDiagramNode
+): MentionItem[] {
   return model.nodes
     .filter((candidate) => candidate.id !== node.id && candidate.parentId === node.parentId)
     .map((candidate) => ({
@@ -1556,12 +1623,15 @@ function buildMentionItems(model: C4ModelData, node: C4Node): MentionItem[] {
     }))
 }
 
-function getMentionEdgeWarnings(model: C4ModelData, node: C4Node): string[] {
+function getMentionEdgeWarnings(
+  model: ArchitectureDiagramModel,
+  node: ArchitectureDiagramNode
+): string[] {
   const siblings = model.nodes.filter(
     (candidate) => candidate.id !== node.id && candidate.parentId === node.parentId
   )
   const edgeKeys = new Set<string>()
-  for (const edge of model.edges) {
+  for (const edge of model.links) {
     edgeKeys.add(`${edge.source}->${edge.target}`)
     edgeKeys.add(`${edge.target}->${edge.source}`)
   }

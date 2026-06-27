@@ -1,7 +1,11 @@
 import type { DragEvent } from 'react'
 import { Boxes, Code, Layers, Link, Maximize2, RefreshCw, Table, Workflow } from 'lucide-react'
 import type { Node, NodeProps } from '@xyflow/react'
-import type { C4NodeData, SourceLocation, Status } from '../../../../../shared/scryer/model-types'
+import type {
+  ArchitectureDiagramNodeData,
+  ArchitectureSourceLocation,
+  ArchitectureStatus
+} from '../architecture-diagram-types'
 import { Button } from '../../ui/button'
 import { DescriptionText } from './DescriptionText'
 import { ContractBadge } from './ContractBadge'
@@ -10,18 +14,18 @@ import { NodeHandles } from './NodeHandles'
 import { ShapeBackground, resolveShape } from './shapes'
 import { STATUS_COLORS } from './status-colors'
 
-export type ArchitectureNodeData = C4NodeData & {
-  sourceLocations?: SourceLocation[]
+export type ArchitectureNodeData = ArchitectureDiagramNodeData & {
+  sourceLocations?: ArchitectureSourceLocation[]
   onExpand?: () => void
-  onOpenSourceLocation?: (location: SourceLocation) => void | Promise<void>
+  onOpenSourceLocation?: (location: ArchitectureSourceLocation) => void | Promise<void>
   _inspectorSelected?: boolean
   _groupName?: string
   _changed?: boolean
   _drifted?: boolean
   _hasChildren?: boolean
   _hints?: { severity: 'info' | 'warning' }[]
-  _processes?: { id: string; name: string; status?: Status }[]
-  _models?: { id: string; name: string; status?: Status }[]
+  _processes?: { id: string; name: string; status?: ArchitectureStatus }[]
+  _models?: { id: string; name: string; status?: ArchitectureStatus }[]
 }
 
 export type ArchitectureFlowNode = Node<ArchitectureNodeData, string>
@@ -32,7 +36,7 @@ const KIND_CHIP_ICON = {
   operation: Code
 }
 
-function isExpandable(kind: C4NodeData['kind']): boolean {
+function isExpandable(kind: ArchitectureDiagramNodeData['kind']): boolean {
   return kind === 'system' || kind === 'container' || kind === 'component'
 }
 
@@ -61,7 +65,9 @@ function MemberChipList({
     <div className="flex flex-col gap-1">
       {visible.map((item) => {
         const Icon = KIND_CHIP_ICON[item.kind]
-        const color = item.status ? STATUS_COLORS[item.status as Status]?.stroke : undefined
+        const color = item.status
+          ? STATUS_COLORS[item.status as ArchitectureStatus]?.stroke
+          : undefined
         return (
           <div
             key={item.id}
@@ -93,8 +99,8 @@ function SourceLinks({
   locations,
   onOpenSourceLocation
 }: {
-  locations?: SourceLocation[]
-  onOpenSourceLocation?: (location: SourceLocation) => void | Promise<void>
+  locations?: ArchitectureSourceLocation[]
+  onOpenSourceLocation?: (location: ArchitectureSourceLocation) => void | Promise<void>
 }): React.JSX.Element | null {
   if (!locations?.length) {
     return null
@@ -192,7 +198,11 @@ function PersonNode({
   )
 }
 
-export function C4Node({ id, data, selected }: NodeProps<ArchitectureFlowNode>): React.JSX.Element {
+export function ArchitectureNode({
+  id,
+  data,
+  selected
+}: NodeProps<ArchitectureFlowNode>): React.JSX.Element {
   const inspectorSelected = !!data._inspectorSelected
   const visualSelected = selected || inspectorSelected
   const reference = !!data._reference

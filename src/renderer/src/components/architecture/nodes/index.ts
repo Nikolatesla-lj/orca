@@ -1,11 +1,11 @@
 import type { NodeTypes } from '@xyflow/react'
-import { C4Node } from './C4Node'
+import { ArchitectureNode } from './ArchitectureNode'
 
-export type { ArchitectureFlowNode, ArchitectureNodeData } from './C4Node'
+export type { ArchitectureFlowNode, ArchitectureNodeData } from './ArchitectureNode'
 
 export const nodeTypes: NodeTypes = {
-  c4: C4Node,
-  operation: C4Node,
-  process: C4Node,
-  model: C4Node
+  architecture: ArchitectureNode,
+  operation: ArchitectureNode,
+  process: ArchitectureNode,
+  model: ArchitectureNode
 }

@@ -1,5 +1,6 @@
 /* eslint-disable max-lines -- Why: this IPC registrar remains a compatibility facade for Scryer model, drift, sync, MCP, and prompt handlers while the backing services are split behind injectable deps. */
 import { watch, type FSWatcher } from 'fs'
+import { mkdir } from 'fs/promises'
 import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import {
   createProjectModel,
@@ -9,7 +10,6 @@ import {
   isImplementing,
   listProjectModels,
   migrateGlobalModelToProject,
-  markSynced,
   patchNodeData,
   readModel,
   readModelDocument,
@@ -18,27 +18,94 @@ import {
   writeModel,
   writeModelDocument
 } from '../scryer/model-store'
-import { checkDrift } from '../scryer/drift'
 import { callScryerTool } from '../scryer/mcp-tools'
 import { writeArchitectureMcpConfig } from '../scryer/mcp-config'
 import { beginSync, cancelSync, finishSync } from '../scryer/sync'
-import { createScryerEngine, type ScryerOperationId } from '../scryer/engine'
+import {
+  createArchitectureViewAdapter,
+  type ArchitectureViewAdapter
+} from '../scryer/architecture-view-adapter'
+import {
+  createScryerEngine,
+  type ScryerEngine,
+  type ScryerOperationId,
+  type ScryerOperationResult,
+  type ScryerReadView,
+  type ScryerReadViewInput
+} from '../scryer/engine'
+import {
+  createScryerEditSessionController,
+  type ScryerEditSessionController
+} from '../scryer/edit-session-controller'
+import { createScryerEditLeaseStore } from '../scryer/edit-lease-store'
+import {
+  createScryerMutableAgentRunRuntime,
+  type ScryerMutableAgentRunRuntime
+} from '../scryer/edit-session-runtime'
+import { legacyC4ToScryModel } from '../scryer/engine/adapters/legacy-c4'
 import {
   advisorPrompt,
   initialModelPrompt,
   nodeFillPrompt,
   serializeModelForPrompt
 } from '../../shared/scryer/prompts'
-import type { C4ModelData, C4NodeData, ScryerToolCall } from '../../shared/scryer/model-types'
+import type {
+  C4ModelData,
+  C4NodeData,
+  DriftReport,
+  ScryerToolCall
+} from '../../shared/scryer/model-types'
 import { BUILT_IN_SCRYER_TEMPLATES } from '../../shared/scryer/templates'
 
 const watchers = new Map<string, FSWatcher>()
-const scryerEngine = createScryerEngine()
+const watcherModelChangedTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const WATCHER_MODEL_CHANGED_DEBOUNCE_MS = 75
+const READ_VIEW_LOCK_RETRY_DELAYS_MS = [25, 75, 150]
 const SCRYER_WRITE_OPERATIONS = new Set<ScryerOperationId>([
   'scryer.node.update',
   'scryer.link.add',
   'scryer.link.delete',
-  'scryer.plan.fold'
+  'scryer.link.update',
+  'scryer.node.set-subtree',
+  'scryer.node.delete',
+  'scryer.node.move',
+  'scryer.responsibility.move',
+  'scryer.group.set',
+  'scryer.group.update',
+  'scryer.group.delete',
+  'scryer.person.add',
+  'scryer.system.add',
+  'scryer.container.add',
+  'scryer.component.add',
+  'scryer.group.add',
+  'scryer.symbol.add',
+  'scryer.source.update',
+  'scryer.plan.fold',
+  'scryer.model.set',
+  'scryer.container.fill',
+  'scryer.node.descope',
+  'scryer.drift.flag'
+])
+const SCRYER_PLAN_FILE_WRITE_OPERATIONS = new Set<ScryerOperationId>([
+  'scryer.node.update',
+  'scryer.link.add',
+  'scryer.link.delete',
+  'scryer.link.update',
+  'scryer.node.set-subtree',
+  'scryer.node.delete',
+  'scryer.node.move',
+  'scryer.responsibility.move',
+  'scryer.group.set',
+  'scryer.group.update',
+  'scryer.group.delete',
+  'scryer.person.add',
+  'scryer.system.add',
+  'scryer.container.add',
+  'scryer.component.add',
+  'scryer.group.add',
+  'scryer.symbol.add',
+  'scryer.source.update',
+  'scryer.drift.flag'
 ])
 
 export type ArchitectureIpcRegistrar = {
@@ -56,7 +123,6 @@ export type ArchitectureHandlerDeps = {
   isImplementing: typeof isImplementing
   listProjectModels: typeof listProjectModels
   migrateGlobalModelToProject: typeof migrateGlobalModelToProject
-  markSynced: typeof markSynced
   patchNodeData: typeof patchNodeData
   readModel: typeof readModel
   readModelDocument: typeof readModelDocument
@@ -64,15 +130,22 @@ export type ArchitectureHandlerDeps = {
   sanitizeProjectModelName: typeof sanitizeProjectModelName
   writeModel: typeof writeModel
   writeModelDocument: typeof writeModelDocument
-  checkDrift: typeof checkDrift
   callScryerTool: typeof callScryerTool
+  scryerEngine: ScryerEngine
+  architectureViewAdapter: ArchitectureViewAdapter
   writeArchitectureMcpConfig: typeof writeArchitectureMcpConfig
   beginSync: typeof beginSync
   cancelSync: typeof cancelSync
   finishSync: typeof finishSync
+  scryerEditSessionController?: ScryerEditSessionController
+  scryerAgentRunRuntime?: ScryerMutableAgentRunRuntime
 }
 
-const defaultArchitectureDeps: ArchitectureHandlerDeps = {
+const defaultScryerEngine = createScryerEngine()
+const defaultArchitectureViewAdapter = createArchitectureViewAdapter(defaultScryerEngine)
+const defaultScryerAgentRunRuntime = createScryerMutableAgentRunRuntime()
+
+export const defaultArchitectureDeps: ArchitectureHandlerDeps = {
   createProjectModel,
   deleteProjectModel,
   getProjectScryerDir,
@@ -80,7 +153,6 @@ const defaultArchitectureDeps: ArchitectureHandlerDeps = {
   isImplementing,
   listProjectModels,
   migrateGlobalModelToProject,
-  markSynced,
   patchNodeData,
   readModel,
   readModelDocument,
@@ -88,12 +160,19 @@ const defaultArchitectureDeps: ArchitectureHandlerDeps = {
   sanitizeProjectModelName,
   writeModel,
   writeModelDocument,
-  checkDrift,
   callScryerTool,
+  scryerEngine: defaultScryerEngine,
+  architectureViewAdapter: defaultArchitectureViewAdapter,
   writeArchitectureMcpConfig,
   beginSync,
   cancelSync,
-  finishSync
+  finishSync,
+  scryerEditSessionController: createScryerEditSessionController({
+    engine: defaultScryerEngine,
+    leaseStore: createScryerEditLeaseStore(),
+    agentRuntime: defaultScryerAgentRunRuntime
+  }),
+  scryerAgentRunRuntime: defaultScryerAgentRunRuntime
 }
 
 export function shouldNotifyModelFile(filename: string | Buffer): boolean {
@@ -117,10 +196,258 @@ function notifyModelChanged(
   modelName: string | null | undefined,
   deps: ArchitectureHandlerDeps
 ): void {
+  notifyModelFileChanged(event, projectPath, `${deps.sanitizeProjectModelName(modelName)}.scry`)
+}
+
+function notifyModelFileChanged(
+  event: IpcMainInvokeEvent | null,
+  projectPath: string,
+  fileName: string
+): void {
   event?.sender.send('architecture:modelChanged', {
     projectPath,
-    fileName: `${deps.sanitizeProjectModelName(modelName)}.scry`
+    fileName
   })
+}
+
+export function changedScryerModelFileForOperation(operationId: ScryerOperationId): string {
+  return SCRYER_PLAN_FILE_WRITE_OPERATIONS.has(operationId) ? 'planned.scry' : 'model.scry'
+}
+
+function scheduleWatchedModelChanged(
+  event: IpcMainInvokeEvent,
+  projectPath: string,
+  fileName: string
+): void {
+  const timerKey = `${projectPath}\0${fileName}`
+  const currentTimer = watcherModelChangedTimers.get(timerKey)
+  if (currentTimer) {
+    clearTimeout(currentTimer)
+  }
+  const timer = setTimeout(() => {
+    watcherModelChangedTimers.delete(timerKey)
+    event.sender.send('architecture:modelChanged', { projectPath, fileName })
+  }, WATCHER_MODEL_CHANGED_DEBOUNCE_MS)
+  watcherModelChangedTimers.set(timerKey, timer)
+}
+
+function isDefaultModelName(
+  modelName: string | null | undefined,
+  deps: Pick<ArchitectureHandlerDeps, 'sanitizeProjectModelName'>
+): boolean {
+  return deps.sanitizeProjectModelName(modelName) === 'model'
+}
+
+function contextForEngine(projectPath: string, requestIdPrefix: string) {
+  return {
+    requestId: `${requestIdPrefix}-${Date.now()}`,
+    transport: 'ipc' as const,
+    caller: 'human' as const,
+    cwd: projectPath,
+    projectRoot: projectPath
+  }
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function readViewWithLockRetry(
+  deps: ArchitectureHandlerDeps,
+  input: ScryerReadViewInput,
+  projectPath: string,
+  requestIdPrefix: string
+): Promise<ScryerOperationResult<ScryerReadView>> {
+  for (let attempt = 0; attempt <= READ_VIEW_LOCK_RETRY_DELAYS_MS.length; attempt += 1) {
+    const result = await deps.scryerEngine.readView(
+      input,
+      contextForEngine(projectPath, `${requestIdPrefix}-${attempt + 1}`)
+    )
+    if (result.ok || result.error.code !== 'lock_busy') {
+      return result
+    }
+    const retryDelay = READ_VIEW_LOCK_RETRY_DELAYS_MS[attempt]
+    if (retryDelay === undefined) {
+      return result
+    }
+    await wait(retryDelay)
+  }
+  return deps.scryerEngine.readView(input, contextForEngine(projectPath, requestIdPrefix))
+}
+
+function requireEditSessionController(deps: ArchitectureHandlerDeps): ScryerEditSessionController {
+  if (!deps.scryerEditSessionController) {
+    throw new Error('Scryer edit-session controller is not configured')
+  }
+  return deps.scryerEditSessionController
+}
+
+async function ensureNoActiveEditSession(
+  projectPath: string,
+  deps: ArchitectureHandlerDeps
+): Promise<void> {
+  const session = await deps.scryerEditSessionController?.readEditSession({ projectPath })
+  if (session?.activeLease) {
+    throw new Error('A Scryer edit session is active; semantic writes must use the session lease.')
+  }
+}
+
+async function writeDefaultModelThroughEngine(
+  projectPath: string,
+  model: C4ModelData,
+  deps: ArchitectureHandlerDeps
+): Promise<{ model: C4ModelData; revision: string }> {
+  const result = await deps.scryerEngine.executeOperation(
+    'scryer.model.set',
+    { data: legacyC4ToScryModel(model) },
+    contextForEngine(projectPath, 'ipc-model-set')
+  )
+  if (!result.ok) {
+    throw new Error(result.error.message)
+  }
+  return { model, revision: result.requestId }
+}
+
+function architectureModelFromReadView(
+  projectPath: string,
+  result: unknown,
+  extensionState?: Pick<C4ModelData, 'refPositions' | 'startingLevel' | 'validationWarnings'> | null
+): C4ModelData | null {
+  if (typeof result !== 'object' || result === null) {
+    return null
+  }
+  const fullModel = (result as { fullModel?: unknown }).fullModel
+  if (typeof fullModel !== 'object' || fullModel === null) {
+    return null
+  }
+  const model = fullModel as {
+    nodes?: Record<string, unknown>[]
+    links?: Record<string, unknown>[]
+    groups?: Record<string, unknown>[]
+    sourceMap?: C4ModelData['sourceMap']
+  }
+  return {
+    projectPath,
+    nodes: (model.nodes ?? []).map((node) => {
+      const kind = typeof node.kind === 'string' ? node.kind : 'system'
+      return {
+        id: String(node.id),
+        type: kind === 'symbol' ? 'operation' : 'c4',
+        position: { x: 0, y: 0 },
+        parentId: typeof node.parentId === 'string' ? node.parentId : undefined,
+        data: {
+          name: typeof node.name === 'string' ? node.name : String(node.id),
+          description: typeof node.description === 'string' ? node.description : '',
+          kind: kind === 'symbol' ? 'operation' : kind,
+          ...(typeof node.technology === 'string' ? { technology: node.technology } : {}),
+          ...(typeof node.external === 'boolean' ? { external: node.external } : {}),
+          ...(Array.isArray(node.properties) ? { properties: node.properties } : {}),
+          _needsLayout: true
+        }
+      }
+    }) as C4ModelData['nodes'],
+    edges: (model.links ?? []).map((link) => ({
+      id: String(link.id),
+      source: String(link.src),
+      target: String(link.dst),
+      data: {
+        label: typeof link.label === 'string' ? link.label : '',
+        ...(typeof link.method === 'string' ? { method: link.method } : {})
+      }
+    })),
+    groups: (model.groups ?? []).map((group) => ({
+      id: String(group.id),
+      name: typeof group.name === 'string' ? group.name : String(group.id),
+      memberIds: Array.isArray(group.memberIds)
+        ? group.memberIds.filter((member): member is string => typeof member === 'string')
+        : [],
+      ...(typeof group.description === 'string' ? { description: group.description } : {}),
+      ...(typeof group.parentGroupId === 'string' ? { parentGroupId: group.parentGroupId } : {})
+    })),
+    sourceMap: model.sourceMap ?? {},
+    ...(extensionState?.refPositions ? { refPositions: extensionState.refPositions } : {}),
+    ...(extensionState?.startingLevel ? { startingLevel: extensionState.startingLevel } : {}),
+    ...(extensionState?.validationWarnings
+      ? { validationWarnings: extensionState.validationWarnings }
+      : {})
+  }
+}
+
+async function readRendererExtensionState(
+  projectPath: string,
+  modelName: string | null | undefined,
+  deps: ArchitectureHandlerDeps
+): Promise<Pick<C4ModelData, 'refPositions' | 'startingLevel' | 'validationWarnings'> | null> {
+  if (isDefaultModelName(modelName, deps)) {
+    return null
+  }
+  try {
+    const model = await deps.readModel(projectPath, modelName)
+    return {
+      refPositions: model.refPositions,
+      startingLevel: model.startingLevel,
+      validationWarnings: model.validationWarnings
+    }
+  } catch {
+    return null
+  }
+}
+
+function nodeUpdateInputFromPatch(args: {
+  nodeId: string
+  patch: Partial<C4NodeData>
+}): { nodes: Record<string, unknown>[] } | null {
+  const node: Record<string, unknown> = { node_id: args.nodeId }
+  if (typeof args.patch.name === 'string') {
+    node.name = args.patch.name
+  }
+  if (typeof args.patch.description === 'string') {
+    node.description = args.patch.description
+  }
+  if (typeof args.patch.technology === 'string') {
+    node.technology = args.patch.technology
+  }
+  if (typeof args.patch.external === 'boolean') {
+    node.external = args.patch.external
+  }
+  if (Array.isArray(args.patch.properties)) {
+    node.properties = args.patch.properties
+  }
+  if (typeof args.patch.kind === 'string') {
+    node.kind =
+      args.patch.kind === 'operation' ||
+      args.patch.kind === 'process' ||
+      args.patch.kind === 'model'
+        ? 'symbol'
+        : args.patch.kind
+  }
+  return Object.keys(node).length > 1 ? { nodes: [node] } : null
+}
+
+function driftReportFromEngineResult(result: unknown): DriftReport | null {
+  if (typeof result !== 'object' || result === null) {
+    return null
+  }
+  const record = result as {
+    clean?: unknown
+    scopes?: Record<string, unknown>[]
+  }
+  if (!Array.isArray(record.scopes)) {
+    return null
+  }
+  return {
+    nodes: record.scopes.map((scope) => ({
+      nodeId: String(scope.nodeId),
+      nodeName: typeof scope.nodeName === 'string' ? scope.nodeName : '',
+      patterns:
+        typeof scope.path === 'string'
+          ? [scope.path]
+          : Array.isArray(scope.changedFiles)
+            ? scope.changedFiles.filter((item): item is string => typeof item === 'string')
+            : []
+    })),
+    structureChanged: record.clean === false && record.scopes.length === 0
+  }
 }
 
 export function closeArchitectureWatchers(): void {
@@ -128,6 +455,10 @@ export function closeArchitectureWatchers(): void {
     watcher.close()
   }
   watchers.clear()
+  for (const timer of watcherModelChangedTimers.values()) {
+    clearTimeout(timer)
+  }
+  watcherModelChangedTimers.clear()
 }
 
 export function registerArchitectureHandlers(
@@ -135,20 +466,82 @@ export function registerArchitectureHandlers(
   deps: ArchitectureHandlerDeps = defaultArchitectureDeps
 ): void {
   registrar.handle(
+    'architecture:readArchitectureView',
+    async (
+      _event,
+      args: { projectPath: string; layer?: 'plan' | 'committed'; focusNodeId?: string | null }
+    ) =>
+      deps.architectureViewAdapter.readArchitectureView(
+        args,
+        contextForEngine(args.projectPath, 'ipc-architecture-view')
+      )
+  )
+
+  registrar.handle(
     'architecture:readModel',
-    (_event, args: { projectPath: string; modelName?: string | null }) =>
-      deps.readModel(args.projectPath, args.modelName)
+    async (_event, args: { projectPath: string; modelName?: string | null }) => {
+      if (!isDefaultModelName(args.modelName, deps)) {
+        return deps.readModel(args.projectPath, args.modelName)
+      }
+      const view = await readViewWithLockRetry(
+        deps,
+        { mode: 'full', layer: 'committed' },
+        args.projectPath,
+        'ipc-read'
+      )
+      if (!view.ok) {
+        throw new Error(view.error.message)
+      }
+      const extensionState = await readRendererExtensionState(
+        args.projectPath,
+        args.modelName,
+        deps
+      )
+      const model = architectureModelFromReadView(args.projectPath, view.result, extensionState)
+      if (model) {
+        return model
+      }
+      throw new Error('Scryer readView result did not include a full model for renderer mapping')
+    }
   )
 
   registrar.handle(
     'architecture:readModelDocument',
-    (_event, args: { projectPath: string; modelName?: string | null }) =>
-      deps.readModelDocument(args.projectPath, args.modelName)
+    async (_event, args: { projectPath: string; modelName?: string | null }) => {
+      if (!isDefaultModelName(args.modelName, deps)) {
+        return deps.readModelDocument(args.projectPath, args.modelName)
+      }
+      const view = await readViewWithLockRetry(
+        deps,
+        { mode: 'full', layer: 'committed' },
+        args.projectPath,
+        'ipc-read-document'
+      )
+      if (!view.ok) {
+        throw new Error(view.error.message)
+      }
+      const extensionState = await readRendererExtensionState(
+        args.projectPath,
+        args.modelName,
+        deps
+      )
+      const model = architectureModelFromReadView(args.projectPath, view.result, extensionState)
+      if (model) {
+        return { model, revision: view.requestId }
+      }
+      throw new Error('Scryer readView result did not include a full model for renderer mapping')
+    }
   )
 
   registrar.handle(
     'architecture:writeModel',
     async (event, args: { projectPath: string; model: C4ModelData; modelName?: string | null }) => {
+      if (isDefaultModelName(args.modelName, deps)) {
+        await ensureNoActiveEditSession(args.projectPath, deps)
+        await writeDefaultModelThroughEngine(args.projectPath, args.model, deps)
+        notifyModelChanged(event, args.projectPath, args.modelName, deps)
+        return
+      }
       await deps.writeModel(args.projectPath, args.model, args.modelName)
       notifyModelChanged(event, args.projectPath, args.modelName, deps)
     }
@@ -165,6 +558,12 @@ export function registerArchitectureHandlers(
         baseRevision?: string | null
       }
     ) => {
+      if (isDefaultModelName(args.modelName, deps)) {
+        await ensureNoActiveEditSession(args.projectPath, deps)
+        const result = await writeDefaultModelThroughEngine(args.projectPath, args.model, deps)
+        notifyModelChanged(event, args.projectPath, args.modelName, deps)
+        return result
+      }
       const result = await deps.writeModelDocument(args.projectPath, args.model, args.modelName, {
         baseRevision: args.baseRevision
       })
@@ -186,6 +585,38 @@ export function registerArchitectureHandlers(
         baseNodeData?: C4NodeData | null
       }
     ) => {
+      if (isDefaultModelName(args.modelName, deps)) {
+        const input = nodeUpdateInputFromPatch(args)
+        if (!input) {
+          throw new Error('Node patch does not contain any cataloged Scryer node fields')
+        }
+        const result = await deps.scryerEngine.executeOperation(
+          'scryer.node.update',
+          input,
+          contextForEngine(args.projectPath, 'ipc-node-update')
+        )
+        if (!result.ok) {
+          throw new Error(result.error.message)
+        }
+        const view = await deps.scryerEngine.readView(
+          { mode: 'full', layer: 'plan' },
+          contextForEngine(args.projectPath, 'ipc-read')
+        )
+        if (!view.ok) {
+          throw new Error(view.error.message)
+        }
+        const extensionState = await readRendererExtensionState(
+          args.projectPath,
+          args.modelName,
+          deps
+        )
+        const model = architectureModelFromReadView(args.projectPath, view.result, extensionState)
+        if (model) {
+          notifyModelFileChanged(event, args.projectPath, 'planned.scry')
+          return { model, revision: result.requestId }
+        }
+        throw new Error('Scryer readView result did not include a full model for renderer mapping')
+      }
       const result = await deps.patchNodeData(args.projectPath, args)
       notifyModelChanged(event, args.projectPath, args.modelName, deps)
       return result
@@ -294,12 +725,25 @@ export function registerArchitectureHandlers(
     }
   )
 
-  registrar.handle('architecture:checkDrift', (_event, args: { projectPath: string }) =>
-    deps.checkDrift(args.projectPath)
-  )
+  registrar.handle('architecture:checkDrift', async (_event, args: { projectPath: string }) => {
+    const result = await deps.scryerEngine.executeOperation(
+      'scryer.drift.get',
+      {},
+      contextForEngine(args.projectPath, 'ipc-drift')
+    )
+    if (result.ok) {
+      return driftReportFromEngineResult(result.result) ?? { nodes: [], structureChanged: false }
+    }
+    throw new Error(result.error.message)
+  })
 
   registrar.handle('architecture:markSynced', async (_event, args: { projectPath: string }) => {
-    await deps.markSynced(args.projectPath)
+    const result = await deps.scryerEngine.executeOperation(
+      'scryer.drift.reconcile',
+      {},
+      contextForEngine(args.projectPath, 'ipc-reconcile')
+    )
+    return result
   })
 
   registrar.handle('architecture:isSyncing', (_event, args: { projectPath: string }) =>
@@ -325,6 +769,47 @@ export function registerArchitectureHandlers(
   })
 
   registrar.handle(
+    'architecture:beginEditSession',
+    (_event, args: { projectPath: string; agentRunId: string }) => {
+      deps.scryerAgentRunRuntime?.setRunStatus(args.agentRunId, 'running', { emit: false })
+      return requireEditSessionController(deps).beginAgentEditSession(args)
+    }
+  )
+
+  registrar.handle(
+    'architecture:completeEditSession',
+    async (
+      event,
+      args: {
+        projectPath: string
+        agentRunId: string
+        foldPolicy?: 'never' | 'when_gate_passes'
+      }
+    ) => {
+      deps.scryerAgentRunRuntime?.setRunStatus(args.agentRunId, 'done', { emit: false })
+      const result = await requireEditSessionController(deps).completeAgentEditSession(args)
+      deps.scryerAgentRunRuntime?.clearRun(args.agentRunId)
+      if (args.foldPolicy === 'when_gate_passes' && result.foldAllowed) {
+        notifyModelChanged(event, args.projectPath, undefined, deps)
+      }
+      return result
+    }
+  )
+
+  registrar.handle(
+    'architecture:cancelEditSession',
+    async (_event, args: { projectPath: string; agentRunId: string }) => {
+      deps.scryerAgentRunRuntime?.setRunStatus(args.agentRunId, 'cancelled', { emit: false })
+      await requireEditSessionController(deps).cancelAgentEditSession(args)
+      deps.scryerAgentRunRuntime?.clearRun(args.agentRunId)
+    }
+  )
+
+  registrar.handle('architecture:readEditSession', (_event, args: { projectPath: string }) =>
+    requireEditSessionController(deps).readEditSession(args)
+  )
+
+  registrar.handle(
     'architecture:callTool',
     async (event, args: { projectPath: string; call: ScryerToolCall }) => {
       const result = await deps.callScryerTool(args.projectPath, args.call)
@@ -344,19 +829,21 @@ export function registerArchitectureHandlers(
         operationId: ScryerOperationId
         input?: unknown
         requestId?: string
-        leaseToken?: string
       }
     ) => {
-      const result = await scryerEngine.executeOperation(args.operationId, args.input ?? {}, {
+      const result = await deps.scryerEngine.executeOperation(args.operationId, args.input ?? {}, {
         requestId: args.requestId ?? `ipc-${Date.now()}`,
         transport: 'ipc',
         caller: 'human',
         cwd: args.projectPath,
-        projectRoot: args.projectPath,
-        leaseToken: args.leaseToken
+        projectRoot: args.projectPath
       })
       if (result.ok && SCRYER_WRITE_OPERATIONS.has(args.operationId)) {
-        notifyModelChanged(event, args.projectPath, undefined, deps)
+        notifyModelFileChanged(
+          event,
+          args.projectPath,
+          changedScryerModelFileForOperation(args.operationId)
+        )
       }
       return result
     }
@@ -367,15 +854,12 @@ export function registerArchitectureHandlers(
     if (watchers.has(key)) {
       return
     }
-    await deps.readModel(args.projectPath)
+    await mkdir(key, { recursive: true })
     const watcher = watch(key, { persistent: false }, (_eventType, filename) => {
       if (!filename || !shouldNotifyModelFile(filename)) {
         return
       }
-      event.sender.send('architecture:modelChanged', {
-        projectPath: args.projectPath,
-        fileName: String(filename)
-      })
+      scheduleWatchedModelChanged(event, args.projectPath, String(filename))
     })
     watcher.on('error', () => {
       watchers.delete(key)
