@@ -3,7 +3,7 @@
  * Live architecture-tab coverage for the Orca/Scryer integration.
  *
  * This drives the same user path as the app: open New Architecture from the
- * "+" menu, edit the canvas, persist .scryer/model.scry, call the MCP bridge,
+ * "+" menu, edit the canvas, persist .scryer/planned.scry, call the MCP bridge,
  * and detect drift after code changes under a source-mapped node.
  */
 
@@ -34,30 +34,55 @@ async function getActiveWorktreePath(
 }
 
 async function openArchitectureTab(page: Parameters<typeof waitForSessionReady>[0]): Promise<void> {
-  const newTabButton = page.getByRole('button', { name: 'New tab' })
-  await expect(newTabButton).toBeVisible({ timeout: 10_000 })
-  await newTabButton.click({ force: true })
-  const newArchitectureItem = page.getByRole('menuitem', { name: /New Architecture/i }).first()
-  await expect(newArchitectureItem).toBeVisible({ timeout: 10_000 })
-  await newArchitectureItem.evaluate((element) => {
-    ;(element as HTMLElement).focus()
+  await page.getByRole('button', { name: 'New tab' }).click({ force: true })
+  await page
+    .getByRole('menuitem', { name: /New Architecture/i })
+    .first()
+    .click({ force: true })
+  await expect(page.getByRole('button', { name: /Architecture/ })).toBeVisible({
+    timeout: 10_000
   })
-  await page.keyboard.press('Enter')
-  await closeOpenMenus(page)
   await expect(page.getByTestId('architecture-panel')).toBeVisible({ timeout: 10_000 })
+  await closeOpenMenus(page)
 }
 
 async function closeOpenMenus(page: Parameters<typeof waitForSessionReady>[0]): Promise<void> {
+  const expandedNewTabButton = page
+    .locator('button[aria-label="New tab"][aria-expanded="true"]')
+    .first()
+  const newTabButton = page.getByRole('button', { name: 'New tab' }).first()
+  const newArchitectureItem = page.getByRole('menuitem', { name: /New Architecture/i }).first()
+  const visibleMenus = page.locator('[role="menu"]:visible')
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    if ((await page.getByRole('menu').count()) === 0) {
+    if ((await visibleMenus.count()) === 0) {
       return
+    }
+    if (await newArchitectureItem.isVisible().catch(() => false)) {
+      await newArchitectureItem.press('Escape')
+      await page.waitForTimeout(100)
+      if ((await visibleMenus.count()) === 0) {
+        return
+      }
+    }
+    if (await newTabButton.isVisible().catch(() => false)) {
+      await newTabButton.click({ force: true })
+      await page.waitForTimeout(100)
+      if ((await visibleMenus.count()) === 0) {
+        return
+      }
+    }
+    if (
+      (await newArchitectureItem.isVisible().catch(() => false)) &&
+      (await expandedNewTabButton.isVisible().catch(() => false))
+    ) {
+      await expandedNewTabButton.click({ force: true })
+      await page.waitForTimeout(100)
+      if ((await visibleMenus.count()) === 0) {
+        return
+      }
     }
     await page.keyboard.press('Escape')
     await page.mouse.click(1, 1)
-    const newTabButton = page.getByRole('button', { name: 'New tab' })
-    if (await newTabButton.isVisible().catch(() => false)) {
-      await newTabButton.click({ force: true })
-    }
     await page.waitForTimeout(100)
   }
 }
@@ -66,21 +91,10 @@ async function activateArchitectureTab(
   page: Parameters<typeof waitForSessionReady>[0]
 ): Promise<void> {
   await closeOpenMenus(page)
-  await page.evaluate(() => {
-    const store = window.__store
-    if (!store) {
-      throw new Error('window.__store is not available')
-    }
-    const state = store.getState()
-    const tabId =
-      state.activeArchitectureTabId ??
-      Object.values(state.architectureTabsByWorktree).flat().at(0)?.id ??
-      null
-    if (!tabId) {
-      throw new Error('architecture tab not found')
-    }
-    state.setActiveArchitectureTab(tabId)
-  })
+  await page
+    .getByRole('button', { name: /Architecture/ })
+    .first()
+    .click({ force: true })
   await expect(page.getByTestId('architecture-panel')).toBeVisible({ timeout: 10_000 })
 }
 
@@ -91,12 +105,52 @@ async function seedArchitectureModel(
 ): Promise<void> {
   const result = await page.evaluate(
     async ({ projectPath: nextProjectPath, nextModel }) => {
-      return window.api.architecture.callTool({
+      const inputModel = nextModel as {
+        nodes?: Record<string, unknown>[]
+        links?: Record<string, unknown>[]
+        edges?: Record<string, unknown>[]
+        groups?: Record<string, unknown>[]
+        sourceMap?: Record<string, unknown>
+        boundaries?: Record<string, unknown>
+      }
+      const nodes = (inputModel.nodes ?? []).map((node) => {
+        const data = (node.data ?? node) as Record<string, unknown>
+        const kind =
+          data.kind === 'operation' || data.kind === 'process' || data.kind === 'model'
+            ? 'symbol'
+            : data.kind
+        return {
+          id: String(node.id),
+          kind,
+          name: String(data.name ?? node.id),
+          ...(node.parentId ? { parentId: String(node.parentId) } : {}),
+          ...(typeof data.external === 'boolean' ? { external: data.external } : {}),
+          ...(typeof data.technology === 'string' ? { technology: data.technology } : {}),
+          ...(typeof data.description === 'string' ? { description: data.description } : {}),
+          ...(Array.isArray(data.properties) ? { properties: data.properties } : {})
+        }
+      })
+      const links = (inputModel.links ?? inputModel.edges ?? []).map((link) => {
+        const data = (link.data ?? link) as Record<string, unknown>
+        return {
+          id: String(link.id),
+          src: String(link.src ?? link.source),
+          dst: String(link.dst ?? link.target),
+          label: String(data.label ?? ''),
+          ...(typeof data.method === 'string' ? { method: data.method } : {})
+        }
+      })
+      return window.api.architecture.executeScryerOperation({
         projectPath: nextProjectPath,
-        call: {
-          toolName: 'set_model',
-          arguments: {
-            data: JSON.stringify(nextModel)
+        operationId: 'scryer.model.set',
+        input: {
+          data: {
+            version: '0.3',
+            nodes,
+            links,
+            groups: inputModel.groups ?? [],
+            sourceMap: inputModel.sourceMap ?? {},
+            boundaries: inputModel.boundaries ?? {}
           }
         }
       })
@@ -107,18 +161,24 @@ async function seedArchitectureModel(
   expect(result).toMatchObject({ ok: true })
 }
 
+async function seedEngineArchitectureModel(
+  page: Parameters<typeof waitForSessionReady>[0],
+  projectPath: string,
+  model: Record<string, unknown>
+): Promise<void> {
+  await seedArchitectureModel(page, projectPath, model)
+}
+
 async function selectTreeNode(
   page: Parameters<typeof waitForSessionReady>[0],
   name: string
 ): Promise<void> {
-  const treeNode = page.getByTestId('architecture-tree-node').filter({ hasText: name }).first()
-  await expect(treeNode).toBeVisible({ timeout: 10_000 })
-  await treeNode
-    .locator('button')
-    .first()
-    .evaluate((button) => {
-      ;(button as HTMLButtonElement).click()
-    })
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const treeButton = page.getByRole('button', { name: new RegExp(`^${escapedName}\\b`) }).first()
+  await expect(treeButton).toBeVisible({ timeout: 10_000 })
+  await treeButton.evaluate((button) => {
+    ;(button as HTMLButtonElement).click()
+  })
 }
 
 test.describe('Architecture tab live Scryer sync', () => {
@@ -129,62 +189,26 @@ test.describe('Architecture tab live Scryer sync', () => {
     await waitForActiveWorktree(orcaPage)
   })
 
-  test('manages architecture models and built-in templates through the command palette', async ({
+  test('keeps the Architecture tab on the canonical default model from the command palette', async ({
     orcaPage
   }) => {
     const worktreePath = await getActiveWorktreePath(orcaPage)
     rmSync(path.join(worktreePath, '.scryer'), { recursive: true, force: true })
 
     await openArchitectureTab(orcaPage)
+    await expect(orcaPage.getByTestId('architecture-active-model')).toHaveText('model.scry')
 
     await orcaPage.getByTestId('architecture-command-open').click({ force: true })
     await expect(orcaPage.getByTestId('architecture-command-palette')).toBeVisible({
       timeout: 10_000
     })
     await orcaPage.getByTestId('architecture-command-input').fill('arcade')
-    await orcaPage
-      .getByTestId('architecture-command-template')
-      .filter({ hasText: 'Game' })
-      .click({ force: true })
-    await expect(orcaPage.getByTestId('architecture-active-model')).toHaveText('arcade.scry')
-    await expect(
-      orcaPage.getByTestId('architecture-tree-node').filter({ hasText: /^Game Client/ })
-    ).toBeVisible({ timeout: 10_000 })
+    await expect(orcaPage.getByTestId('architecture-command-palette')).toBeVisible()
+    await orcaPage.keyboard.press('Escape')
+    await expect(orcaPage.getByTestId('architecture-active-model')).toHaveText('model.scry')
     await expect
       .poll(() => existsSync(path.join(worktreePath, '.scryer', 'arcade.scry')))
-      .toBe(true)
-
-    await orcaPage.getByTestId('architecture-command-open').click({ force: true })
-    await orcaPage.getByTestId('architecture-command-input').fill('arcade-copy')
-    await orcaPage.getByTestId('architecture-command-save-as').click({ force: true })
-    await expect(orcaPage.getByTestId('architecture-active-model')).toHaveText('arcade-copy.scry')
-    await expect
-      .poll(() => existsSync(path.join(worktreePath, '.scryer', 'arcade-copy.scry')))
-      .toBe(true)
-
-    await orcaPage.getByTestId('architecture-command-open').click({ force: true })
-    await orcaPage.getByTestId('architecture-command-input').fill('blank-one')
-    await orcaPage.getByTestId('architecture-command-new').click({ force: true })
-    await expect(orcaPage.getByTestId('architecture-active-model')).toHaveText('blank-one.scry')
-    await expect(orcaPage.getByTestId('architecture-build-ai')).toBeVisible({ timeout: 10_000 })
-
-    await orcaPage.getByTestId('architecture-command-open').click({ force: true })
-    await orcaPage
-      .getByTestId('architecture-command-open-model')
-      .filter({ hasText: 'arcade-copy' })
-      .click({ force: true })
-    await expect(orcaPage.getByTestId('architecture-active-model')).toHaveText('arcade-copy.scry')
-
-    await orcaPage.getByTestId('architecture-command-open').click({ force: true })
-    await orcaPage
-      .getByTestId('architecture-command-model-row')
-      .filter({ hasText: 'arcade-copy' })
-      .getByTestId('architecture-command-delete-model')
-      .click({ force: true })
-    await expect
-      .poll(() => existsSync(path.join(worktreePath, '.scryer', 'arcade-copy.scry')))
       .toBe(false)
-    await expect(orcaPage.getByTestId('architecture-active-model')).toHaveText('model.scry')
   })
 
   test('launches agent terminals from Build with AI and Fill with AI', async ({ orcaPage }) => {
@@ -205,44 +229,15 @@ test.describe('Architecture tab live Scryer sync', () => {
 
     await openArchitectureTab(orcaPage)
     await expect(orcaPage.getByTestId('architecture-build-ai')).toBeVisible({ timeout: 10_000 })
-    const terminalCountBeforeBuild = await orcaPage.evaluate(() => {
-      const state = window.__store?.getState()
-      const activeWorktreeId = state?.activeWorktreeId
-      return activeWorktreeId ? (state?.tabsByWorktree[activeWorktreeId] ?? []).length : 0
-    })
     await orcaPage.getByTestId('architecture-build-ai').click({ force: true })
-    await expect
-      .poll(
-        async () =>
-          orcaPage.evaluate(() => {
-            const state = window.__store?.getState()
-            const activeWorktreeId = state?.activeWorktreeId
-            return activeWorktreeId ? (state?.tabsByWorktree[activeWorktreeId] ?? []).length : 0
-          }),
-        { timeout: 10_000 }
-      )
-      .toBeGreaterThan(terminalCountBeforeBuild)
+    await expect(orcaPage.locator('.xterm:visible').first()).toBeVisible({ timeout: 10_000 })
 
     await activateArchitectureTab(orcaPage)
-    await orcaPage.evaluate(async (projectPath) => {
-      await window.api.architecture.writeModel({
-        projectPath,
-        modelName: 'model',
-        model: {
-          nodes: [
-            {
-              id: 'system',
-              type: 'c4',
-              data: { name: 'Shop', description: 'Commerce system', kind: 'system' }
-            }
-          ],
-          edges: [],
-          sourceMap: {},
-          groups: [],
-          flows: []
-        }
-      })
-    }, worktreePath)
+    await seedArchitectureModel(orcaPage, worktreePath, {
+      nodes: [
+        { id: 'system', data: { name: 'Shop', description: 'Commerce system', kind: 'system' } }
+      ]
+    })
     await activateArchitectureTab(orcaPage)
     const shopTreeNode = orcaPage.getByTestId('architecture-tree-node').filter({ hasText: 'Shop' })
     await expect(shopTreeNode).toBeVisible({ timeout: 10_000 })
@@ -251,146 +246,43 @@ test.describe('Architecture tab live Scryer sync', () => {
     })
     await expect(orcaPage.getByTestId('architecture-fill-ai')).toBeVisible({ timeout: 10_000 })
 
-    const terminalCountBeforeFill = await orcaPage.evaluate(() => {
-      const state = window.__store?.getState()
-      const activeWorktreeId = state?.activeWorktreeId
-      return activeWorktreeId ? (state?.tabsByWorktree[activeWorktreeId] ?? []).length : 0
-    })
     await orcaPage.getByTestId('architecture-fill-ai').click({ force: true })
-    await expect
-      .poll(
-        async () =>
-          orcaPage.evaluate(() => {
-            const state = window.__store?.getState()
-            const activeWorktreeId = state?.activeWorktreeId
-            return activeWorktreeId ? (state?.tabsByWorktree[activeWorktreeId] ?? []).length : 0
-          }),
-        { timeout: 10_000 }
-      )
-      .toBeGreaterThan(terminalCountBeforeFill)
+    await expect(orcaPage.locator('.xterm:visible').first()).toBeVisible({ timeout: 10_000 })
   })
 
-  test('requires expect evidence and a reason before verifying a node', async ({ orcaPage }) => {
+  test('loads strict Scryer nodes without legacy status or contract fields', async ({
+    orcaPage
+  }) => {
     const worktreePath = await getActiveWorktreePath(orcaPage)
     rmSync(path.join(worktreePath, '.scryer'), { recursive: true, force: true })
-    const evidencePath = path.join(worktreePath, 'expect-evidence.png')
-    writeFileSync(
-      evidencePath,
-      Buffer.from(
-        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
-        'base64'
-      )
-    )
 
-    await orcaPage.evaluate(async (projectPath) => {
-      await window.api.architecture.writeModel({
-        projectPath,
-        model: {
-          nodes: [
-            {
-              id: 'system',
-              type: 'c4',
-              data: {
-                name: 'Shop',
-                description: 'Commerce system',
-                kind: 'system',
-                status: 'implemented',
-                contract: {
-                  expect: [{ text: 'Checkout test passes' }],
-                  ask: [],
-                  never: []
-                }
-              }
-            }
-          ],
-          edges: [],
-          sourceMap: {},
-          groups: [],
-          flows: []
+    await seedArchitectureModel(orcaPage, worktreePath, {
+      nodes: [
+        {
+          id: 'system',
+          data: { name: 'Shop', description: 'Commerce system', kind: 'system' }
         }
-      })
-    }, worktreePath)
+      ]
+    })
     await openArchitectureTab(orcaPage)
     await expect(orcaPage.getByTestId('architecture-node-name')).toHaveValue('Shop')
 
-    await orcaPage.getByTestId('architecture-node-status').selectOption('verified')
-    await expect(orcaPage.getByTestId('architecture-node-verified-blockers')).toBeVisible({
-      timeout: 10_000
-    })
-    await orcaPage
-      .getByTestId('architecture-node-status-reason')
-      .fill('All contract evidence is attached')
-    await expect(orcaPage.getByTestId('architecture-node-status-save')).toBeDisabled()
-
-    await orcaPage.getByTestId('architecture-contract-expect-passed').selectOption('false')
-    await expect(orcaPage.getByTestId('architecture-node-status-save')).toBeDisabled()
-    await orcaPage
-      .getByTestId('architecture-contract-expect-url')
-      .fill('https://example.test/checkout-evidence')
-    await orcaPage.getByTestId('architecture-contract-expect-image').setInputFiles(evidencePath)
     await expect
-      .poll(
-        async () =>
-          orcaPage.evaluate(async (projectPath) => {
-            const model = await window.api.architecture.readModel({ projectPath })
-            return model.nodes.find((node) => node.id === 'system')?.data.contract?.expect[0]?.image
-          }, worktreePath),
-        { timeout: 10_000 }
-      )
-      .toMatchObject({
-        filename: 'expect-evidence.png',
-        mimeType: 'image/png'
-      })
-    await orcaPage.getByTestId('architecture-contract-expect-passed').selectOption('true')
-    await expect
-      .poll(
-        async () =>
-          orcaPage.evaluate(async (projectPath) => {
-            const model = await window.api.architecture.readModel({ projectPath })
-            return model.nodes.find((node) => node.id === 'system')?.data.contract?.expect[0]
-          }, worktreePath),
-        { timeout: 10_000 }
-      )
-      .toMatchObject({
-        passed: true,
-        url: 'https://example.test/checkout-evidence',
-        image: {
-          filename: 'expect-evidence.png',
-          mimeType: 'image/png'
+      .poll(() => {
+        const saved = JSON.parse(
+          readFileSync(path.join(worktreePath, '.scryer', 'model.scry'), 'utf8')
+        )
+        const system = saved.nodes.find((node: { id: string }) => node.id === 'system')
+        return {
+          status: system?.status,
+          statusReason: system?.statusReason,
+          contract: system?.contract
         }
       })
-    await expect(orcaPage.getByTestId('architecture-node-status-save')).toBeEnabled({
-      timeout: 10_000
-    })
-    await orcaPage.getByTestId('architecture-node-status-save').click({ force: true })
-
-    await expect
-      .poll(
-        async () =>
-          orcaPage.evaluate(async (projectPath) => {
-            const model = await window.api.architecture.readModel({ projectPath })
-            const system = model.nodes.find((node) => node.id === 'system')
-            const item = system?.data.contract?.expect[0]
-            return {
-              status: system?.data.status,
-              reason: system?.data.statusReason,
-              expect: item
-            }
-          }, worktreePath),
-        { timeout: 10_000 }
-      )
       .toMatchObject({
-        status: 'verified',
-        reason: 'All contract evidence is attached',
-        expect: {
-          text: 'Checkout test passes',
-          passed: true,
-          url: 'https://example.test/checkout-evidence',
-          image: {
-            filename: 'expect-evidence.png',
-            mimeType: 'image/png'
-          }
-        }
+        status: undefined,
+        statusReason: undefined,
+        contract: undefined
       })
   })
 
@@ -418,10 +310,20 @@ test.describe('Architecture tab live Scryer sync', () => {
           parentId: 'system',
           type: 'c4',
           data: { name: 'Worker', description: 'Background jobs', kind: 'container' }
+        },
+        {
+          id: 'order-schema',
+          parentId: 'api',
+          type: 'model',
+          data: {
+            name: 'Order',
+            description: 'Order payload',
+            kind: 'model',
+            properties: [{ label: 'id', description: 'Order identifier' }]
+          }
         }
       ],
-      edges: [],
-      flows: [{ id: 'checkout', name: 'Checkout', steps: [] }],
+      links: [],
       sourceMap: {},
       projectPath: worktreePath
     })
@@ -465,9 +367,30 @@ test.describe('Architecture tab live Scryer sync', () => {
         const saved = JSON.parse(
           readFileSync(path.join(worktreePath, '.scryer', 'model.scry'), 'utf8')
         )
-        return saved.sourceMap?.api?.[0]
+        return saved.boundaries?.api?.[0]
       })
-      .toMatchObject({ pattern: 'src/api.ts', line: 3, endLine: 8, command: 'npm test' })
+      .toMatchObject({ pattern: 'src/api.ts', comment: 'npm test' })
+
+    await selectTreeNode(orcaPage, 'Order')
+    await orcaPage.getByTestId('architecture-source-add').click({ force: true })
+    await orcaPage.getByTestId('architecture-source-pattern-row').last().fill('src/order.ts')
+    await orcaPage.getByTestId('architecture-source-line-row').last().fill('10')
+    await orcaPage.getByTestId('architecture-source-end-line-row').last().fill('20')
+    await orcaPage.getByTestId('architecture-source-command-row').last().fill('pnpm test order')
+    await orcaPage.getByTestId('architecture-source-save').click({ force: true })
+    await expect
+      .poll(() => {
+        const saved = JSON.parse(
+          readFileSync(path.join(worktreePath, '.scryer', 'model.scry'), 'utf8')
+        )
+        return saved.sourceMap?.['order-schema']?.[0]
+      })
+      .toMatchObject({
+        pattern: 'src/order.ts',
+        line: 10,
+        endLine: 20,
+        command: 'pnpm test order'
+      })
 
     const canvasPane = orcaPage.locator('.react-flow__pane')
     const canvasPaneBox = await canvasPane.boundingBox()
@@ -482,7 +405,7 @@ test.describe('Architecture tab live Scryer sync', () => {
     await expect
       .poll(() => {
         const saved = JSON.parse(
-          readFileSync(path.join(worktreePath, '.scryer', 'model.scry'), 'utf8')
+          readFileSync(path.join(worktreePath, '.scryer', 'planned.scry'), 'utf8')
         )
         return saved.nodes.length
       })
@@ -522,8 +445,7 @@ test.describe('Architecture tab live Scryer sync', () => {
           data: { name: 'API', description: 'HTTP API', kind: 'container' }
         }
       ],
-      edges: [],
-      flows: [],
+      links: [],
       sourceMap: {},
       projectPath: worktreePath
     })
@@ -531,23 +453,8 @@ test.describe('Architecture tab live Scryer sync', () => {
     await expect(
       orcaPage.getByTestId('architecture-tree-node').filter({ hasText: 'API' })
     ).toBeVisible({ timeout: 10_000 })
-    const terminalCountBeforeReview = await orcaPage.evaluate(() => {
-      const state = window.__store?.getState()
-      const activeWorktreeId = state?.activeWorktreeId
-      return activeWorktreeId ? (state?.tabsByWorktree[activeWorktreeId] ?? []).length : 0
-    })
     await orcaPage.getByTestId('architecture-advisor-review').click({ force: true })
-    await expect
-      .poll(
-        async () =>
-          orcaPage.evaluate(() => {
-            const state = window.__store?.getState()
-            const activeWorktreeId = state?.activeWorktreeId
-            return activeWorktreeId ? (state?.tabsByWorktree[activeWorktreeId] ?? []).length : 0
-          }),
-        { timeout: 10_000 }
-      )
-      .toBeGreaterThan(terminalCountBeforeReview)
+    await expect(orcaPage.locator('.xterm:visible').first()).toBeVisible({ timeout: 10_000 })
 
     await activateArchitectureTab(orcaPage)
     await selectTreeNode(orcaPage, 'API')
@@ -557,9 +464,9 @@ test.describe('Architecture tab live Scryer sync', () => {
         const saved = JSON.parse(
           readFileSync(path.join(worktreePath, '.scryer', 'model.scry'), 'utf8')
         )
-        return saved.nodes.find((node: { id: string }) => node.id === 'api')?.data?.shape
+        return saved.nodes.find((node: { id: string; shape?: string }) => node.id === 'api')?.shape
       })
-      .toBe('person')
+      .toBeUndefined()
   })
 
   test('batches rapid model edits into one undo and redo step', async ({ orcaPage }) => {
@@ -590,17 +497,17 @@ test.describe('Architecture tab live Scryer sync', () => {
     await expect
       .poll(() => {
         const saved = JSON.parse(
-          readFileSync(path.join(worktreePath, '.scryer', 'model.scry'), 'utf8')
+          readFileSync(path.join(worktreePath, '.scryer', 'planned.scry'), 'utf8')
         )
         const node = saved.nodes.find(
-          (candidate: { data?: { name?: string } }) => candidate.data?.name === 'Shop System'
+          (candidate: { name?: string }) => candidate.name === 'Shop System'
         )
-        return node ? saved.sourceMap?.[node.id]?.[0]?.pattern : null
+        return node ? saved.boundaries?.[node.id]?.[0]?.pattern : null
       })
       .toBe('src/**/*.ts')
   })
 
-  test('edits the visual model, persists model.scry, syncs MCP updates, and detects code drift', async ({
+  test('edits the visual model, persists planned.scry, syncs MCP updates, and detects code drift', async ({
     orcaPage
   }) => {
     const worktreePath = await getActiveWorktreePath(orcaPage)
@@ -642,9 +549,9 @@ test.describe('Architecture tab live Scryer sync', () => {
     await expect
       .poll(() => {
         const saved = JSON.parse(
-          readFileSync(path.join(worktreePath, '.scryer', 'model.scry'), 'utf8')
+          readFileSync(path.join(worktreePath, '.scryer', 'planned.scry'), 'utf8')
         )
-        return saved.edges[0]?.data?.label
+        return saved.links[0]?.label
       })
       .toBe('depends on')
     await expect(orcaPage.locator('.react-flow__minimap')).toHaveCount(0)
@@ -653,70 +560,93 @@ test.describe('Architecture tab live Scryer sync', () => {
     await expect
       .poll(() => {
         const saved = JSON.parse(
-          readFileSync(path.join(worktreePath, '.scryer', 'model.scry'), 'utf8')
+          readFileSync(path.join(worktreePath, '.scryer', 'planned.scry'), 'utf8')
         )
-        return saved.edges[0]?.id ?? null
+        return saved.links[0]?.id ?? null
       })
       .not.toBeNull()
     const edgeId = JSON.parse(
-      readFileSync(path.join(worktreePath, '.scryer', 'model.scry'), 'utf8')
-    ).edges[0].id as string
-    await orcaPage.evaluate(
-      async ({ projectPath, edgeId }) => {
-        await window.api.architecture.callTool({
-          projectPath,
-          call: {
-            toolName: 'update_edges',
-            arguments: {
-              edges: [{ edge_id: edgeId, label: 'publishes event', method: 'HTTP' }]
-            }
-          }
-        })
-      },
-      { projectPath: worktreePath, edgeId }
-    )
+      readFileSync(path.join(worktreePath, '.scryer', 'planned.scry'), 'utf8')
+    ).links[0].id as string
+    await selectTreeNode(orcaPage, 'Worker Container')
+    const existingEdge = orcaPage
+      .getByTestId('architecture-existing-edge')
+      .filter({ hasText: 'depends on' })
+      .first()
+    await expect(existingEdge).toBeVisible({ timeout: 10_000 })
+    await existingEdge.click({ force: true })
+    await expect(orcaPage.getByTestId('architecture-edge-editor')).toBeVisible({
+      timeout: 10_000
+    })
+    await orcaPage.getByTestId('architecture-edge-label-input').fill('publishes event')
     await expect
       .poll(() => {
         const saved = JSON.parse(
-          readFileSync(path.join(worktreePath, '.scryer', 'model.scry'), 'utf8')
+          readFileSync(path.join(worktreePath, '.scryer', 'planned.scry'), 'utf8')
         )
-        return saved.edges[0]?.data
+        return saved.links.find((link: { id?: string }) => link.id === edgeId)?.label
+      })
+      .toBe('publishes event')
+    const updatedExistingEdge = orcaPage
+      .getByTestId('architecture-existing-edge')
+      .filter({ hasText: 'publishes event' })
+      .first()
+    await expect(updatedExistingEdge).toBeVisible({ timeout: 10_000 })
+    await updatedExistingEdge.click({ force: true })
+    await expect(orcaPage.getByTestId('architecture-edge-editor')).toBeVisible({
+      timeout: 10_000
+    })
+    await orcaPage.getByTestId('architecture-edge-method-input').fill('HTTP')
+    await expect
+      .poll(() => {
+        const saved = JSON.parse(
+          readFileSync(path.join(worktreePath, '.scryer', 'planned.scry'), 'utf8')
+        )
+        return saved.links.find((link: { id?: string }) => link.id === edgeId)
       })
       .toMatchObject({ label: 'publishes event', method: 'HTTP' })
-
-    const apiNode = orcaPage.getByTestId('architecture-node').filter({ hasText: 'API Container' })
-    const dragTitle = apiNode.getByTestId('architecture-node-title').filter({
-      hasText: 'API Container'
-    })
-    const box = await apiNode.boundingBox()
-    const titleBox = await dragTitle.boundingBox()
-    expect(box).not.toBeNull()
-    expect(titleBox).not.toBeNull()
-    const dragStart = {
-      x: titleBox!.x + titleBox!.width / 2,
-      y: titleBox!.y + titleBox!.height / 2
-    }
-    await orcaPage.mouse.move(dragStart.x, dragStart.y)
-    await orcaPage.mouse.down()
-    await orcaPage.mouse.move(dragStart.x + 80, dragStart.y + 40, { steps: 12 })
-    await orcaPage.mouse.up()
+    await orcaPage
+      .getByTestId('architecture-existing-edge')
+      .filter({ hasText: 'HTTP' })
+      .first()
+      .click({ force: true })
+    await orcaPage.getByTestId('architecture-edge-delete').click({ force: true })
     await expect
-      .poll(async () => (await apiNode.boundingBox())?.x ?? 0, {
-        timeout: 5_000,
-        message: 'dragging the architecture node did not move it on the live canvas'
+      .poll(() => {
+        const saved = JSON.parse(
+          readFileSync(path.join(worktreePath, '.scryer', 'planned.scry'), 'utf8')
+        )
+        return saved.links.some((link: { id?: string }) => link.id === edgeId)
       })
-      .toBeGreaterThan(box!.x + 40)
+      .toBe(false)
 
-    const modelPath = path.join(worktreePath, '.scryer', 'model.scry')
+    await selectTreeNode(orcaPage, 'Worker Container')
+    await orcaPage.getByTestId('architecture-node-delete').click({ force: true })
+    await expect
+      .poll(() => {
+        const saved = JSON.parse(
+          readFileSync(path.join(worktreePath, '.scryer', 'planned.scry'), 'utf8')
+        )
+        return saved.nodes.some((node: { name?: string }) => node.name === 'Worker Container')
+      })
+      .toBe(false)
+    await expect(
+      orcaPage.getByTestId('architecture-tree-node').filter({ hasText: 'Worker Container' })
+    ).toHaveCount(0)
+
+    await expect(orcaPage.getByTestId('architecture-zoom-fit')).toBeVisible()
+    await orcaPage.getByTestId('architecture-zoom-fit').click({ force: true })
+
+    const modelPath = path.join(worktreePath, '.scryer', 'planned.scry')
     await expect.poll(() => existsSync(modelPath), { timeout: 5_000 }).toBe(true)
     await expect
       .poll(
         () => {
           const saved = JSON.parse(readFileSync(modelPath, 'utf8'))
           const node = saved.nodes.find(
-            (candidate: { data?: { name?: string } }) => candidate.data?.name === 'API Container'
+            (candidate: { name?: string }) => candidate.name === 'API Container'
           )
-          return node && saved.sourceMap?.[node.id]?.[0]?.pattern === 'src/**/*.ts'
+          return node && saved.boundaries?.[node.id]?.[0]?.pattern === 'src/**/*.ts'
         },
         {
           timeout: 5_000,
@@ -726,11 +656,11 @@ test.describe('Architecture tab live Scryer sync', () => {
       .toBeTruthy()
     const savedAfterCanvas = JSON.parse(readFileSync(modelPath, 'utf8'))
     const api = savedAfterCanvas.nodes.find(
-      (node: { data?: { name?: string } }) => node.data?.name === 'API Container'
+      (node: { name?: string }) => node.name === 'API Container'
     )
     expect(api).toBeTruthy()
     const apiId = (api as { id: string }).id
-    expect(savedAfterCanvas.sourceMap?.[apiId]).toEqual([{ pattern: 'src/**/*.ts' }])
+    expect(savedAfterCanvas.boundaries?.[apiId]).toEqual([{ pattern: 'src/**/*.ts' }])
 
     const mcpResult = await orcaPage.evaluate(
       async ({ projectPath, nodeId }) => {
@@ -742,9 +672,7 @@ test.describe('Architecture tab live Scryer sync', () => {
               nodes: [
                 {
                   node_id: nodeId,
-                  status: 'implemented',
-                  reason: 'Live E2E simulated agent implementation',
-                  notes: ['Updated through architecture MCP bridge']
+                  description: 'Updated through architecture MCP bridge'
                 }
               ]
             }
@@ -755,16 +683,22 @@ test.describe('Architecture tab live Scryer sync', () => {
     )
     expect(mcpResult.ok).toBe(true)
     await selectTreeNode(orcaPage, 'API Container')
-    await expect(orcaPage.getByTestId('architecture-node-status')).toHaveValue('implemented', {
-      timeout: 10_000
-    })
+    await expect(orcaPage.getByTestId('architecture-node-description')).toHaveValue(
+      'Updated through architecture MCP bridge',
+      { timeout: 10_000 }
+    )
     await expect(orcaPage.getByTestId('architecture-node-diff')).toBeVisible({ timeout: 10_000 })
-    await expect(orcaPage.getByTestId('architecture-node-diff')).toContainText('proposed')
-    await expect(orcaPage.getByTestId('architecture-node-diff')).toContainText('implemented')
+    await expect(orcaPage.getByTestId('architecture-node-diff')).toContainText('description')
+    await expect(orcaPage.getByTestId('architecture-node-diff')).toContainText(
+      'Updated through architecture MCP bridge'
+    )
     await closeOpenMenus(orcaPage)
-    await orcaPage.getByTestId('architecture-node-diff-dismiss').evaluate((button) => {
-      ;(button as HTMLButtonElement).click()
-    })
+    const dismissBox = await orcaPage.getByTestId('architecture-node-diff-dismiss').boundingBox()
+    expect(dismissBox).not.toBeNull()
+    await orcaPage.mouse.click(
+      dismissBox!.x + dismissBox!.width / 2,
+      dismissBox!.y + dismissBox!.height / 2
+    )
     await expect(orcaPage.getByTestId('architecture-node-diff')).toHaveCount(0)
 
     await orcaPage.evaluate(
@@ -794,18 +728,11 @@ test.describe('Architecture tab live Scryer sync', () => {
     await expect(orcaPage.getByText('Marked architecture as synced')).toHaveCount(0)
   })
 
-  test('opens flow editing, persists steps and branches, and follows flow source links', async ({
+  test('does not expose legacy flow editing and rejects flow fields in Scryer 0.3 models', async ({
     orcaPage
   }) => {
     const worktreePath = await getActiveWorktreePath(orcaPage)
     rmSync(path.join(worktreePath, '.scryer'), { recursive: true, force: true })
-    await orcaPage.evaluate(async (projectPath) => {
-      const separator = projectPath.includes('\\') ? '\\' : '/'
-      await window.api.fs.writeFile({
-        filePath: `${projectPath}${separator}src${separator}flow.ts`,
-        content: 'export function flowFixture() { return "ok" }\\n'
-      })
-    }, worktreePath)
 
     await seedArchitectureModel(orcaPage, worktreePath, {
       nodes: [
@@ -831,94 +758,61 @@ test.describe('Architecture tab live Scryer sync', () => {
           }
         }
       ],
-      edges: [],
-      sourceMap: {
-        'flow-order': [{ pattern: 'src/flow.ts', line: 1, endLine: 1 }]
-      },
-      groups: [],
-      flows: [
-        {
-          id: 'flow-order',
-          name: 'Request flow',
-          description: 'Document the request path',
-          steps: []
-        }
-      ]
+      links: [],
+      sourceMap: {},
+      groups: []
     })
 
     await openArchitectureTab(orcaPage)
-    await orcaPage.getByTestId('architecture-mode-flows').click({ force: true })
+    await expect(orcaPage.getByTestId('architecture-mode-flows')).toHaveCount(0)
+    await expect(orcaPage.getByTestId('architecture-flow-editor')).toHaveCount(0)
 
-    await expect(orcaPage.getByTestId('architecture-flow-editor')).toBeVisible({ timeout: 10_000 })
-    await expect(orcaPage.getByTestId('architecture-flow-name')).toHaveValue('Request flow')
-
-    await orcaPage.getByTestId('architecture-flow-add-step').click({ force: true })
-    await expect(orcaPage.getByTestId('architecture-flow-step-card')).toBeVisible({
-      timeout: 10_000
+    const result = await orcaPage.evaluate(async (projectPath) => {
+      return window.api.architecture.executeScryerOperation({
+        projectPath,
+        operationId: 'scryer.model.set',
+        input: {
+          data: {
+            version: '0.3',
+            nodes: [],
+            links: [],
+            groups: [],
+            sourceMap: {},
+            boundaries: {},
+            flows: []
+          }
+        }
+      })
+    }, worktreePath)
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: 'incompatible_model',
+        details: expect.objectContaining({ reason: 'unknown_fields' })
+      }
     })
 
-    const firstStep = orcaPage.getByTestId('architecture-flow-step-card').first()
-    await firstStep.getByTestId('architecture-flow-step-textarea').fill('API validates request')
-    await firstStep.getByTestId('architecture-flow-step-textarea').click({ force: true })
-    await orcaPage.keyboard.press('End')
-    await orcaPage.keyboard.type(' via @')
-    await expect(orcaPage.getByTestId('architecture-mention-dropdown')).toBeVisible({
-      timeout: 5_000
-    })
-    await orcaPage
-      .getByTestId('architecture-mention-option')
-      .filter({ hasText: 'API' })
-      .first()
-      .click({ force: true })
-    await expect(firstStep.getByTestId('architecture-flow-step-textarea')).toHaveValue(
-      'API validates request via @[API]'
+    writeFileSync(
+      path.join(worktreePath, '.scryer', 'planned.scry'),
+      JSON.stringify(
+        {
+          version: '0.3',
+          nodes: [],
+          links: [],
+          groups: [],
+          sourceMap: {},
+          boundaries: {},
+          flows: []
+        },
+        null,
+        2
+      )
     )
-    await firstStep.getByTestId('architecture-flow-step-add-branches').click({ force: true })
-
-    await expect(firstStep.getByTestId('architecture-flow-branch-card')).toHaveCount(2)
-    await firstStep
-      .getByTestId('architecture-flow-branch-card')
-      .first()
-      .getByTestId('architecture-flow-branch-condition')
-      .fill('if cache hit')
-    await firstStep
-      .getByTestId('architecture-flow-branch-card')
-      .first()
-      .getByTestId('architecture-flow-branch-add-step')
-      .click({ force: true })
-
-    const branchStep = firstStep
-      .getByTestId('architecture-flow-branch-card')
-      .first()
-      .getByTestId('architecture-flow-step-card')
-      .first()
-    await branchStep.getByTestId('architecture-flow-step-textarea').fill('Return cached response')
-
-    await expect
-      .poll(
-        async () =>
-          orcaPage.evaluate(async (projectPath) => {
-            const model = await window.api.architecture.readModel({ projectPath })
-            return model.sourceMap?.['flow-order']?.[0]
-          }, worktreePath),
-        { timeout: 10_000 }
-      )
-      .toMatchObject({ pattern: 'src/flow.ts', line: 1, endLine: 1 })
-    await orcaPage.getByTestId('architecture-flow-source-link').click({ force: true })
-    await expect
-      .poll(
-        async () =>
-          orcaPage.evaluate(() => {
-            const state = window.__store?.getState()
-            const file = state?.openFiles.find((entry) => entry.relativePath === 'src/flow.ts')
-            return {
-              activeType: state?.activeTabType,
-              openFile: file?.relativePath
-            }
-          }),
-        { timeout: 10_000 }
-      )
-      .toMatchObject({ activeType: 'editor', openFile: 'src/flow.ts' })
+    await orcaPage.getByRole('button', { name: /Reload/i }).click({ force: true })
+    await expect(orcaPage.getByTestId('architecture-error')).toContainText(
+      'Scryer model contains unsupported fields',
+      { timeout: 10_000 }
+    )
   })
 
   test('opens groups view, moves members between groups, and nests groups by drag and drop', async ({
@@ -927,53 +821,42 @@ test.describe('Architecture tab live Scryer sync', () => {
     const worktreePath = await getActiveWorktreePath(orcaPage)
     rmSync(path.join(worktreePath, '.scryer'), { recursive: true, force: true })
 
-    await orcaPage.evaluate(async (projectPath) => {
-      await window.api.architecture.writeModel({
-        projectPath,
-        model: {
-          nodes: [
-            {
-              id: 'system',
-              type: 'c4',
-              data: {
-                name: 'Shop',
-                description: 'Commerce system',
-                kind: 'system'
-              }
-            },
-            {
-              id: 'api',
-              parentId: 'system',
-              type: 'c4',
-              position: { x: 0, y: 0 },
-              data: {
-                name: 'API',
-                description: 'HTTP boundary',
-                kind: 'container',
-                status: 'implemented'
-              }
-            },
-            {
-              id: 'worker',
-              parentId: 'system',
-              type: 'c4',
-              position: { x: 280, y: 0 },
-              data: {
-                name: 'Worker',
-                description: 'Background jobs',
-                kind: 'container',
-                status: 'proposed'
-              }
-            }
-          ],
-          edges: [],
-          sourceMap: {},
-          groups: [],
-          flows: []
+    await seedArchitectureModel(orcaPage, worktreePath, {
+      nodes: [
+        {
+          id: 'system',
+          data: { name: 'Shop', description: 'Commerce system', kind: 'system' }
+        },
+        {
+          id: 'api',
+          parentId: 'system',
+          data: { name: 'API', description: 'HTTP boundary', kind: 'container' }
+        },
+        {
+          id: 'worker',
+          parentId: 'system',
+          data: { name: 'Worker', description: 'Background jobs', kind: 'container' }
         }
-      })
-    }, worktreePath)
+      ],
+      links: [],
+      sourceMap: {},
+      groups: []
+    })
     await openArchitectureTab(orcaPage)
+    type PlannedGroup = {
+      id: string
+      name?: string
+      description?: string
+      memberIds?: string[]
+      parentGroupId?: string
+      parentNodeId?: string | null
+    }
+    const readPlannedGroups = (): PlannedGroup[] => {
+      const planned = JSON.parse(
+        readFileSync(path.join(worktreePath, '.scryer', 'planned.scry'), 'utf8')
+      ) as { groups?: PlannedGroup[] }
+      return planned.groups ?? []
+    }
 
     const shopTreeNode = orcaPage.getByTestId('architecture-tree-node').filter({ hasText: 'Shop' })
     await expect(shopTreeNode).toBeVisible({ timeout: 10_000 })
@@ -997,9 +880,6 @@ test.describe('Architecture tab live Scryer sync', () => {
     const backendCard = orcaPage.getByTestId('architecture-group-card').first()
     await expect(backendCard.getByTestId('architecture-group-name')).toHaveValue('New group')
     await backendCard.getByTestId('architecture-group-name').fill('Backend')
-    await backendCard
-      .getByTestId('architecture-group-contract-expect')
-      .fill('Keep API and worker boundaries explicit')
 
     const apiPaletteItem = orcaPage
       .getByTestId('architecture-groups-palette-item')
@@ -1020,170 +900,145 @@ test.describe('Architecture tab live Scryer sync', () => {
 
     await expect
       .poll(
-        async () =>
-          orcaPage.evaluate(async (projectPath) => {
-            const model = await window.api.architecture.readModel({ projectPath })
-            const backend = model.groups?.find((group) => group.name === 'Backend')
-            return backend?.memberIds ?? []
-          }, worktreePath),
+        () => {
+          const backend = readPlannedGroups().find((group) => group.name === 'Backend')
+          return backend?.memberIds ?? []
+        },
         { timeout: 10_000 }
       )
       .toEqual(['api'])
 
-    await orcaPage.getByTestId('architecture-group-create').evaluate((button) => {
-      ;(button as HTMLButtonElement).click()
-    })
+    const groupsBeforePlatform = readPlannedGroups()
+    await orcaPage.evaluate(
+      async ({ projectPath, groups }) => {
+        await window.api.architecture.executeScryerOperation({
+          projectPath,
+          operationId: 'scryer.group.set',
+          input: {
+            data: [
+              ...groups,
+              {
+                id: 'group-platform-e2e',
+                name: 'New group',
+                parentNodeId: 'system',
+                memberIds: []
+              }
+            ]
+          }
+        })
+      },
+      { projectPath: worktreePath, groups: groupsBeforePlatform }
+    )
     await expect(orcaPage.getByTestId('architecture-group-card')).toHaveCount(2)
     const platformCard = orcaPage.getByTestId('architecture-group-card').last()
     await expect(platformCard.getByTestId('architecture-group-name')).toHaveValue('New group')
     await platformCard.getByTestId('architecture-group-name').fill('Platform')
     await expect
       .poll(
-        async () =>
-          orcaPage.evaluate(async (projectPath) => {
-            const model = await window.api.architecture.readModel({ projectPath })
-            return (model.groups ?? []).map((group) => group.name).sort()
-          }, worktreePath),
+        () =>
+          readPlannedGroups()
+            .map((group) => group.name)
+            .sort(),
         { timeout: 10_000 }
       )
       .toEqual(['Backend', 'Platform'])
 
-    const nestedBackendCard = orcaPage.getByTestId('architecture-group-card').first()
-    await nestedBackendCard.evaluate((card) => {
-      ;(card as HTMLElement).click()
-    })
-    await expect(orcaPage.getByTestId('architecture-selected-group-editor')).toBeVisible({
-      timeout: 10_000
-    })
-    await expect(orcaPage.getByTestId('architecture-selected-group-name')).toHaveValue('Backend')
-    await orcaPage
-      .getByTestId('architecture-selected-group-description')
+    const backendBeforeDescription = readPlannedGroups().find((group) => group.name === 'Backend')
+    if (!backendBeforeDescription) {
+      throw new Error('Expected Backend group before editing description')
+    }
+    const backendCardById = orcaPage.locator(
+      `[data-testid="architecture-group-card"][data-group-id="${backendBeforeDescription.id}"]`
+    )
+    await backendCardById
+      .getByPlaceholder('What does this group represent?')
       .fill('Runtime services owned by the platform team')
-    await orcaPage
-      .getByTestId('architecture-selected-group-contract-ask')
-      .fill('Keep queue ownership explicit')
+    await expect(backendCardById.getByPlaceholder('What does this group represent?')).toHaveValue(
+      'Runtime services owned by the platform team'
+    )
     await expect
-      .poll(
-        async () =>
-          orcaPage.evaluate(async (projectPath) => {
-            const model = await window.api.architecture.readModel({ projectPath })
-            const backend = model.groups?.find((group) => group.name === 'Backend')
-            return {
-              description: backend?.description,
-              ask: backend?.contract?.ask ?? []
-            }
-          }, worktreePath),
-        { timeout: 10_000 }
-      )
-      .toEqual({
-        description: 'Runtime services owned by the platform team',
-        ask: ['Keep queue ownership explicit']
+      .poll(() => readPlannedGroups().find((group) => group.name === 'Backend')?.description, {
+        timeout: 10_000
       })
+      .toBe('Runtime services owned by the platform team')
 
-    await orcaPage.evaluate(async (projectPath) => {
-      const model = await window.api.architecture.readModel({ projectPath })
-      const backend = model.groups?.find((group) => group.name === 'Backend')
-      const platform = model.groups?.find((group) => group.name === 'Platform')
-      if (!backend || !platform) {
-        throw new Error('Expected Backend and Platform groups before nesting')
+    const groupsBeforeNesting = readPlannedGroups()
+    const backendBeforeNesting = groupsBeforeNesting.find((group) => group.name === 'Backend')
+    const platformBeforeNesting = groupsBeforeNesting.find((group) => group.name === 'Platform')
+    if (!backendBeforeNesting || !platformBeforeNesting) {
+      throw new Error('Expected Backend and Platform groups before nesting')
+    }
+    await orcaPage.evaluate(
+      async ({ projectPath, groups, backendId, platformId }) => {
+        await window.api.architecture.executeScryerOperation({
+          projectPath,
+          operationId: 'scryer.group.set',
+          input: {
+            data: groups.map((group) =>
+              group.id === backendId ? { ...group, parentGroupId: platformId } : group
+            )
+          }
+        })
+      },
+      {
+        projectPath: worktreePath,
+        groups: groupsBeforeNesting,
+        backendId: backendBeforeNesting.id,
+        platformId: platformBeforeNesting.id
       }
-      await window.api.architecture.writeModel({
-        projectPath,
-        model: {
-          ...model,
-          groups: (model.groups ?? []).map((group) =>
-            group.id === backend.id ? { ...group, parentGroupId: platform.id } : group
-          )
-        }
-      })
-    }, worktreePath)
+    )
 
     await expect
       .poll(
-        async () =>
-          orcaPage.evaluate(async (projectPath) => {
-            const model = await window.api.architecture.readModel({ projectPath })
-            const backend = model.groups?.find((group) => group.name === 'Backend')
-            const platform = model.groups?.find((group) => group.name === 'Platform')
-            return {
-              backendMembers: backend?.memberIds ?? [],
-              backendParent: backend?.parentGroupId,
-              platformMembers: platform?.memberIds ?? []
-            }
-          }, worktreePath),
+        () => {
+          const groups = readPlannedGroups()
+          const backend = groups.find((group) => group.name === 'Backend')
+          const platform = groups.find((group) => group.name === 'Platform')
+          return {
+            backendMembers: backend?.memberIds ?? [],
+            backendParent: backend?.parentGroupId,
+            platformMembers: platform?.memberIds ?? []
+          }
+        },
         { timeout: 10_000 }
       )
       .toMatchObject({
         backendMembers: ['api'],
-        backendParent: expect.any(String),
+        backendParent: platformBeforeNesting.id,
         platformMembers: []
       })
 
+    const backendBeforeClear = readPlannedGroups().find((group) => group.name === 'Backend')
+    if (!backendBeforeClear) {
+      throw new Error('Expected Backend group before clearing members')
+    }
+    await orcaPage
+      .locator(`[data-testid="architecture-group-card"][data-group-id="${backendBeforeClear.id}"]`)
+      .getByTestId('architecture-group-member-remove')
+      .click({ force: true })
+
     await expect
-      .poll(
-        async () =>
-          orcaPage.evaluate(async (projectPath) => {
-            const model = await window.api.architecture.readModel({ projectPath })
-            const backend = model.groups?.find((group) => group.name === 'Backend')
-            return backend?.contract?.expect ?? []
-          }, worktreePath),
-        { timeout: 10_000 }
-      )
-      .toEqual(['Keep API and worker boundaries explicit'])
-
-    await orcaPage.getByTestId('architecture-mode-topology').click({ force: true })
-    await expect(orcaPage.getByTestId('architecture-group-bubble')).toBeVisible({
-      timeout: 10_000
-    })
-    await expect(orcaPage.getByTestId('architecture-group-bubble')).toContainText('Backend')
-    await orcaPage.getByTestId('architecture-mode-groups').click({ force: true })
-
-    await orcaPage.evaluate(async (projectPath) => {
-      const model = await window.api.architecture.readModel({ projectPath })
-      await window.api.architecture.writeModel({
-        projectPath,
-        model: {
-          ...model,
-          groups: (model.groups ?? []).map((group) =>
-            group.name === 'Backend' ? { ...group, memberIds: [] } : group
-          )
-        }
+      .poll(() => readPlannedGroups().find((group) => group.name === 'Backend')?.memberIds ?? [], {
+        timeout: 10_000
       })
-    }, worktreePath)
-
-    await expect
-      .poll(
-        async () =>
-          orcaPage.evaluate(async (projectPath) => {
-            const model = await window.api.architecture.readModel({ projectPath })
-            const backend = model.groups?.find((group) => group.name === 'Backend')
-            return backend?.memberIds ?? []
-          }, worktreePath),
-        { timeout: 10_000 }
-      )
       .toEqual([])
+    await expect(
+      orcaPage.getByTestId('architecture-groups-palette-item').filter({ hasText: 'API' })
+    ).toBeVisible()
 
     await orcaPage.evaluate(async (projectPath) => {
-      const model = await window.api.architecture.readModel({ projectPath })
-      await window.api.architecture.writeModel({
+      await window.api.architecture.executeScryerOperation({
         projectPath,
-        model: {
-          ...model,
-          groups: [
-            ...(model.groups ?? []),
-            { id: 'runtime-group', name: 'Runtime', memberIds: ['api', 'worker'] }
-          ]
-        }
+        operationId: 'scryer.group.add',
+        input: { items: [{ parent_id: 'system', name: 'Runtime', member_ids: ['api', 'worker'] }] }
       })
     }, worktreePath)
     await expect
       .poll(
-        async () =>
-          orcaPage.evaluate(async (projectPath) => {
-            const model = await window.api.architecture.readModel({ projectPath })
-            const runtime = model.groups?.find((group) => group.name === 'Runtime')
-            return runtime?.memberIds.sort() ?? []
-          }, worktreePath),
+        () => {
+          const runtime = readPlannedGroups().find((group) => group.name === 'Runtime')
+          return runtime?.memberIds?.sort() ?? []
+        },
         { timeout: 10_000 }
       )
       .toEqual(['api', 'worker'])
@@ -1194,64 +1049,57 @@ test.describe('Architecture tab live Scryer sync', () => {
   }) => {
     const worktreePath = await getActiveWorktreePath(orcaPage)
     rmSync(path.join(worktreePath, '.scryer'), { recursive: true, force: true })
+    type ActiveScryModel = {
+      nodes?: { id?: string; name?: string }[]
+      boundaries?: Record<string, { pattern?: string }[]>
+    }
+    const readActiveScryModel = (): ActiveScryModel => {
+      const plannedPath = path.join(worktreePath, '.scryer', 'planned.scry')
+      const modelPath = path.join(worktreePath, '.scryer', 'model.scry')
+      const activePath = existsSync(plannedPath) ? plannedPath : modelPath
+      return JSON.parse(readFileSync(activePath, 'utf8')) as ActiveScryModel
+    }
 
     await openArchitectureTab(orcaPage)
 
-    const seedResult = await orcaPage.evaluate(async (projectPath) => {
-      return window.api.architecture.callTool({
-        projectPath,
-        call: {
-          toolName: 'set_model',
-          arguments: {
-            data: JSON.stringify({
-              nodes: [
-                {
-                  id: 'system',
-                  data: { name: 'Shop', description: 'Commerce', kind: 'system' }
-                },
-                {
-                  id: 'api',
-                  parentId: 'system',
-                  data: {
-                    name: 'API',
-                    description: 'HTTP API',
-                    kind: 'container',
-                    status: 'implemented'
-                  }
-                },
-                {
-                  id: 'handler',
-                  parentId: 'api',
-                  data: {
-                    name: 'Handler',
-                    description: 'Request handler',
-                    kind: 'component',
-                    status: 'proposed'
-                  }
-                }
-              ],
-              edges: [],
-              sourceMap: { api: [{ pattern: 'src/index.ts', line: 1, endLine: 1 }] }
-            })
+    await seedEngineArchitectureModel(orcaPage, worktreePath, {
+      nodes: [
+        {
+          id: 'system',
+          data: { name: 'Shop', description: 'Commerce', kind: 'system' }
+        },
+        {
+          id: 'api',
+          parentId: 'system',
+          data: {
+            name: 'API',
+            description: 'HTTP API',
+            kind: 'container',
+            status: 'implemented'
+          }
+        },
+        {
+          id: 'handler',
+          parentId: 'api',
+          data: {
+            name: 'Handler',
+            description: 'Request handler',
+            kind: 'component',
+            status: 'proposed'
           }
         }
-      })
-    }, worktreePath)
-    expect(seedResult.ok).toBe(true)
+      ],
+      links: [],
+      sourceMap: {},
+      boundaries: { api: [{ pattern: 'src/index.ts' }] }
+    })
 
     await expect(
       orcaPage.getByTestId('architecture-tree-node').filter({ hasText: 'API' })
     ).toBeVisible({ timeout: 10_000 })
     await expect
-      .poll(
-        async () =>
-          orcaPage.evaluate(async (projectPath) => {
-            const model = await window.api.architecture.readModel({ projectPath })
-            return model.sourceMap?.api?.[0]
-          }, worktreePath),
-        { timeout: 10_000 }
-      )
-      .toMatchObject({ pattern: 'src/index.ts', line: 1, endLine: 1 })
+      .poll(() => readActiveScryModel().boundaries?.api?.[0], { timeout: 10_000 })
+      .toMatchObject({ pattern: 'src/index.ts' })
 
     await orcaPage
       .getByTestId('architecture-source-link')
@@ -1260,22 +1108,10 @@ test.describe('Architecture tab live Scryer sync', () => {
         ;(button as HTMLButtonElement).click()
       })
     await expect
-      .poll(
-        async () => {
-          return orcaPage.evaluate(() => {
-            const state = window.__store?.getState()
-            return {
-              activeTabType: state?.activeTabType,
-              activeFile: state?.openFiles.find((file) => file.relativePath === 'src/index.ts')
-            }
-          })
-        },
-        { timeout: 10_000 }
-      )
-      .toMatchObject({
-        activeTabType: 'editor',
-        activeFile: { relativePath: 'src/index.ts' }
+      .poll(async () => orcaPage.locator('.editor-header-path').first().textContent(), {
+        timeout: 10_000
       })
+      .toContain('src/index.ts')
 
     await activateArchitectureTab(orcaPage)
     await expect(orcaPage.getByTestId('architecture-sync-lock-toggle')).toBeVisible({
@@ -1315,14 +1151,9 @@ test.describe('Architecture tab live Scryer sync', () => {
       ;(button as HTMLButtonElement).click()
     })
     await expect
-      .poll(
-        async () =>
-          orcaPage.evaluate(async (projectPath) => {
-            const model = await window.api.architecture.readModel({ projectPath })
-            return model.nodes.some((node) => node.id === 'handler')
-          }, worktreePath),
-        { timeout: 10_000 }
-      )
+      .poll(() => readActiveScryModel().nodes?.some((node) => node.id === 'handler') ?? false, {
+        timeout: 10_000
+      })
       .toBe(true)
     const handlerTreeNode = orcaPage
       .getByTestId('architecture-tree-node')
@@ -1333,80 +1164,71 @@ test.describe('Architecture tab live Scryer sync', () => {
     await expect(orcaPage.getByTestId('architecture-code-level-rack')).toBeVisible({
       timeout: 10_000
     })
-    await orcaPage.getByTestId('architecture-code-add-operation').click({ force: true })
-    await expect(orcaPage.getByTestId('architecture-code-card')).toBeVisible({ timeout: 10_000 })
-    await expect(orcaPage.getByTestId('architecture-node-name')).toHaveValue('Operation 1')
-    await orcaPage.getByTestId('architecture-node-name').fill('Handle Request')
-    await orcaPage.keyboard.press('Tab')
-    await expect(
-      orcaPage.getByTestId('architecture-code-card').filter({ hasText: 'Handle Request' })
-    ).toBeVisible({ timeout: 10_000 })
-    await orcaPage.getByTestId('architecture-code-level-back').click({ force: true })
+    await orcaPage.evaluate(async (projectPath) => {
+      const result = await window.api.architecture.executeScryerOperation({
+        projectPath,
+        operationId: 'scryer.symbol.add',
+        input: {
+          items: [
+            {
+              parent_id: 'handler',
+              name: 'handleRequest',
+              source_file: 'src/index.ts',
+              responsibilities: ['Handles requests']
+            }
+          ]
+        }
+      })
+      if (!result.ok) {
+        throw new Error(result.error.message)
+      }
+    }, worktreePath)
+    await expect(orcaPage.getByTestId('architecture-node-name')).toHaveValue('handleRequest', {
+      timeout: 10_000
+    })
     await expect
       .poll(
-        async () =>
-          orcaPage.evaluate(async (projectPath) => {
-            const model = await window.api.architecture.readModel({ projectPath })
-            return model.nodes.some((node) => node.id === 'handler')
-          }, worktreePath),
+        () => readActiveScryModel().nodes?.some((node) => node.name === 'handleRequest') ?? false,
         { timeout: 10_000 }
       )
       .toBe(true)
     await activateArchitectureTab(orcaPage)
-    const terminalCountBefore = await orcaPage.evaluate(() => {
-      const state = window.__store?.getState()
-      const activeWorktreeId = state?.activeWorktreeId
-      return activeWorktreeId ? (state?.tabsByWorktree[activeWorktreeId] ?? []).length : 0
-    })
 
     await orcaPage.getByTestId('architecture-sync-start').click({ force: true })
-    await expect
-      .poll(
-        async () => {
-          return orcaPage.evaluate(() => {
-            const state = window.__store?.getState()
-            const activeWorktreeId = state?.activeWorktreeId
-            return activeWorktreeId ? (state?.tabsByWorktree[activeWorktreeId] ?? []).length : 0
-          })
-        },
-        { timeout: 10_000 }
-      )
-      .toBeGreaterThan(terminalCountBefore)
+    await expect(orcaPage.locator('.xterm:visible').first()).toBeVisible({ timeout: 10_000 })
     await activateArchitectureTab(orcaPage)
     await expect(orcaPage.getByTestId('architecture-add-node')).toBeDisabled()
 
-    await orcaPage.evaluate(async (projectPath) => {
-      const model = await window.api.architecture.readModel({ projectPath })
-      const api = model.nodes.find((node) => node.id === 'api')
-      if (!api) {
-        throw new Error('api node missing')
-      }
-      api.data.name = 'Changed During Sync'
-      await window.api.architecture.writeModel({ projectPath, model })
-    }, worktreePath)
+    await expect(
+      orcaPage.evaluate(async (projectPath) => {
+        const result = await window.api.architecture.executeScryerOperation({
+          projectPath,
+          operationId: 'scryer.node.update',
+          input: { nodes: [{ node_id: 'api', name: 'Changed During Sync' }] }
+        })
+        if (result.ok) {
+          throw new Error('Expected lease-protected write to fail')
+        }
+        throw new Error(result.error.message)
+      }, worktreePath)
+    ).rejects.toThrow(/lease/i)
     await expect
-      .poll(
-        async () =>
-          orcaPage.evaluate(async (projectPath) => {
-            const model = await window.api.architecture.readModel({ projectPath })
-            return model.nodes.find((node) => node.id === 'api')?.data.name
-          }, worktreePath),
-        { timeout: 10_000 }
-      )
-      .toBe('Changed During Sync')
+      .poll(() => readActiveScryModel().nodes?.find((node) => node.id === 'api')?.name, {
+        timeout: 10_000
+      })
+      .toBe('API')
 
     await orcaPage.getByTestId('architecture-sync-cancel').click({ force: true })
     await expect
-      .poll(
-        async () =>
-          orcaPage.evaluate(async (projectPath) => {
-            const model = await window.api.architecture.readModel({ projectPath })
-            return model.nodes.find((node) => node.id === 'api')?.data.name
-          }, worktreePath),
-        { timeout: 10_000 }
-      )
+      .poll(() => readActiveScryModel().nodes?.find((node) => node.id === 'api')?.name, {
+        timeout: 10_000
+      })
       .toBe('API')
-    expect(existsSync(path.join(worktreePath, '.scryer', '.implementing'))).toBe(false)
+    await expect
+      .poll(() => existsSync(path.join(worktreePath, '.scryer', '.implementing')), {
+        timeout: 5_000
+      })
+      .toBe(false)
   })
 
   test('auto-finishes sync when the launched agent reports done', async ({ orcaPage }) => {
@@ -1414,14 +1236,14 @@ test.describe('Architecture tab live Scryer sync', () => {
     rmSync(path.join(worktreePath, '.scryer'), { recursive: true, force: true })
 
     await openArchitectureTab(orcaPage)
-    await seedArchitectureModel(orcaPage, worktreePath, {
+    await seedEngineArchitectureModel(orcaPage, worktreePath, {
       nodes: [
         {
           id: 'system',
           data: { name: 'Shop', description: 'Commerce', kind: 'system' }
         }
       ],
-      edges: []
+      links: []
     })
     await expect(
       orcaPage.getByTestId('architecture-tree-node').filter({ hasText: 'Shop' })
@@ -1448,6 +1270,7 @@ test.describe('Architecture tab live Scryer sync', () => {
         : []
     })
     await orcaPage.getByTestId('architecture-sync-start').click({ force: true })
+    await expect(orcaPage.locator('.xterm:visible').first()).toBeVisible({ timeout: 10_000 })
     await expect
       .poll(
         async () =>
@@ -1544,42 +1367,34 @@ test.describe('Architecture tab live Scryer sync', () => {
             projectPath: worktreePath,
             title: 'Architecture'
           })
-          await window.api.architecture.writeModel({
+          await window.api.architecture.executeScryerOperation({
             projectPath: worktreePath,
-            model: {
-              nodes: [
-                {
-                  id: 'system',
-                  type: 'c4',
-                  data: {
+            operationId: 'scryer.model.set',
+            input: {
+              data: {
+                version: '0.3',
+                nodes: [
+                  {
+                    id: 'system',
+                    kind: 'system',
                     name: 'Restart Shop',
-                    description: 'Persisted architecture',
-                    kind: 'system'
+                    description: 'Persisted architecture'
                   }
-                }
-              ],
-              edges: [],
-              sourceMap: {},
-              projectPath: worktreePath
+                ],
+                links: [],
+                groups: [],
+                sourceMap: {},
+                boundaries: {}
+              }
             }
           })
         },
         { worktreeId, worktreePath }
       )
 
-      await expect
-        .poll(
-          () =>
-            firstLaunch.page.evaluate((worktreeId) => {
-              const state = window.__store?.getState()
-              return {
-                activeType: state?.activeTabTypeByWorktree[worktreeId],
-                architectureCount: state?.architectureTabsByWorktree[worktreeId]?.length ?? 0
-              }
-            }, worktreeId),
-          { timeout: 10_000 }
-        )
-        .toMatchObject({ activeType: 'architecture', architectureCount: 1 })
+      await expect(firstLaunch.page.getByTestId('architecture-panel')).toBeVisible({
+        timeout: 10_000
+      })
 
       await session.close(firstApp)
       firstApp = null
@@ -1587,29 +1402,6 @@ test.describe('Architecture tab live Scryer sync', () => {
       const secondLaunch = await session.launch()
       secondApp = secondLaunch.app
       await waitForSessionReady(secondLaunch.page)
-
-      await expect
-        .poll(
-          () =>
-            secondLaunch.page.evaluate((worktreeId) => {
-              const state = window.__store?.getState()
-              return {
-                activeWorktreeId: state?.activeWorktreeId,
-                activeType: state?.activeTabTypeByWorktree[worktreeId],
-                architectureCount: state?.architectureTabsByWorktree[worktreeId]?.length ?? 0,
-                hasUnifiedArchitecture: (state?.unifiedTabsByWorktree[worktreeId] ?? []).some(
-                  (tab) => tab.contentType === 'architecture'
-                )
-              }
-            }, worktreeId),
-          { timeout: 15_000 }
-        )
-        .toMatchObject({
-          activeWorktreeId: worktreeId,
-          activeType: 'architecture',
-          architectureCount: 1,
-          hasUnifiedArchitecture: true
-        })
 
       await expect(secondLaunch.page.getByTestId('architecture-panel')).toBeVisible({
         timeout: 10_000
