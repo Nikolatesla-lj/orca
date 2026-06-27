@@ -42,7 +42,6 @@ import {
   createScryerMutableAgentRunRuntime,
   type ScryerMutableAgentRunRuntime
 } from '../scryer/edit-session-runtime'
-import { legacyC4ToScryModel } from '../scryer/engine/adapters/legacy-c4'
 import {
   advisorPrompt,
   initialModelPrompt,
@@ -292,14 +291,14 @@ async function ensureNoActiveEditSession(
   }
 }
 
-async function writeDefaultModelThroughEngine(
+async function writeDefaultScryModelThroughEngine(
   projectPath: string,
-  model: C4ModelData,
+  model: unknown,
   deps: ArchitectureHandlerDeps
-): Promise<{ model: C4ModelData; revision: string }> {
+): Promise<{ model: unknown; revision: string }> {
   const result = await deps.scryerEngine.executeOperation(
     'scryer.model.set',
-    { data: legacyC4ToScryModel(model) },
+    { data: model },
     contextForEngine(projectPath, 'ipc-model-set')
   )
   if (!result.ok) {
@@ -535,14 +534,14 @@ export function registerArchitectureHandlers(
 
   registrar.handle(
     'architecture:writeModel',
-    async (event, args: { projectPath: string; model: C4ModelData; modelName?: string | null }) => {
+    async (event, args: { projectPath: string; model: unknown; modelName?: string | null }) => {
       if (isDefaultModelName(args.modelName, deps)) {
         await ensureNoActiveEditSession(args.projectPath, deps)
-        await writeDefaultModelThroughEngine(args.projectPath, args.model, deps)
+        await writeDefaultScryModelThroughEngine(args.projectPath, args.model, deps)
         notifyModelChanged(event, args.projectPath, args.modelName, deps)
         return
       }
-      await deps.writeModel(args.projectPath, args.model, args.modelName)
+      await deps.writeModel(args.projectPath, args.model as C4ModelData, args.modelName)
       notifyModelChanged(event, args.projectPath, args.modelName, deps)
     }
   )
@@ -553,20 +552,25 @@ export function registerArchitectureHandlers(
       event,
       args: {
         projectPath: string
-        model: C4ModelData
+        model: unknown
         modelName?: string | null
         baseRevision?: string | null
       }
     ) => {
       if (isDefaultModelName(args.modelName, deps)) {
         await ensureNoActiveEditSession(args.projectPath, deps)
-        const result = await writeDefaultModelThroughEngine(args.projectPath, args.model, deps)
+        const result = await writeDefaultScryModelThroughEngine(args.projectPath, args.model, deps)
         notifyModelChanged(event, args.projectPath, args.modelName, deps)
         return result
       }
-      const result = await deps.writeModelDocument(args.projectPath, args.model, args.modelName, {
-        baseRevision: args.baseRevision
-      })
+      const result = await deps.writeModelDocument(
+        args.projectPath,
+        args.model as C4ModelData,
+        args.modelName,
+        {
+          baseRevision: args.baseRevision
+        }
+      )
       notifyModelChanged(event, args.projectPath, args.modelName, deps)
       return result
     }

@@ -281,32 +281,26 @@ describe('registerArchitectureHandlers', () => {
     await expect(readFile(join(projectPath, '.scryer', 'model.scry'), 'utf8')).rejects.toThrow()
   })
 
-  it('writes default architecture models through the Native Scryer Engine', async () => {
+  it('rejects legacy C4-shaped default raw writes instead of converting them', async () => {
     const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-write-engine-'))
 
-    await handlers.get('architecture:writeModel')!(null, {
-      projectPath,
-      model: {
+    await expect(
+      handlers.get('architecture:writeModel')!(null, {
         projectPath,
-        nodes: [
-          {
-            id: 'system',
-            type: 'c4',
-            data: { name: 'Shop', description: 'Commerce', kind: 'system' }
-          }
-        ],
-        edges: [],
-        sourceMap: {}
-      }
-    })
-
-    const stored = JSON.parse(await readFile(join(projectPath, '.scryer', 'model.scry'), 'utf8'))
-    expect(stored).toMatchObject({
-      version: '0.3',
-      nodes: [{ id: 'system', kind: 'system', name: 'Shop' }],
-      links: [],
-      sourceMap: {}
-    })
+        model: {
+          nodes: [
+            {
+              id: 'system',
+              type: 'c4',
+              data: { name: 'Shop', description: 'Commerce', kind: 'system' }
+            }
+          ],
+          edges: [],
+          sourceMap: {}
+        }
+      })
+    ).rejects.toThrow()
+    await expect(readFile(join(projectPath, '.scryer', 'model.scry'), 'utf8')).rejects.toThrow()
   })
 
   it('routes drift and reconcile IPC channels through Native Scryer Engine envelopes', async () => {
@@ -359,14 +353,17 @@ describe('registerArchitectureHandlers', () => {
       {
         projectPath,
         model: {
+          version: '0.3',
           nodes: [
             {
               id: 'system',
-              type: 'c4',
-              data: { name: 'System', description: 'Root system', kind: 'system' }
+              kind: 'system',
+              name: 'System',
+              description: 'Root system'
             }
           ],
-          edges: [],
+          links: [],
+          boundaries: {},
           sourceMap: {},
           groups: []
         }
