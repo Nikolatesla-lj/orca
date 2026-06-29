@@ -33,18 +33,24 @@ AI provider 边界已经明确：不迁移 Scryer 的 `scryer-suggest` provider 
 
 - `docs/orca-scryer-uml-gap-analysis.md`
 
-## 当前状态（#29 后）
+## 当前状态（#36 release gate 后）
 
-Scryer operation migration work set 已完成实现和 focused verification。这里的
-“完成”指 operation 语义已经进入 Orca-native Native Scryer Engine、CLI/IPC
-适配器和测试闭环；不表示整个 Scryer 产品迁移已经结束。
+当前完成的是稳定 Architecture product slice，而不是 full Scryer
+operation parity。Native Scryer Engine 已有 33 个 operation id 的 catalog
+contract、schema、policy 和 upstream anchor；其中 Architecture 产品主路径需要的
+operation 已有 executor 并经过 focused verification。#30 审计确认默认模型
+产品主链路真实打通；#36 已把零 partial release gate 的当前 slice 缺口补齐，详见
+`docs/orca-scryer-architecture-slice-audit.md`。其余 11 个 operation 目前仍是
+catalog-only/stub，会落到 `unimplemented(...)`，不能被文档称为已迁移完成。
 
 | 范围 | 状态 | 说明 |
 | --- | --- | --- |
-| #41-#49 operation migration | 完成 | read/query、structural、source/group、intent、drift/health、container generation、adapter readiness、parity fixtures、ownership checks 已落到 Native Scryer Engine。 |
-| 验证基线 | 完成 | engine、model-store/MCP/IPC、CLI、node/cli/web typecheck、Architecture Electron e2e、`git diff --check` 已通过。 |
-| #26-#29 product integration | 完成 | legacy semantic owners、`ScryerEditSessionController` + Completion Gate、Architecture View Adapter hard cutover、live UI coverage 已完成并测试。 |
-| 剩余工作 | PR 稳定化 | 剩余不是新一轮 operation migration，也不是新的 Architecture 功能；下一步是分拣 dirty worktree、final review、提交拆分和人工验收。 |
+| Operation catalog contract | 完成 | 33 个 operation id 已有 catalog row、policy、schema 和 upstream anchor。 |
+| Architecture executable slice | 已实现，release gate 通过 | `model.read/set/validate`、`plan.pending/fold`、node/link/group/source/intent add、`drift.get/reconcile` 等产品主路径 operation 已有 executor；#36 已补当前 release-critical 覆盖缺口。 |
+| #26-#29 product integration | 完成 | legacy semantic owners、`ScryerEditSessionController` + Completion Gate、Architecture View Adapter hard cutover、live UI coverage 已覆盖默认模型主路径。 |
+| Full operation parity | 未完成 | `model.search/query`、`rules.read`、`codebase.read`、`model.health`、`node.set-subtree/move/descope`、`responsibility.move`、`drift.flag`、`container.fill` 仍需 #31-#35 落实。 |
+| 验证基线 | 当前 release gate 通过 | `corepack pnpm run tc` 通过；engine/IPC/renderer focused tests 通过；Architecture Electron e2e 三件套 22/22 通过，覆盖 active model reload、view-only no-write fingerprint、MCP alias matrix、visible `group.delete` 和 focused `person.add` API wiring。 |
+| 剩余工作 | #31-#35 | 当前 Architecture slice 已闭环；接下来按 read、structural、health/drift、container generation 和 adapter coverage 补 full operation parity。 |
 | 明确不迁移 | 保持边界 | Scryer MCP server 产品路径、Tauri shell、独立 provider/settings UI、docs/templates marketplace、Rust sidecar runtime、正常 runtime 隐式 pre-0.3 自动迁移。 |
 
 ## Scryer 功能链
@@ -365,57 +371,62 @@ Orca/Scryer 数据，应另做显式 import 命令。
 
 ### 6. 迁移 Scryer operation 语义到 Orca CLI / Native TS engine
 
-当前状态：#41-#49 已把 broad operation migration 从设计清单推进到
-Orca-native Native Scryer Engine 实现和 focused verification。产品调用 seam
-保持为 `executeOperation(...)` 与 `readView(...)`；catalog、pipeline、
-state-store、schemas、validators、source-router、id-minter、diff/fold 和各
-planner 承载 Scryer 语义，transport adapter 只做输入归一化和结果渲染。
+当前状态：operation catalog foundation 已落地，Architecture 产品主路径已经经
+`executeOperation(...)` 与 `readView(...)` 跨过 Native Scryer Engine seam。
+但 full 33-operation parity 尚未完成：catalog 里仍有 11 个 operation 没有
+executor。transport adapter 只能对已 executable 的 operation 宣称已迁移。
 
-| Issue | 状态 | 已固化的能力 |
+| 能力族 | 当前 executable | 仍需落实 |
 | --- | --- | --- |
-| #41 | 完成 | Read Surface：`model.read`、`model.search`、`model.query`、`rules.read`、`codebase.read` 经 Read Selector 返回结构化 payload。 |
-| #42 | 完成 | Structural planner：`model.set`、`node.set-subtree`、`node.delete`、`node.move`、`node.descope`、`responsibility.move`、`link.update`。 |
-| #43 | 完成 | Source/group ownership：`source.update`、`group.set`、`group.update`、`group.delete`，并保持 source/boundary single-home 规则。 |
-| #44 | 完成 | Intent writers：person/system/container/component/group/symbol add 路径经共享 id minting、parent validation 和 source/boundary side effects。 |
-| #45 | 完成 | Drift/health：`drift.get`、`drift.flag`、`drift.reconcile`、`model.health` 经 engine modules 输出结构化结果。 |
-| #46 | 完成 | Atomic container generation：`container.fill` 使用 generation planner、build-edge evidence、id/source routing 和 atomic writes。 |
-| #47 | 完成 | Adapter readiness：CLI/IPC/MCP compatibility paths 通过 catalog operation 或 read seam，ownership tests 防止 legacy fallback。 |
-| #48 | 完成 | Architecture live behavior：focused Electron Playwright 覆盖真实 UI 控件、外部写入刷新、diff/follow、sync/cancel/finish。 |
-| #49 | 完成 | Completion coverage gate：engine/adapter/CLI/UI 相关 focused tests、typecheck 和 diff check 形成当前验证基线。 |
+| Read/query | `scryer.model.read`、`scryer.model.validate` | `scryer.model.search`、`scryer.model.query`、`scryer.rules.read`、`scryer.codebase.read`：#31 |
+| Plan/model write | `scryer.plan.pending`、`scryer.plan.fold`、`scryer.model.set` | 无单独剩余；继续由 #30 audit 证明链路 |
+| Structural writes | `scryer.node.update`、`scryer.node.delete`、`scryer.link.add/update/delete` | `scryer.node.set-subtree`、`scryer.node.move`、`scryer.responsibility.move`、`scryer.node.descope`：#32 |
+| Source/group | `scryer.source.update`、`scryer.group.add/set/update/delete` | full parity coverage gate：#35 |
+| Intent writers | `scryer.person.add`、`scryer.system.add`、`scryer.container.add`、`scryer.component.add`、`scryer.symbol.add` | full parity coverage gate：#35 |
+| Drift/health | `scryer.drift.get`、`scryer.drift.reconcile` | `scryer.model.health`、`scryer.drift.flag`：#33 |
+| Generation | 无 executable `container.fill` | `scryer.container.fill`：#34 |
+| Adapters/live coverage | Architecture stable product path covered by #28/#29 | Remaining operation adapter and e2e/command gates：#35 |
 
 已完成的 Native Engine 深模块和测试面：
 
 - `src/main/scryer/engine/catalog.ts` 注册 broad operation catalog 和 contract policy。
 - `src/main/scryer/engine/pipeline.ts` 统一 context、schema、lock/lease、declared reads/writes、result/error envelope。
 - `src/main/scryer/engine/state-store.ts` 统一 `.scryer/*` durable IO、0.3 parse、planned fallback、atomic write 和 sidecar 维护。
-- `src/main/scryer/engine/read-selector*.ts`、`structural-planner*.ts`、`source-router.ts`、`group-planner*.ts`、`intent-planner*.ts`、`drift-planner.ts`、`health-reporter.ts`、`container-generation-planner*.ts` 承载 operation-family 语义。
-- `src/main/scryer/engine/operations/*` 保持 thin executor 角色，不拥有 transport formatting 或私有文件 IO。
-- CLI、IPC、legacy compatibility shim 和 Architecture e2e 已有 focused tests 证明已迁移路径跨 engine seam。
+- `src/main/scryer/engine/source-router.ts`、`id-minter.ts`、`diff.ts`、`fold.ts`、`validators.ts` 和 `operations/*` 承载当前 executable slice 的共享语义。
+- `src/main/scryer/engine/operations/*` 应保持 thin executor 角色，不拥有 transport formatting 或私有文件 IO。
+- IPC、legacy compatibility shim 和 Architecture e2e 已有 focused tests 证明稳定产品路径跨 engine seam。
 
 当前验证基线：
 
 - `corepack pnpm exec vitest run --config config/vitest.config.ts src/main/scryer/engine/*.test.ts src/main/scryer/engine/**/*.test.ts`
 - `corepack pnpm exec vitest run --config config/vitest.config.ts src/main/scryer/model-store.test.ts src/main/scryer/mcp-tools.test.ts src/main/ipc/architecture.test.ts`
-- `corepack pnpm exec vitest run --config config/vitest.config.ts src/cli/**/*.test.ts`
 - `corepack pnpm run tc:node`
 - `corepack pnpm run tc:cli`
 - `corepack pnpm run tc:web`
 - `SKIP_BUILD=1 corepack pnpm exec playwright test tests/e2e/architecture-tab.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1`
 - `git diff --check`
 
-产品集成固化已完成到 #29，当前剩余是 PR 稳定化：
+产品集成固化已完成到 #29；#30 已完成 catalog reality 审计；#36 已关闭当前
+Architecture slice strict release gate。下一轮 decision frontier 是 #31-#35：
 
 - #26：主进程默认模型 read/patch/drift/reconcile 和 `mcp-tools.ts` Scryer 0.3 compatibility shim 已清除 cataloged-operation legacy fallback；renderer 的旧 `C4ModelData` 文档保存主路径已在 #28 hard cutover 中移除，而不是继续作为兼容层收敛。
 - #27：已固化 `ScryerEditSessionController` + Completion Gate。agent `done` 之后会检查 planned pending foldability 和 validation，再决定是否允许 fold；lease token 只属于 main-process/controller/engine trusted context，renderer/preload DTO、DOM/log/prompt 和 renderer `executeScryerOperation(...)` 输入不暴露也不接收 `leaseToken`。
 - #28：已固化 renderer-facing Architecture View Adapter，采用 hard cutover：React 只消费 `ArchitectureViewDto`，命名跟随上游 `nodes`/`links`/`groups`/`sourceMap`/`boundaries`，Architecture renderer 移出 `C4ModelData`/`C4Node`/`C4Edge` 正常路径，移除 `flows`/`scenarios` 功能，UI intent 统一转成 catalog operation input。
 - #29：已扩大 live UI intent/behavior coverage，稳定 product path 的真实可见控件读写已跨 `readView(...)` / `executeOperation(...)`，view-only 状态不改 `.scryer/model.scry`；group nesting / bulk group restore 仍以 operation-backed setup 加文件效果断言覆盖，不作为 headless pointer-dnd gate。
+- #30：已审计 executable Architecture slice 的真实前后端链路，并把 operation catalog reality 写入 `docs/orca-scryer-architecture-slice-audit.md`。
+- #36：已补 #30 发现的当前 slice release gate 缺口：active model reload、非默认模型管理 out-of-scope 决策、view-only no-write fingerprint、MCP alias matrix、`group.delete` 可见路径、`person.add` focused API 覆盖。
+- #31：补 read/query/rules/codebase executable operations。
+- #32：补 set-subtree、node move、responsibility move、descope executable operations。
+- #33：补 health report 和 drift semantic flag executable operations。
+- #34：补 container fill atomic generation executable operation。
+- #35：补剩余 operation 的 adapter/CLI/IPC/agent/live coverage gate。
 
 明确 future/out-of-scope：
 
 - 正常打开 `.scryer/model.scry` 时不做隐式 pre-0.3 自动迁移；如需保留旧数据，应另做显式 import 命令。
 - 正常 Scryer 0.3 runtime 采用 closed schema：`.scryer/model.scry` / `.scryer/planned.scry` 发现任意未知字段时拒绝加载或保存，并通过结构化 `incompatible_model` error envelope 返回所有 unknown field path；#28 不做旧模型兼容、import、migration、fallback 或 `edges -> links` 转换。
 - Scryer MCP server、Tauri shell、独立 provider/settings UI、docs/templates marketplace、Rust sidecar runtime 不属于 Orca product path。
-- group bubble 的 `bubblesets-js` 有机曲线、像素级视觉复刻和未来 AI fill 体验不是 #41-#49 operation migration 的完成条件。
+- group bubble 的 `bubblesets-js` 有机曲线、像素级视觉复刻和未来 AI fill 体验不是当前 Architecture product slice 的完成条件。
 
 ### 7. 迁移 drift detection 和 sync
 
@@ -500,10 +511,11 @@ planner 承载 Scryer 语义，transport adapter 只做输入归一化和结果�
 
 ## 建议执行顺序
 
-历史执行顺序已经完成到 operation migration 闭环：Orca 原生 Architecture tab、
-本地模型文件读写、Scryer 画布、Native Scryer Engine operation 语义、CLI/IPC
-adapter、drift/sync 和 agent done 联动都已有实现与 focused tests。
+历史执行顺序已经完成到 Architecture product slice 闭环：Orca 原生
+Architecture tab、本地 `.scryer` 文件读写、Native Scryer Engine seam、
+IPC adapter、drift/sync 和 agent done 联动都有实现与 focused tests。
 
 decision map #28-#29 已完成：Architecture View Adapter hard cutover 和 live UI
-intent/behavior tests 都已落地。当前继续顺序是 PR 稳定化：分拣 dirty worktree、
-final review、按 #28/#29/docs 拆提交，并保持已完成的 operation migration 不被重新打开成第二轮大迁移。
+intent/behavior tests 都已落地。#30 审计和 #36 release gate hardening 已把当前
+Architecture slice 闭环。当前继续顺序是用 #31-#35 补 11 个 catalog-only
+operation 的 executor、adapter 和覆盖。PR 发布/验收仍应避免把 full parity 未完成项误写成当前 PR 已完成。

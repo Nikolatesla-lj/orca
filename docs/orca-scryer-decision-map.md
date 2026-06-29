@@ -386,15 +386,37 @@ Type: Maintenance
 
 ### Question
 
-How should Orca keep the Scryer migration docs accurate now that the broad operation migration work has landed?
+How should Orca keep the Scryer migration docs accurate when the Architecture
+product slice has landed but the full 33-operation parity surface is not yet
+executable?
 
 ### Answer
 
-Update the linked migration status documents so they match the current code. The decision map remains the compact planning authority, but `docs/orca-scryer-migration.md`, `docs/orca-scryer-uml-gap-analysis.md`, PRD status notes, and issue-slice summaries must stop describing completed operation-catalog work as future work. Mark the 33-operation catalog, read surface, structural planners, source/group planners, intent planners, drift/health planners, container generation, adapter seam migration, parity fixtures, ownership checks, and live Architecture e2e gates according to the implemented and verified state.
+Update the linked migration status documents so they match current code, not the
+older completion intent. The decision map remains the compact planning
+authority, but `docs/orca-scryer-migration.md`,
+`docs/orca-scryer-uml-gap-analysis.md`, PRD status notes, and issue-slice
+summaries must distinguish three states:
 
-Do not use this ticket to add new Scryer behavior. Its purpose is documentation correctness: remove stale unchecked items, keep explicit future work separate from completed work, and make it clear that the remaining work is product-integration hardening rather than another operation migration batch.
+- The 33 operation ids have catalog contracts, schemas, policies, and upstream
+  anchors.
+- The stable Architecture product path has executable operations and live UI
+  coverage through #26-#29.
+- Full Scryer operation parity is still open for the catalog-only operations
+  that currently fall through to `unimplemented(...)`.
 
-Scope this ticket to repository docs only. The detailed status table belongs in `docs/orca-scryer-migration.md`; this decision map should stay compact. Acceptance means no linked status doc still presents #41-#49 operation migration as unfinished, and every remaining work item is either explicitly assigned to #26-#29 or marked future/out-of-scope. Verification is documentation-level: `git diff --check` plus targeted stale-phrase searches.
+Do not use this ticket to add new Scryer behavior. Its purpose is documentation
+correctness: remove stale claims that read/query, full structural mutation,
+health, drift flag, and container generation are already executable when the
+current code only registers their contracts. Keep explicit future work separate
+from the completed Architecture integration slice.
+
+Scope this ticket to repository docs only. The detailed status table belongs in
+`docs/orca-scryer-migration.md`; this decision map should stay compact.
+Acceptance means linked status docs no longer equate Architecture slice
+completion with full Scryer operation parity, and every remaining executable
+operation gap is assigned to #31-#35. Verification is documentation-level:
+`git diff --check` plus targeted stale-phrase searches.
 
 ## #26: How Should Legacy Scryer Semantic Paths Be Retired?
 
@@ -411,7 +433,7 @@ Retire legacy semantic ownership by turning old paths into compatibility adapter
 
 For every cataloged operation, product callers must route through `executeOperation(...)` or `readView(...)`. If an engine operation fails, adapters must return the engine result; they must not silently retry the old implementation. Keep ownership tests and focused adapter tests that fail if legacy files import engine internals, write `.scryer/*` directly for migrated operations, or bypass the public engine seam.
 
-Implementation status: main-process default model reads, node patching, drift reads, and drift reconcile now cross the Native Scryer Engine seam without `incompatible_model` fallback to legacy helpers. `mcp-tools.ts` is a compatibility shim for Scryer 0.3 projects: cataloged legacy aliases such as `update_nodes` and `add_edges` call engine operations and write planned state, while unsupported legacy semantic aliases such as `add_nodes` are rejected instead of writing through the old implementation. The renderer document-save/view-model hardening has landed through #28/#29; remaining work is PR stabilization, review, and acceptance rather than another operation migration batch.
+Implementation status: main-process default model reads, node patching, drift reads, and drift reconcile now cross the Native Scryer Engine seam without `incompatible_model` fallback to legacy helpers. `mcp-tools.ts` is a compatibility shim for Scryer 0.3 projects: cataloged legacy aliases such as `update_nodes` and `add_edges` call engine operations and write planned state, while unsupported legacy semantic aliases such as `add_nodes` are rejected instead of writing through the old implementation. The renderer document-save/view-model hardening has landed through #28/#29, and the #30/#36 release-gate diff has been isolated in a clean branch with final review/test gate passing. Remaining work is PR publication and human acceptance rather than another operation migration batch.
 
 ## #27: How Should Scryer Agent Runs Complete Safely In Orca?
 
@@ -486,3 +508,185 @@ Expand Electron Playwright coverage around real visible controls and real `.scry
 These tests should assert user-visible DOM state and engine-owned file effects. Store setup may be used to reach a state, but final assertions should not be store round-trips. View-only actions must not modify `.scryer/model.scry`; semantic actions must cross IPC into `executeOperation(...)`; reads must cross `readView(...)`; domain errors and validation failures must render as standard engine envelopes rather than ad hoc text.
 
 Implementation status: #29 is implemented and tested for the stable live product path. The Architecture live Electron suite now covers visible controls and `.scryer` file effects for opening Architecture tabs, engine-backed reads, tree navigation and drill-in, node add/update/delete, relationship add/update/delete through the inspector, source-map editing and editor opening, group creation/name/description/member drag/remove, closed-schema/domain-error rendering, drift checks, sync start/cancel/auto-finish, and clean relaunch restoration. View-only canvas controls are asserted without treating layout position as persisted Scryer state. Group nesting and bulk group restoration remain covered through operation-backed setup plus file-effect assertions rather than a fully pointer-driven visible-control assertion, because the headless dnd-kit nesting path is not stable enough to gate the product PR. The suite asserts planned/committed Scryer file state for semantic writes and keeps store setup limited to scenario seeding or terminal-agent simulation.
+
+## #30: What Is The Current Operation Catalog Reality?
+
+Blocked by: #25, #29
+Type: Discuss
+
+### Question
+
+What exactly is complete now: the Architecture product slice, or full Scryer
+operation parity?
+
+### Answer
+
+Treat the current release target as the Architecture product slice, not full
+Scryer operation parity. Current code declares the 33-operation catalog contract,
+but only the product-critical subset is executable. The completed executable
+slice covers model read/set/validate, plan pending/fold, node update/delete,
+link add/update/delete, source update, group add/set/update/delete,
+person/system/container/component/symbol add, drift get, and drift reconcile.
+
+The catalog-only operations still needing executors are:
+`scryer.model.search`, `scryer.model.query`, `scryer.rules.read`,
+`scryer.codebase.read`, `scryer.model.health`,
+`scryer.node.set-subtree`, `scryer.node.move`,
+`scryer.responsibility.move`, `scryer.container.fill`,
+`scryer.node.descope`, and `scryer.drift.flag`.
+
+Before claiming the Architecture slice complete, audit the already-executable
+product path as an end-to-end chain: visible renderer control -> renderer intent
+-> preload/IPC -> `readView(...)` or `executeOperation(...)` -> engine executor
+-> state-store write/read -> `.scryer/model.scry` or `.scryer/planned.scry` ->
+watcher/reload -> `ArchitectureViewDto` -> visible UI update. Each covered
+semantic edit must have both visible UI assertions and engine-owned file-effect
+assertions. View-only actions must prove they do not modify `.scryer` model
+truth, and error paths must render standard engine envelopes rather than ad hoc
+messages.
+
+Audit artifact: `docs/orca-scryer-architecture-slice-audit.md`.
+
+Result: #30 is resolved as a catalog-reality audit, and #36 has closed the
+stricter zero-partial release gate for the current Architecture product slice.
+The stable default-model path is real and covered: active model external edits
+reload the visible UI, view-only controls have `.scryer` no-write fingerprint
+coverage, MCP compatibility has a supported/rejected alias matrix, visible
+`scryer.group.delete` removes planned groups, and `scryer.person.add` has
+focused IPC/API coverage. Non-default model manager save-as/delete remains
+explicitly outside the current Architecture 0.3 release-critical path. Full
+Scryer operation parity is still separate #31-#35 work.
+
+## #31: How Should Read Surface Completion Land?
+
+Blocked by: #16, #30
+Type: Research
+
+### Question
+
+What remains to make the read surface executable beyond the current
+Architecture read path?
+
+### Answer
+
+Implement the read/query completion slice for `scryer.model.search`,
+`scryer.model.query`, `scryer.rules.read`, and `scryer.codebase.read`. These
+operations should use a shared read selector over canonical Scryer 0.3 state,
+return structured payloads, preserve upstream drill-down/search semantics, and
+cross the same catalog/pipeline/schema/result-envelope path as
+`scryer.model.read`. Add CLI/IPC/agent adapter tests only where the operations
+are product-exposed; otherwise keep the first slice engine-focused with parity
+or golden payload tests.
+
+## #32: How Should Structural Mutation Completion Land?
+
+Blocked by: #17, #30
+Type: Research
+
+### Question
+
+What remains to make structural mutation parity executable?
+
+### Answer
+
+Implement the structural completion slice for `scryer.node.set-subtree`,
+`scryer.node.move`, `scryer.responsibility.move`, and `scryer.node.descope`.
+Keep `scryer.model.set`, `scryer.node.delete`, and `scryer.link.update` in the
+completed executable set, but use this slice to ensure the whole structural
+family shares one mutation planner, validator handoff, source cleanup, link
+legality checks, atomic commit behavior, and no legacy fallback. Acceptance
+requires golden state assertions for planned/committed effects and adapter tests
+for any UI/CLI path that exposes the operations.
+
+## #33: How Should Health And Drift Record Completion Land?
+
+Blocked by: #20, #30
+Type: Research
+
+### Question
+
+What remains after `drift.get` and `drift.reconcile` are executable?
+
+### Answer
+
+Implement `scryer.model.health` and `scryer.drift.flag` as a drift/health
+completion slice. `model.health` is a report operation with declared maintenance
+writes only; it must not record semantic drift verdicts. `drift.flag` records
+reviewed semantic findings into planned state and history sidecars without
+advancing reconcile anchors. Acceptance requires clear separation between
+changed-scope detection, human/agent semantic verdict recording, and reconcile
+anchor advancement.
+
+## #34: How Should Container Generation Completion Land?
+
+Blocked by: #21, #30, #32
+Type: Research
+
+### Question
+
+How should `scryer.container.fill` become executable without turning generation
+into a series of raw intent calls?
+
+### Answer
+
+Implement `scryer.container.fill` as one high-risk atomic generation primitive.
+It should validate a complete proposal for an empty container, mint ids through
+the shared id minter, derive optional links from build-edge evidence, route
+source anchors through the source router, and write committed plus planned state
+as one transaction. Successful results should return a compact structured
+generation summary, not a full model or prose. Acceptance requires transaction
+tests proving partial writes do not survive failure.
+
+## #35: What Adapter And Coverage Gate Is Required For Full Operation Parity?
+
+Blocked by: #31, #32, #33, #34
+Type: Discuss
+
+### Question
+
+Once the remaining operation executors exist, how do we prove product callers
+are connected correctly?
+
+### Answer
+
+Add the adapter and coverage gate for the remaining operations only after their
+engine executors pass focused tests. CLI, IPC, agent guidance, and any renderer
+surface that exposes these operations must call `readView(...)` or
+`executeOperation(...)`; they must not revive model-store or MCP legacy semantic
+writers. The gate should include ownership tests, adapter envelope tests,
+operation-specific golden tests, and live UI coverage only for operations with
+real visible product controls. Operations that are CLI/agent-only do not need
+fake UI tests, but they do need end-to-end command or IPC tests that assert
+engine-owned `.scryer` file effects.
+
+## #36: How Should The Architecture Slice Release Gate Gaps Close?
+
+Blocked by: #30
+Type: Research
+
+### Question
+
+What coverage or scope decisions are still required before the current
+Architecture slice can pass the zero-partial release gate?
+
+### Answer
+
+Close the current-slice release blockers found by
+`docs/orca-scryer-architecture-slice-audit.md`: fix or explicitly scope the
+active planned-file external edit reload path; either add visible live e2e for
+non-default model save-as/delete or mark that workflow out of the Architecture
+0.3 release; add a no-write fingerprint harness for view-only controls such as
+theme, zoom, tree navigation, and mode switching; add an explicit MCP
+compatibility matrix for supported aliases (`delete_edges`, strict `set_groups`,
+strict `delete_group`) and rejected legacy aliases (`add_nodes`, `set_node`,
+`set_flows`, `delete_flow`); add a passing visible product deletion path for
+`scryer.group.delete` if it remains release-critical; and add focused
+product/API coverage for `scryer.person.add` if it remains release-critical.
+
+Implementation status: #36 is implemented and tested for the current
+release-critical Architecture slice. The gate now has live coverage for active
+model reload and temporary-file ignore behavior, view-only `.scryer` no-write
+fingerprints, visible group deletion through `scryer.group.delete`, MCP config
+and strict alias matrix coverage, and focused `scryer.person.add` IPC/API
+coverage. Non-default model manager save-as/delete is scoped out of this release
+gate; promoting it later requires a separate product decision and e2e slice.

@@ -1,6 +1,6 @@
 # PRD: Orca Scryer Operation Migration Work Set
 
-Status: implemented via #41-#49; retained as historical specification
+Status: partially implemented; default-model Architecture slice release gate closed, full operation parity open
 Date: 2026-06-25
 
 ## Source
@@ -17,41 +17,51 @@ Date: 2026-06-25
 
 ## Implementation Status
 
-This work set has been implemented and verified through operation migration
-issues #41-#49. The broad operation families described below now live behind
-the Orca-native Native Scryer Engine seam through `executeOperation(...)` and
-`readView(...)`, with focused engine, adapter, CLI, IPC, and Architecture e2e
-coverage.
+This work set is partially implemented. Current code has the 33-operation
+catalog contract, shared engine seam, and the stable Architecture product slice
+behind `executeOperation(...)` and `readView(...)`. That slice has focused
+engine, IPC, renderer, and Architecture e2e coverage. The stricter #30/#36
+zero-partial release gate for the current Architecture product slice is now
+closed and documented in `docs/orca-scryer-architecture-slice-audit.md`.
 
-This document remains useful as the historical specification for the completed
-operation migration. It should not be read as a fresh backlog of unchecked
-operation work. Follow-up product-integration hardening through #29 has also
-completed; the remaining work is PR stabilization and human review, not another
-operation migration batch:
+This document remains useful as the historical specification for full Scryer
+operation parity, but it should not be read as proof that every operation below
+is executable today. The current catalog still contains operation rows that fall
+through to `unimplemented(...)`. Follow-up product-integration hardening through
+#29 and #36 has completed for the default-model release-critical path; full
+operation parity continues through decision map #31-#35.
 
 - #25: reconcile linked docs with completed operation migration.
 - #26: main-process legacy Scryer semantic fallback retired or reduced to shims.
 - #27: stabilize `ScryerEditSessionController` and Completion Gate.
 - #28: renderer-facing Architecture View Adapter hard cutover completed.
 - #29: live UI intent and behavior coverage expanded and verified.
+- #30: audit current executable slice and document catalog reality.
+- #36: strict Architecture slice release gate gaps from the #30 audit closed.
+- #31: finish read/query/rules/codebase executors.
+- #32: finish structural mutation executors.
+- #33: finish health and drift-record executors.
+- #34: finish atomic container generation.
+- #35: prove remaining adapter and coverage gates.
 
 ## Problem Statement
 
 At the time this PRD was written, the Native Scryer Engine catalog foundation
 was in place for the first seven operations, and Orca still needed the remaining
 upstream Scryer operation families planned, specified, and split into
-implementation issues. That work has since been completed through #41-#49. The
-problem statement is retained to explain why the work set was sliced around
-deep modules and vertical operation families instead of one-off operation files
-or a single unreviewable implementation PR.
+implementation issues. The Architecture-facing subset has since been carried
+through the engine seam and live product coverage. The full parity problem
+statement remains active for catalog-only operations that still need executors,
+adapter wiring, and tests.
 
 ## Scope Decision
 
-This PRD covered the complete Scryer Operation Migration Work Set for decision
-map tickets #16-#24. In the original planning context, "complete" meant the
-remaining operation families were specified and issue-ready together. The
-subsequent #41-#49 implementation pass carried those slices through code and
-focused tests.
+This PRD covers the complete Scryer Operation Migration Work Set for decision
+map tickets #16-#24. In the planning context, "complete" meant the remaining
+operation families were specified and issue-ready together. In current code,
+"complete" should only be used with a qualifier such as "default-model
+Architecture main path"; the stricter current-slice release gate remains #36,
+and the full operation-family list below remains the parity target for #31-#35.
 
 The implementation rule remains relevant for future maintenance: changes should
 proceed as vertical operation-family slices. Each task slice should carry real
@@ -65,26 +75,33 @@ behavior.
 1. Read/query operations:
    `scryer.model.search`, `scryer.model.query`, `scryer.rules.read`,
    `scryer.codebase.read`, plus the Scryer Read Surface upgrade and any
-   remaining `scryer.model.read` parity gaps.
+   remaining `scryer.model.read` parity gaps. Current status: open for #31.
 2. Core structural writes:
    `scryer.model.set`, `scryer.node.set-subtree`, `scryer.node.delete`,
    `scryer.node.move`, `scryer.node.descope`, `scryer.responsibility.move`,
-   and `scryer.link.update`.
+   and `scryer.link.update`. Current status: `model.set`, `node.delete`, and
+   `link.update` are executable; `set-subtree`, `node.move`, `node.descope`,
+   and `responsibility.move` remain open for #32.
 3. Source and group ownership:
    `scryer.source.update`, `scryer.group.set`, `scryer.group.update`, and
-   `scryer.group.delete`.
+   `scryer.group.delete`. Current status: executable for the Architecture
+   product slice; full adapter/coverage gate continues in #35.
 4. Intent writers:
    `scryer.person.add`, `scryer.system.add`, `scryer.container.add`,
    `scryer.component.add`, `scryer.group.add`, and `scryer.symbol.add`.
+   Current status: executable for the Architecture product slice; full
+   adapter/coverage gate continues in #35.
 5. Drift and health:
    `scryer.drift.get`, `scryer.drift.flag`, `scryer.drift.reconcile`, and
-   `scryer.model.health`.
+   `scryer.model.health`. Current status: `drift.get` and `drift.reconcile`
+   are executable; `drift.flag` and `model.health` remain open for #33.
 6. Atomic generation:
-   `scryer.container.fill`.
+   `scryer.container.fill`. Current status: open for #34.
 7. Adapter retirement:
    Architecture UI, IPC, CLI, agent runtime bridge, and legacy compatibility
    callers cross the Native Scryer Engine seam through `executeOperation(...)`
-   or `readView(...)`.
+   or `readView(...)`. Current status: Architecture stable path completed;
+   remaining operation adapters and coverage continue in #35.
 
 ## Non-Goals
 

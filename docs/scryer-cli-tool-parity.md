@@ -82,7 +82,7 @@ an explicit import command outside normal runtime behavior.
 | Pre-0.3 `flows` | Do not place in `ScryModel`; upstream 0.3 has no `flows`. If Orca keeps a flow editor, store it as an Orca extension outside Scryer engine semantics. |
 | Pre-0.3 `status` / `contract` / `notes` | Do not reinterpret during normal reads. Current Scryer uses responsibilities, properties, directives, vagrant/stale flags, appearance state, and node notes directly. Explicit import can perform lossy/manual mapping if required. |
 | Pre-0.3 `sourceMap` | Do not reinterpret pre-0.3 node/flow source maps during normal reads. Current source maps are responsibility anchors or schema-node anchors; boundaries are node-owned source globs with committed/planned single-home routing. |
-| Architecture tab model | Consume `ScryModel` directly, with render-only selectors as needed. Do not introduce a persisted shadow model. |
+| Architecture tab model | Persist `ScryModel` as architecture truth, and consume renderer-facing `ArchitectureViewDto` from the main-process view adapter. Do not introduce a persisted shadow model. |
 
 ## Operation parity map
 
@@ -121,6 +121,37 @@ an explicit import command outside normal runtime behavior.
 | Drift write | `flag_drift` | `scryer.drift.flag` | `orca scryer drift flag` | Records semantic drift into plan using vagrant/stale flags and history events. |
 | Drift close | `reconcile_drift` | `scryer.drift.reconcile` | `orca scryer drift reconcile` | Advances `.sync` anchor and writes anchor fingerprint baseline after all drift scopes are reviewed. |
 | Generation | `fill_container` | `scryer.container.fill` | `orca scryer container fill` | Atomic generation primitive for one empty container; mints ids; writes committed and planned; derives links from `.build_edges.json`; records born events. |
+
+### Current implementation status
+
+This parity map is the target behavior map, not a claim that every row is
+executable today. Current code registers the 33-operation catalog contract, but
+full executable parity is still split across decision map #31-#35. The current
+Architecture product slice release gate was closed by #36 and is documented in
+`docs/orca-scryer-architecture-slice-audit.md`.
+
+Executable in the current Architecture product slice:
+
+- `scryer.model.read`, `scryer.model.validate`
+- `scryer.plan.pending`, `scryer.plan.fold`, `scryer.model.set`
+- `scryer.node.update`, `scryer.node.delete`
+- `scryer.link.add`, `scryer.link.update`, `scryer.link.delete`
+- `scryer.source.update`
+- `scryer.group.add`, `scryer.group.set`, `scryer.group.update`,
+  `scryer.group.delete`
+- `scryer.person.add`, `scryer.system.add`, `scryer.container.add`,
+  `scryer.component.add`, `scryer.symbol.add`
+- `scryer.drift.get`, `scryer.drift.reconcile`
+
+Catalog-only operations still needing executors:
+
+- #31 read surface: `scryer.model.search`, `scryer.model.query`,
+  `scryer.rules.read`, `scryer.codebase.read`
+- #32 structural mutation: `scryer.node.set-subtree`, `scryer.node.move`,
+  `scryer.responsibility.move`, `scryer.node.descope`
+- #33 health/drift record: `scryer.model.health`, `scryer.drift.flag`
+- #34 generation: `scryer.container.fill`
+- #35 adapter/coverage gate for every remaining exposed product path
 
 ## Engine implementation decision
 
