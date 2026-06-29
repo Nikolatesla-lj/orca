@@ -32,7 +32,6 @@ import {
   shouldNotifyModelFile,
   type ArchitectureIpcRegistrar
 } from './architecture'
-import type { ScryerEditSessionController } from '../scryer/edit-session-controller'
 
 describe('registerArchitectureHandlers', () => {
   afterEach(() => {
@@ -89,13 +88,19 @@ describe('registerArchitectureHandlers', () => {
         toolName: 'set_model',
         arguments: {
           data: JSON.stringify({
+            version: '0.3',
             nodes: [
               {
                 id: 'system',
-                data: { name: 'System', description: 'Root system', kind: 'system' }
+                kind: 'system',
+                name: 'System',
+                description: 'Root system'
               }
             ],
-            edges: []
+            links: [],
+            groups: [],
+            sourceMap: {},
+            boundaries: {}
           })
         }
       }
@@ -112,7 +117,7 @@ describe('registerArchitectureHandlers', () => {
         version: '0.3',
         nodes: [
           { id: 'api', kind: 'system', name: 'API', description: 'HTTP API' },
-          { id: 'web', kind: 'container', name: 'Web', parentId: 'api', technology: 'React' }
+          { id: 'web', kind: 'system', name: 'Web', technology: 'React' }
         ],
         links: [{ id: 'link-web-api', src: 'web', dst: 'api', label: 'calls' }],
         groups: [{ id: 'frontend', name: 'Frontend', memberIds: ['web'] }],
@@ -138,8 +143,7 @@ describe('registerArchitectureHandlers', () => {
           expect.objectContaining({ id: 'api', kind: 'system', name: 'API' }),
           expect.objectContaining({
             id: 'web',
-            kind: 'container',
-            parentId: 'api',
+            kind: 'system',
             technology: 'React'
           })
         ],
@@ -148,8 +152,8 @@ describe('registerArchitectureHandlers', () => {
         sourceMap: { web: [{ pattern: 'src/web.ts' }] },
         boundaries: { api: [{ pattern: 'src/api/**' }] },
         treeRows: [
-          expect.objectContaining({ id: 'api', path: 'API', depth: 0, childCount: 1 }),
-          expect.objectContaining({ id: 'web', path: 'API / Web', depth: 1, childCount: 0 })
+          expect.objectContaining({ id: 'api', path: 'API', depth: 0, childCount: 0 }),
+          expect.objectContaining({ id: 'web', path: 'Web', depth: 0, childCount: 0 })
         ],
         sourceMapRows: [{ ownerId: 'web', locations: [{ pattern: 'src/web.ts' }] }],
         boundaryRows: [{ nodeId: 'api', sources: [{ pattern: 'src/api/**' }] }],
@@ -279,6 +283,48 @@ describe('registerArchitectureHandlers', () => {
       }
     })
     await expect(readFile(join(projectPath, '.scryer', 'model.scry'), 'utf8')).rejects.toThrow()
+  })
+
+  it('creates the default blank model through the Scryer operation catalog', async () => {
+    handlers.clear()
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-default-create-'))
+    const send = vi.fn()
+    const createProjectModel = vi.fn(defaultArchitectureDeps.createProjectModel)
+    const registrar: ArchitectureIpcRegistrar = {
+      handle: (channel, handler) => {
+        handlers.set(channel, handler as (_event: unknown, args: unknown) => Promise<unknown>)
+      }
+    }
+    registerArchitectureHandlers(registrar, {
+      ...defaultArchitectureDeps,
+      createProjectModel
+    })
+
+    const result = await handlers.get('architecture:createModel')!(
+      { sender: { send } },
+      { projectPath, modelName: 'model' }
+    )
+
+    expect(result).toMatchObject({
+      modelName: 'model',
+      model: { nodes: [], edges: [] },
+      revision: expect.stringContaining('ipc-model-set')
+    })
+    expect(createProjectModel).not.toHaveBeenCalled()
+    await expect(
+      readFile(join(projectPath, '.scryer', 'model.scry'), 'utf8').then(JSON.parse)
+    ).resolves.toMatchObject({
+      version: '0.3',
+      nodes: [],
+      links: [],
+      groups: [],
+      sourceMap: {},
+      boundaries: {}
+    })
+    expect(send).toHaveBeenCalledWith('architecture:modelChanged', {
+      projectPath,
+      fileName: 'model.scry'
+    })
   })
 
   it('rejects legacy C4-shaped default raw writes instead of converting them', async () => {
@@ -485,129 +531,36 @@ describe('registerArchitectureHandlers', () => {
     })
   })
 
-  it('routes edit-session IPC channels through ScryerEditSessionController', async () => {
-    handlers.clear()
-    const projectPath = '/repo'
-    const sender = { send: vi.fn() }
-    const registrar: ArchitectureIpcRegistrar = {
-      handle: (channel, handler) => {
-        handlers.set(channel, handler as (_event: unknown, args: unknown) => Promise<unknown>)
+  it('covers focused person.add API wiring through IPC', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-person-add-'))
+    const send = vi.fn()
+
+    const result = await handlers.get('architecture:executeScryerOperation')!(
+      { sender: { send } },
+      {
+        projectPath,
+        operationId: 'scryer.person.add',
+        requestId: 'ipc-person-add',
+        input: {
+          items: [{ name: 'Customer', description: 'Uses the product' }]
+        }
       }
-    }
-    const controller: ScryerEditSessionController = {
-      beginAgentEditSession: vi.fn(async () => ({
-        projectPath,
-        agentRunId: 'run-1'
-      })),
-      completeAgentEditSession: vi.fn(async () => ({
-        ok: true,
-        foldAllowed: true,
-        nextAction: 'fold_allowed' as const,
-        pending: {
-          total: 1,
-          foldable: true,
-          byKind: { node: 1 },
-          byChange: { added: 1 },
-          changes: [],
-          blockers: [],
-          risks: []
-        },
-        validation: { blockingCount: 0, warningCount: 0, findings: [] },
-        lease: { active: true, blocked: false, owner: 'agent' as const, agentRunId: 'run-1' }
-      })),
-      cancelAgentEditSession: vi.fn(async () => undefined),
-      readEditSession: vi.fn(async () => ({
-        projectPath,
-        activeLease: { owner: 'agent' as const, agentRunId: 'run-1' }
-      }))
-    }
-    const finishSync = vi.fn(defaultArchitectureDeps.finishSync)
-    registerArchitectureHandlers(registrar, {
-      ...defaultArchitectureDeps,
-      finishSync,
-      scryerEditSessionController: controller
-    })
+    )
 
-    await expect(
-      handlers.get('architecture:beginEditSession')!(null, { projectPath, agentRunId: 'run-1' })
-    ).resolves.toEqual({ projectPath, agentRunId: 'run-1' })
-    await expect(
-      handlers.get('architecture:completeEditSession')!(
-        { sender },
-        { projectPath, agentRunId: 'run-1', foldPolicy: 'when_gate_passes' }
-      )
-    ).resolves.toMatchObject({ nextAction: 'fold_allowed' })
-    await expect(
-      handlers.get('architecture:readEditSession')!(null, { projectPath })
-    ).resolves.toMatchObject({ activeLease: { owner: 'agent', agentRunId: 'run-1' } })
-    await expect(
-      handlers.get('architecture:readEditSession')!(null, { projectPath })
-    ).resolves.not.toHaveProperty('activeLease.token')
-    await handlers.get('architecture:cancelEditSession')!(null, {
+    expect(result).toMatchObject({
+      ok: true,
+      operationId: 'scryer.person.add',
+      requestId: 'ipc-person-add',
+      result: { added: [expect.objectContaining({ nodeKind: 'person' })] }
+    })
+    expect(send).toHaveBeenCalledWith('architecture:modelChanged', {
       projectPath,
-      agentRunId: 'run-1'
+      fileName: 'planned.scry'
     })
-
-    expect(controller.beginAgentEditSession).toHaveBeenCalledWith({
-      projectPath,
-      agentRunId: 'run-1'
-    })
-    expect(controller.completeAgentEditSession).toHaveBeenCalledWith({
-      projectPath,
-      agentRunId: 'run-1',
-      foldPolicy: 'when_gate_passes'
-    })
-    expect(controller.cancelAgentEditSession).toHaveBeenCalledWith({
-      projectPath,
-      agentRunId: 'run-1'
-    })
-    expect(finishSync).not.toHaveBeenCalled()
-    expect(sender.send).toHaveBeenCalledWith('architecture:modelChanged', {
-      projectPath,
-      fileName: 'model.scry'
-    })
-  })
-
-  it('blocks legacy default model writes while a Scryer edit session is active', async () => {
-    handlers.clear()
-    const projectPath = '/repo'
-    const registrar: ArchitectureIpcRegistrar = {
-      handle: (channel, handler) => {
-        handlers.set(channel, handler as (_event: unknown, args: unknown) => Promise<unknown>)
-      }
-    }
-    const writeModel = vi.fn(defaultArchitectureDeps.writeModel)
-    const writeModelDocument = vi.fn(defaultArchitectureDeps.writeModelDocument)
-    const controller: ScryerEditSessionController = {
-      beginAgentEditSession: vi.fn(),
-      completeAgentEditSession: vi.fn(),
-      cancelAgentEditSession: vi.fn(),
-      readEditSession: vi.fn(async () => ({
-        projectPath,
-        activeLease: { owner: 'agent' as const, agentRunId: 'run-1' }
-      }))
-    }
-    registerArchitectureHandlers(registrar, {
-      ...defaultArchitectureDeps,
-      writeModel,
-      writeModelDocument,
-      scryerEditSessionController: controller
-    })
-
-    await expect(
-      handlers.get('architecture:writeModel')!(null, {
-        projectPath,
-        model: { projectPath, nodes: [], edges: [], sourceMap: {} }
-      })
-    ).rejects.toThrow('Scryer edit session is active')
-    await expect(
-      handlers.get('architecture:writeModelDocument')!(null, {
-        projectPath,
-        model: { projectPath, nodes: [], edges: [], sourceMap: {} }
-      })
-    ).rejects.toThrow('Scryer edit session is active')
-    expect(writeModel).not.toHaveBeenCalled()
-    expect(writeModelDocument).not.toHaveBeenCalled()
+    const planned = JSON.parse(await readFile(join(projectPath, '.scryer', 'planned.scry'), 'utf8'))
+    expect(planned.nodes).toContainEqual(
+      expect.objectContaining({ kind: 'person', name: 'Customer' })
+    )
   })
 
   it('bridges project model management and AI prompt preparation through IPC', async () => {
@@ -728,6 +681,34 @@ describe('registerArchitectureHandlers', () => {
     expect(sender.send).toHaveBeenCalledWith('architecture:modelChanged', {
       projectPath,
       fileName: 'model.scry'
+    })
+    vi.useRealTimers()
+  })
+
+  it('keeps model watcher notifications bound to the latest renderer sender', async () => {
+    vi.useFakeTimers()
+    handlers.clear()
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-watch-resubscribe-'))
+    const firstSender = { send: vi.fn(), isDestroyed: vi.fn(() => true) }
+    const secondSender = { send: vi.fn(), isDestroyed: vi.fn(() => false) }
+    const registrar: ArchitectureIpcRegistrar = {
+      handle: (channel, handler) => {
+        handlers.set(channel, handler as (_event: unknown, args: unknown) => Promise<unknown>)
+      }
+    }
+    registerArchitectureHandlers(registrar)
+
+    await handlers.get('architecture:watchModel')!({ sender: firstSender }, { projectPath })
+    await handlers.get('architecture:watchModel')!({ sender: secondSender }, { projectPath })
+    expect(watchMock).toHaveBeenCalledTimes(1)
+
+    watchCallbacks[0]!('change', 'planned.scry')
+    await vi.advanceTimersByTimeAsync(100)
+
+    expect(firstSender.send).not.toHaveBeenCalled()
+    expect(secondSender.send).toHaveBeenCalledWith('architecture:modelChanged', {
+      projectPath,
+      fileName: 'planned.scry'
     })
     vi.useRealTimers()
   })

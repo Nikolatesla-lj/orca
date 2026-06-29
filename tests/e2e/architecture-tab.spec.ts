@@ -35,10 +35,10 @@ async function getActiveWorktreePath(
 
 async function openArchitectureTab(page: Parameters<typeof waitForSessionReady>[0]): Promise<void> {
   await page.getByRole('button', { name: 'New tab' }).click({ force: true })
-  await page
-    .getByRole('menuitem', { name: /New Architecture/i })
-    .first()
-    .click({ force: true })
+  const newArchitectureItem = page.getByRole('menuitem', { name: /New Architecture/i }).first()
+  await expect(newArchitectureItem).toBeVisible({ timeout: 10_000 })
+  await newArchitectureItem.click({ force: true })
+  await expect(newArchitectureItem).toBeHidden({ timeout: 5_000 })
   await expect(page.getByRole('button', { name: /Architecture/ })).toBeVisible({
     timeout: 10_000
   })
@@ -47,44 +47,22 @@ async function openArchitectureTab(page: Parameters<typeof waitForSessionReady>[
 }
 
 async function closeOpenMenus(page: Parameters<typeof waitForSessionReady>[0]): Promise<void> {
-  const expandedNewTabButton = page
-    .locator('button[aria-label="New tab"][aria-expanded="true"]')
-    .first()
-  const newTabButton = page.getByRole('button', { name: 'New tab' }).first()
-  const newArchitectureItem = page.getByRole('menuitem', { name: /New Architecture/i }).first()
   const visibleMenus = page.locator('[role="menu"]:visible')
   for (let attempt = 0; attempt < 3; attempt += 1) {
     if ((await visibleMenus.count()) === 0) {
       return
     }
-    if (await newArchitectureItem.isVisible().catch(() => false)) {
-      await newArchitectureItem.press('Escape')
-      await page.waitForTimeout(100)
-      if ((await visibleMenus.count()) === 0) {
-        return
-      }
-    }
-    if (await newTabButton.isVisible().catch(() => false)) {
-      await newTabButton.click({ force: true })
-      await page.waitForTimeout(100)
-      if ((await visibleMenus.count()) === 0) {
-        return
-      }
-    }
-    if (
-      (await newArchitectureItem.isVisible().catch(() => false)) &&
-      (await expandedNewTabButton.isVisible().catch(() => false))
-    ) {
-      await expandedNewTabButton.click({ force: true })
-      await page.waitForTimeout(100)
-      if ((await visibleMenus.count()) === 0) {
-        return
-      }
-    }
     await page.keyboard.press('Escape')
-    await page.mouse.click(1, 1)
+    await page.waitForTimeout(100)
+    if ((await visibleMenus.count()) === 0) {
+      return
+    }
+    await page.getByTestId('architecture-panel').click({ position: { x: 8, y: 8 } })
     await page.waitForTimeout(100)
   }
+  await page.keyboard.press('Escape')
+  await page.getByTestId('architecture-panel').click({ position: { x: 8, y: 8 } })
+  await expect(visibleMenus).toHaveCount(0, { timeout: 2_000 })
 }
 
 async function activateArchitectureTab(
@@ -115,14 +93,16 @@ async function seedArchitectureModel(
       }
       const nodes = (inputModel.nodes ?? []).map((node) => {
         const data = (node.data ?? node) as Record<string, unknown>
-        const kind =
+        const symbolKind =
           data.kind === 'operation' || data.kind === 'process' || data.kind === 'model'
-            ? 'symbol'
-            : data.kind
+            ? data.kind
+            : null
+        const kind = symbolKind !== null ? 'symbol' : data.kind
         return {
           id: String(node.id),
           kind,
           name: String(data.name ?? node.id),
+          ...(symbolKind ? { appearance: { symbolKind } } : {}),
           ...(node.parentId ? { parentId: String(node.parentId) } : {}),
           ...(typeof data.external === 'boolean' ? { external: data.external } : {}),
           ...(typeof data.technology === 'string' ? { technology: data.technology } : {}),
@@ -176,9 +156,7 @@ async function selectTreeNode(
   const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const treeButton = page.getByRole('button', { name: new RegExp(`^${escapedName}\\b`) }).first()
   await expect(treeButton).toBeVisible({ timeout: 10_000 })
-  await treeButton.evaluate((button) => {
-    ;(button as HTMLButtonElement).click()
-  })
+  await treeButton.click({ force: true })
 }
 
 test.describe('Architecture tab live Scryer sync', () => {
@@ -241,9 +219,7 @@ test.describe('Architecture tab live Scryer sync', () => {
     await activateArchitectureTab(orcaPage)
     const shopTreeNode = orcaPage.getByTestId('architecture-tree-node').filter({ hasText: 'Shop' })
     await expect(shopTreeNode).toBeVisible({ timeout: 10_000 })
-    await shopTreeNode.getByTestId('architecture-tree-drill-node').evaluate((button) => {
-      ;(button as HTMLButtonElement).click()
-    })
+    await shopTreeNode.getByTestId('architecture-tree-drill-node').click({ force: true })
     await expect(orcaPage.getByTestId('architecture-fill-ai')).toBeVisible({ timeout: 10_000 })
 
     await orcaPage.getByTestId('architecture-fill-ai').click({ force: true })
@@ -407,9 +383,15 @@ test.describe('Architecture tab live Scryer sync', () => {
         const saved = JSON.parse(
           readFileSync(path.join(worktreePath, '.scryer', 'planned.scry'), 'utf8')
         )
-        return saved.nodes.length
+        return {
+          nodeCount: saved.nodes.length,
+          addedNode: saved.nodes.find((node) => node.name === 'Component 1')
+        }
       })
-      .toBe(4)
+      .toMatchObject({
+        nodeCount: 5,
+        addedNode: { kind: 'component', parentId: 'api' }
+      })
     await expect(orcaPage.getByTestId('architecture-zoom-fit')).toBeVisible()
     await orcaPage.getByTestId('architecture-zoom-fit').click({ force: true })
   })
@@ -681,7 +663,7 @@ test.describe('Architecture tab live Scryer sync', () => {
       },
       { projectPath: worktreePath, nodeId: apiId }
     )
-    expect(mcpResult.ok).toBe(true)
+    expect(mcpResult.ok, JSON.stringify(mcpResult)).toBe(true)
     await selectTreeNode(orcaPage, 'API Container')
     await expect(orcaPage.getByTestId('architecture-node-description')).toHaveValue(
       'Updated through architecture MCP bridge',
@@ -713,6 +695,12 @@ test.describe('Architecture tab live Scryer sync', () => {
         content: 'export const hello = "architecture-drift-live-test"\\n'
       })
     }, worktreePath)
+
+    const directDrift = await orcaPage.evaluate(
+      (projectPath) => window.api.architecture.checkDrift({ projectPath }),
+      worktreePath
+    )
+    expect(directDrift.nodes, JSON.stringify(directDrift)).toHaveLength(1)
 
     await orcaPage.getByTestId('architecture-sync-drift').click({ force: true })
     const driftReport = orcaPage.getByTestId('architecture-drift-report')
@@ -860,9 +848,7 @@ test.describe('Architecture tab live Scryer sync', () => {
 
     const shopTreeNode = orcaPage.getByTestId('architecture-tree-node').filter({ hasText: 'Shop' })
     await expect(shopTreeNode).toBeVisible({ timeout: 10_000 })
-    await shopTreeNode.getByTestId('architecture-tree-drill-node').evaluate((button) => {
-      ;(button as HTMLButtonElement).click()
-    })
+    await shopTreeNode.getByTestId('architecture-tree-drill-node').click({ force: true })
     await expect(
       orcaPage.getByTestId('architecture-tree-node').filter({ hasText: 'API' })
     ).toBeVisible({ timeout: 10_000 })
@@ -873,9 +859,7 @@ test.describe('Architecture tab live Scryer sync', () => {
       timeout: 10_000
     })
 
-    await orcaPage.getByTestId('architecture-group-create').evaluate((button) => {
-      ;(button as HTMLButtonElement).click()
-    })
+    await orcaPage.getByTestId('architecture-group-create').click({ force: true })
     await expect(orcaPage.getByTestId('architecture-group-card')).toHaveCount(1)
     const backendCard = orcaPage.getByTestId('architecture-group-card').first()
     await expect(backendCard.getByTestId('architecture-group-name')).toHaveValue('New group')
@@ -1012,10 +996,13 @@ test.describe('Architecture tab live Scryer sync', () => {
     if (!backendBeforeClear) {
       throw new Error('Expected Backend group before clearing members')
     }
-    await orcaPage
-      .locator(`[data-testid="architecture-group-card"][data-group-id="${backendBeforeClear.id}"]`)
-      .getByTestId('architecture-group-member-remove')
-      .click({ force: true })
+    const backendCardBeforeClear = orcaPage.locator(
+      `[data-testid="architecture-group-card"][data-group-id="${backendBeforeClear.id}"]`
+    )
+    await backendCardBeforeClear.locator('[data-node-id="api"]').hover({ force: true })
+    await backendCardBeforeClear.getByTestId('architecture-group-member-remove').click({
+      force: true
+    })
 
     await expect
       .poll(() => readPlannedGroups().find((group) => group.name === 'Backend')?.memberIds ?? [], {
@@ -1042,6 +1029,28 @@ test.describe('Architecture tab live Scryer sync', () => {
         { timeout: 10_000 }
       )
       .toEqual(['api', 'worker'])
+
+    const runtimeBeforeDelete = readPlannedGroups().find((group) => group.name === 'Runtime')
+    if (!runtimeBeforeDelete) {
+      throw new Error('Expected Runtime group before deleting it')
+    }
+    const runtimeCard = orcaPage.locator(
+      `[data-testid="architecture-group-card"][data-group-id="${runtimeBeforeDelete.id}"]`
+    )
+    const runtimeCardBox = await runtimeCard.boundingBox()
+    expect(runtimeCardBox).not.toBeNull()
+    await orcaPage.mouse.click(runtimeCardBox!.x + 28, runtimeCardBox!.y + 16)
+    await expect(orcaPage.getByTestId('architecture-selected-group-editor')).toBeVisible({
+      timeout: 10_000
+    })
+    await expect(orcaPage.getByTestId('architecture-selected-group-name')).toHaveValue('Runtime')
+    await orcaPage.getByTestId('architecture-selected-group-delete').click({ force: true })
+    await expect
+      .poll(() => readPlannedGroups().some((group) => group.id === runtimeBeforeDelete.id), {
+        timeout: 10_000
+      })
+      .toBe(false)
+    await expect(runtimeCard).toHaveCount(0)
   })
 
   test('opens source-map files in the Orca editor and restores the pre-sync model on cancel', async ({
@@ -1101,12 +1110,17 @@ test.describe('Architecture tab live Scryer sync', () => {
       .poll(() => readActiveScryModel().boundaries?.api?.[0], { timeout: 10_000 })
       .toMatchObject({ pattern: 'src/index.ts' })
 
-    await orcaPage
-      .getByTestId('architecture-source-link')
-      .filter({ hasText: 'src/index.ts' })
-      .evaluate((button) => {
-        ;(button as HTMLButtonElement).click()
-      })
+    const shopTreeNode = orcaPage.getByTestId('architecture-tree-node').filter({ hasText: 'Shop' })
+    await expect(shopTreeNode).toBeVisible({ timeout: 10_000 })
+    await shopTreeNode.getByTestId('architecture-tree-drill-node').click({ force: true })
+    await orcaPage.getByTestId('architecture-zoom-fit').click({ force: true })
+    const apiCanvasNode = orcaPage.locator('[data-testid="architecture-node"][data-node-id="api"]')
+    await expect(apiCanvasNode).toBeVisible({ timeout: 10_000 })
+    const apiSourceLink = apiCanvasNode.getByTestId('architecture-source-link').filter({
+      hasText: 'src/index.ts'
+    })
+    await expect(apiSourceLink).toBeVisible({ timeout: 10_000 })
+    await apiSourceLink.click({ force: true })
     await expect
       .poll(async () => orcaPage.locator('.editor-header-path').first().textContent(), {
         timeout: 10_000
@@ -1147,9 +1161,7 @@ test.describe('Architecture tab live Scryer sync', () => {
     await activateArchitectureTab(orcaPage)
     const apiTreeNode = orcaPage.getByTestId('architecture-tree-node').filter({ hasText: 'API' })
     await expect(apiTreeNode).toBeVisible({ timeout: 10_000 })
-    await apiTreeNode.getByTestId('architecture-tree-drill-node').evaluate((button) => {
-      ;(button as HTMLButtonElement).click()
-    })
+    await apiTreeNode.getByTestId('architecture-tree-drill-node').click({ force: true })
     await expect
       .poll(() => readActiveScryModel().nodes?.some((node) => node.id === 'handler') ?? false, {
         timeout: 10_000
@@ -1158,9 +1170,7 @@ test.describe('Architecture tab live Scryer sync', () => {
     const handlerTreeNode = orcaPage
       .getByTestId('architecture-tree-node')
       .filter({ hasText: 'Handler' })
-    await handlerTreeNode.getByTestId('architecture-tree-drill-node').evaluate((button) => {
-      ;(button as HTMLButtonElement).click()
-    })
+    await handlerTreeNode.getByTestId('architecture-tree-drill-node').click({ force: true })
     await expect(orcaPage.getByTestId('architecture-code-level-rack')).toBeVisible({
       timeout: 10_000
     })
@@ -1193,8 +1203,11 @@ test.describe('Architecture tab live Scryer sync', () => {
       )
       .toBe(true)
     await activateArchitectureTab(orcaPage)
+    await closeOpenMenus(orcaPage)
 
-    await orcaPage.getByTestId('architecture-sync-start').click({ force: true })
+    const startSyncButton = orcaPage.getByTestId('architecture-sync-start')
+    await expect(startSyncButton).toBeVisible()
+    await startSyncButton.press('Enter')
     await expect(orcaPage.locator('.xterm:visible').first()).toBeVisible({ timeout: 10_000 })
     await activateArchitectureTab(orcaPage)
     await expect(orcaPage.getByTestId('architecture-add-node')).toBeDisabled()
@@ -1269,7 +1282,10 @@ test.describe('Architecture tab live Scryer sync', () => {
         ? (state?.tabsByWorktree[activeWorktreeId] ?? []).map((tab) => tab.id)
         : []
     })
-    await orcaPage.getByTestId('architecture-sync-start').click({ force: true })
+    await closeOpenMenus(orcaPage)
+    const startSyncButton = orcaPage.getByTestId('architecture-sync-start')
+    await expect(startSyncButton).toBeVisible()
+    await startSyncButton.press('Enter')
     await expect(orcaPage.locator('.xterm:visible').first()).toBeVisible({ timeout: 10_000 })
     await expect
       .poll(
@@ -1353,48 +1369,89 @@ test.describe('Architecture tab live Scryer sync', () => {
       }, worktreeId)
       rmSync(path.join(worktreePath, '.scryer'), { recursive: true, force: true })
 
-      await firstLaunch.page.evaluate(
-        async ({ worktreeId, worktreePath }) => {
-          const store = window.__store
-          if (!store) {
-            throw new Error('store missing')
-          }
-          const state = store.getState()
-          const groupId =
-            state.activeGroupIdByWorktree[worktreeId] ?? state.groupsByWorktree[worktreeId]?.[0]?.id
-          state.createArchitectureTab(worktreeId, {
-            targetGroupId: groupId,
-            projectPath: worktreePath,
-            title: 'Architecture'
-          })
-          await window.api.architecture.executeScryerOperation({
-            projectPath: worktreePath,
-            operationId: 'scryer.model.set',
-            input: {
-              data: {
-                version: '0.3',
-                nodes: [
-                  {
-                    id: 'system',
-                    kind: 'system',
-                    name: 'Restart Shop',
-                    description: 'Persisted architecture'
-                  }
-                ],
-                links: [],
-                groups: [],
-                sourceMap: {},
-                boundaries: {}
-              }
+      await openArchitectureTab(firstLaunch.page)
+      await firstLaunch.page.evaluate(async (worktreePath) => {
+        await window.api.architecture.executeScryerOperation({
+          projectPath: worktreePath,
+          operationId: 'scryer.model.set',
+          input: {
+            data: {
+              version: '0.3',
+              nodes: [
+                {
+                  id: 'system',
+                  kind: 'system',
+                  name: 'Restart Shop',
+                  description: 'Persisted architecture'
+                }
+              ],
+              links: [],
+              groups: [],
+              sourceMap: {},
+              boundaries: {}
             }
-          })
-        },
-        { worktreeId, worktreePath }
-      )
+          }
+        })
+      }, worktreePath)
 
       await expect(firstLaunch.page.getByTestId('architecture-panel')).toBeVisible({
         timeout: 10_000
       })
+      await expect
+        .poll(
+          () =>
+            firstLaunch.page.evaluate(async (worktreeId) => {
+              const session = await window.api.session.get()
+              return {
+                architectureTabCount: session.architectureTabsByWorktree?.[worktreeId]?.length ?? 0,
+                activeArchitectureTabId:
+                  session.activeArchitectureTabIdByWorktree?.[worktreeId] ?? null,
+                unifiedArchitectureTabCount:
+                  session.unifiedTabs?.[worktreeId]?.filter(
+                    (tab) => tab.contentType === 'architecture'
+                  ).length ?? 0,
+                tabGroupCount: session.tabGroups?.[worktreeId]?.length ?? 0,
+                activeGroupId: session.activeGroupIdByWorktree?.[worktreeId] ?? null
+              }
+            }, worktreeId),
+          { timeout: 10_000 }
+        )
+        .toMatchObject({
+          architectureTabCount: 1,
+          activeArchitectureTabId: expect.any(String),
+          unifiedArchitectureTabCount: 1,
+          tabGroupCount: 1,
+          activeGroupId: expect.any(String)
+        })
+
+      const persistedSessionPath = path.join(session.userDataDir, 'orca-data.json')
+      await expect
+        .poll(
+          () => {
+            const persisted = JSON.parse(readFileSync(persistedSessionPath, 'utf8'))
+            const workspaceSession = persisted.workspaceSession ?? {}
+            return {
+              architectureTabCount:
+                workspaceSession.architectureTabsByWorktree?.[worktreeId]?.length ?? 0,
+              activeArchitectureTabId:
+                workspaceSession.activeArchitectureTabIdByWorktree?.[worktreeId] ?? null,
+              unifiedArchitectureTabCount:
+                workspaceSession.unifiedTabs?.[worktreeId]?.filter(
+                  (tab: { contentType?: string }) => tab.contentType === 'architecture'
+                ).length ?? 0,
+              tabGroupCount: workspaceSession.tabGroups?.[worktreeId]?.length ?? 0,
+              activeGroupId: workspaceSession.activeGroupIdByWorktree?.[worktreeId] ?? null
+            }
+          },
+          { timeout: 10_000 }
+        )
+        .toMatchObject({
+          architectureTabCount: 1,
+          activeArchitectureTabId: expect.any(String),
+          unifiedArchitectureTabCount: 1,
+          tabGroupCount: 1,
+          activeGroupId: expect.any(String)
+        })
 
       await session.close(firstApp)
       firstApp = null
@@ -1402,6 +1459,33 @@ test.describe('Architecture tab live Scryer sync', () => {
       const secondLaunch = await session.launch()
       secondApp = secondLaunch.app
       await waitForSessionReady(secondLaunch.page)
+
+      await expect
+        .poll(
+          () =>
+            secondLaunch.page.evaluate(() => {
+              const state = window.__store?.getState()
+              return {
+                activeWorktreeId: state?.activeWorktreeId ?? null,
+                activeTabType: state?.activeTabType ?? null,
+                architectureTabCount: Object.values(state?.architectureTabsByWorktree ?? {}).flat()
+                  .length,
+                unifiedArchitectureTabCount: Object.values(state?.unifiedTabsByWorktree ?? {})
+                  .flat()
+                  .filter((tab) => tab.contentType === 'architecture').length,
+                activeArchitectureTabIdByWorktree: state?.activeArchitectureTabIdByWorktree ?? {},
+                worktreeIds: Object.values(state?.worktreesByRepo ?? {})
+                  .flat()
+                  .map((entry) => entry.id)
+              }
+            }),
+          { timeout: 5_000 }
+        )
+        .toMatchObject({
+          architectureTabCount: 1,
+          unifiedArchitectureTabCount: 1,
+          activeTabType: 'architecture'
+        })
 
       await expect(secondLaunch.page.getByTestId('architecture-panel')).toBeVisible({
         timeout: 10_000

@@ -3,6 +3,7 @@ import { mkdir, open, readFile, rename, rm, unlink, writeFile } from 'fs/promise
 import { existsSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 import { SCRY_VERSION, type ScryModel } from './model'
+import { scryModelSchema } from './schemas'
 import { scryerPaths, type ScryerPaths } from './paths'
 import { ScryerEngineError } from './engine-error'
 import type {
@@ -123,20 +124,23 @@ function parseModel(raw: string, filePath: string): ScryModel {
       }
     )
   }
-  return {
-    version: SCRY_VERSION,
-    nodes: Array.isArray(record.nodes) ? (record.nodes as ScryModel['nodes']) : [],
-    links: Array.isArray(record.links) ? (record.links as ScryModel['links']) : [],
-    groups: Array.isArray(record.groups) ? (record.groups as ScryModel['groups']) : [],
-    sourceMap:
-      typeof record.sourceMap === 'object' && record.sourceMap !== null
-        ? (record.sourceMap as ScryModel['sourceMap'])
-        : {},
-    boundaries:
-      typeof record.boundaries === 'object' && record.boundaries !== null
-        ? (record.boundaries as ScryModel['boundaries'])
-        : {}
+  const parsed = scryModelSchema.safeParse(record)
+  if (!parsed.success) {
+    const fieldErrors = fieldErrorsFromZod(parsed.error)
+    throw new ScryerEngineError(
+      'incompatible_model',
+      `Scryer model at ${filePath} failed schema validation`,
+      {
+        path: filePath,
+        expectedVersion: SCRY_VERSION,
+        reason: hasUnrecognizedKeys(parsed.error) ? 'unknown_fields' : 'invalid_schema',
+        fields: fieldErrors.map((error) => error.path)
+      },
+      false,
+      fieldErrors
+    )
   }
+  return parsed.data
 }
 
 function plannedSeedFromCommitted(committed: ScryModel): ScryModel {
@@ -145,6 +149,44 @@ function plannedSeedFromCommitted(committed: ScryModel): ScryModel {
     sourceMap: {},
     boundaries: {}
   } as ScryModel
+}
+
+function formatZodPath(path: unknown[], key?: string): string {
+  const base = path
+    .map((part) => (typeof part === 'number' ? `[${part}]` : String(part)))
+    .join('.')
+    .replaceAll('.[', '[')
+  return key ? (base ? `${base}.${key}` : key) : base || 'input'
+}
+
+function fieldErrorsFromZod(error: {
+  issues?: unknown
+}): { path: string; message: string; code?: string }[] {
+  const issues = Array.isArray(error.issues)
+    ? (error.issues as { path?: unknown[]; message?: string; code?: string; keys?: string[] }[])
+    : []
+  return issues.flatMap((issue) => {
+    if (issue.code === 'unrecognized_keys' && Array.isArray(issue.keys)) {
+      return issue.keys.map((key) => ({
+        path: formatZodPath(issue.path ?? [], key),
+        message: issue.message ?? 'Unrecognized key',
+        code: issue.code
+      }))
+    }
+    return [
+      {
+        path: formatZodPath(issue.path ?? []),
+        message: issue.message ?? 'Invalid value',
+        ...(issue.code ? { code: issue.code } : {})
+      }
+    ]
+  })
+}
+
+function hasUnrecognizedKeys(error: { issues?: unknown }): boolean {
+  return Array.isArray(error.issues)
+    ? (error.issues as { code?: string }[]).some((issue) => issue.code === 'unrecognized_keys')
+    : false
 }
 
 async function atomicWrite(filePath: string, content: string): Promise<void> {
@@ -302,12 +344,28 @@ export function createScryerStateStore(
       if (existsSync(paths.plannedPath)) {
         return readModelFile(paths.plannedPath, 'planned')
       }
+      if (!existsSync(paths.modelPath)) {
+        return {
+          version: SCRY_VERSION,
+          nodes: [],
+          links: [],
+          groups: [],
+          sourceMap: {},
+          boundaries: {}
+        }
+      }
       return plannedSeedFromCommitted(await this.readCommitted(projectRoot))
     },
     async loadDeclaredState(project, policy) {
       const loaded: ScryerLoadedState = {}
       if (policy.reads.includes('committed')) {
         loaded.committed = await this.readCommitted(project.projectRoot)
+      }
+      if (policy.reads.includes('committed_if_available')) {
+        const paths = scryerPaths(project.projectRoot)
+        if (existsSync(paths.modelPath)) {
+          loaded.committed = await this.readCommitted(project.projectRoot)
+        }
       }
       if (policy.reads.includes('planned')) {
         loaded.planned = policy.semanticWrites.includes('planned')

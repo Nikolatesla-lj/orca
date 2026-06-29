@@ -172,6 +172,7 @@ export type ScryerOperationAuthorizationPolicy = {
 export type ScryerStateRead =
   | 'planned'
   | 'committed'
+  | 'committed_if_available'
   | 'rules'
   | 'project_tree'
   | 'sync'
@@ -279,6 +280,8 @@ export type ModelEditLease = {
   token: string
   owner?: 'agent' | 'human' | 'system'
   agentRunId?: string
+  createdAt?: string
+  expiresAt?: string
 }
 
 export type ScryerSyncState = {
@@ -581,6 +584,8 @@ export type UpdateNodeItem = {
   responsibilities?: ScryModel['nodes'][number]['responsibilities']
   properties?: ScryModel['nodes'][number]['properties']
   visual?: boolean
+  appearance?: ScryModel['nodes'][number]['appearance']
+  notes?: string
   parent_id?: string | null
 }
 
@@ -606,6 +611,18 @@ export type ScryerNodeUpdateResult = {
   pendingSummary?: PendingSummary
 }
 
+export type ScryerNodeDeleteInput = {
+  project?: string
+  node_ids: string[]
+}
+
+export type ScryerNodeDeleteResult = {
+  deletedCount: number
+  deletedLinkCount: number
+  findings?: ScryerValidationFinding[]
+  pendingSummary?: PendingSummary
+}
+
 export type AddLinkItem = {
   src: string
   dst: string
@@ -620,6 +637,23 @@ export type ScryerLinkAddInput = {
 
 export type ScryerLinkAddResult = {
   addedIds: string[]
+  findings?: ScryerValidationFinding[]
+  pendingSummary?: PendingSummary
+}
+
+export type UpdateLinkItem = {
+  link_id: string
+  label?: string
+  method?: string
+}
+
+export type ScryerLinkUpdateInput = {
+  project?: string
+  links: UpdateLinkItem[]
+}
+
+export type ScryerLinkUpdateResult = {
+  updatedCount: number
   findings?: ScryerValidationFinding[]
   pendingSummary?: PendingSummary
 }

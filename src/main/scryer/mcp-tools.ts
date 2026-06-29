@@ -1,4 +1,5 @@
 /* eslint-disable max-lines -- Why: this file is the first TypeScript migration of Scryer's MCP tool surface, kept together so tool semantics and shared validation stay auditable while the bridge is still new. */
+import { readFile } from 'fs/promises'
 import type {
   C4Edge,
   C4Kind,
@@ -16,6 +17,7 @@ import type {
 } from '../../shared/scryer/model-types'
 import { parseModelData } from '../../shared/scryer/parse-model'
 import {
+  getProjectScryerDir,
   getProjectModelPath,
   readBaseline,
   readModel,
@@ -25,6 +27,9 @@ import {
 } from './model-store'
 import { projectStructure } from './structure'
 import { SCRYER_RULES, TASK_INSTRUCTIONS } from '../../shared/scryer/rules'
+import { createScryerEngine, type ScryerOperationId } from './engine'
+
+const defaultScryerEngine = createScryerEngine()
 
 function ok(content: string, data?: unknown): ScryerToolResult {
   return { ok: true, content, data }
@@ -46,6 +51,70 @@ function asStringArray(value: unknown): string[] | undefined {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === 'string')
     : undefined
+}
+
+async function isStrictScryerModel(projectPath: string): Promise<boolean> {
+  const candidates = [
+    `${getProjectScryerDir(projectPath)}/planned.scry`,
+    getProjectModelPath(projectPath)
+  ]
+  for (const candidate of candidates) {
+    try {
+      const raw = JSON.parse(await readFile(candidate, 'utf8')) as unknown
+      if (isRecord(raw) && raw.version === '0.3') {
+        return true
+      }
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return false
+}
+
+async function readMcpCompatibleModel(projectPath: string): Promise<C4ModelData> {
+  const candidates = [
+    `${getProjectScryerDir(projectPath)}/planned.scry`,
+    getProjectModelPath(projectPath)
+  ]
+  for (const candidate of candidates) {
+    try {
+      const raw = await readFile(candidate, 'utf8')
+      const data = JSON.parse(raw) as unknown
+      if (isRecord(data) && data.version === '0.3') {
+        return { ...parseModelData(raw), projectPath }
+      }
+    } catch {
+      // Fall through to the next candidate, then legacy model storage.
+    }
+  }
+  return readModel(projectPath)
+}
+
+function scryerOperationContext(projectPath: string, requestId: string) {
+  return {
+    requestId,
+    transport: 'agent' as const,
+    caller: 'agent' as const,
+    cwd: projectPath,
+    projectRoot: projectPath
+  }
+}
+
+async function executeStrictScryerOperation(
+  projectPath: string,
+  operationId: ScryerOperationId,
+  input: Record<string, unknown>,
+  content: string
+): Promise<ScryerToolResult> {
+  const result = await defaultScryerEngine.executeOperation(
+    operationId,
+    input,
+    scryerOperationContext(projectPath, `mcp-${operationId.replaceAll('.', '-')}-${Date.now()}`)
+  )
+  if (!result.ok) {
+    return fail(result.error.message, result.error)
+  }
+  return ok(content, result.result)
 }
 
 function normalizeContract(value: unknown): Contract | undefined {
@@ -508,6 +577,20 @@ async function setModel(
   if (typeof args.data !== 'string') {
     return fail('set_model requires a JSON string in arguments.data')
   }
+  if (await isStrictScryerModel(projectPath)) {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(args.data) as unknown
+    } catch (error) {
+      return fail(`Invalid model JSON: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    return executeStrictScryerOperation(
+      projectPath,
+      'scryer.model.set',
+      { data: parsed },
+      'Set model'
+    )
+  }
   let model: C4ModelData
   try {
     model = stripPositions(parseModelData(args.data))
@@ -526,7 +609,7 @@ async function getTask(
   projectPath: string,
   args: Record<string, unknown>
 ): Promise<ScryerToolResult> {
-  const model = await readModel(projectPath)
+  const model = await readMcpCompatibleModel(projectPath)
   const scopeId = asString(args.node_id ?? args.nodeId)
 
   const isDescendantOf = (nodeId: string, ancestorId: string): boolean => {
@@ -969,6 +1052,9 @@ async function updateNodes(
   if (!Array.isArray(args.nodes)) {
     return fail('update_nodes requires arguments.nodes')
   }
+  if (await isStrictScryerModel(projectPath)) {
+    return strictUpdateNodes(projectPath, args.nodes)
+  }
   const model = await readModel(projectPath)
   const sourceMap = { ...model.sourceMap }
   const updated: string[] = []
@@ -1066,12 +1152,261 @@ async function updateNodes(
   return ok(`Updated ${updated.length} node(s)`, model)
 }
 
+async function strictUpdateNodes(
+  projectPath: string,
+  updates: unknown[]
+): Promise<ScryerToolResult> {
+  const nodePatches: Record<string, unknown>[] = []
+  const sourceEntries: Record<string, unknown>[] = []
+  const boundaries: Record<string, unknown>[] = []
+  const compatibilityModel = await readMcpCompatibleModel(projectPath)
+
+  for (const update of updates) {
+    if (!isRecord(update) || typeof update.node_id !== 'string') {
+      return fail('Each update_nodes item requires node_id')
+    }
+    const node = compatibilityModel.nodes.find((candidate) => candidate.id === update.node_id)
+    const appearance: Record<string, unknown> = {}
+    const nextContract = normalizeContract(update.contract)
+
+    const patch: Record<string, unknown> = { node_id: update.node_id }
+    if (update.status !== undefined) {
+      if (!node) {
+        return fail(`Node '${update.node_id}' not found`)
+      }
+      if (!isStatus(update.status)) {
+        return fail(`Node '${update.node_id}' has invalid status '${String(update.status)}'`)
+      }
+      const reason = asString(update.reason)?.trim() ?? ''
+      if (!reason) {
+        return fail(`Node '${update.node_id}': reason is required when changing status`)
+      }
+      if (update.status === 'verified') {
+        const unmet = validateVerifiedGate(compatibilityModel, node, nextContract)
+        if (unmet.length > 0) {
+          return fail(
+            `Cannot set '${update.node_id}' to verified. These expect contract items are not yet passed:\n${unmet.join('\n')}`
+          )
+        }
+      }
+      appearance.status = update.status
+      appearance.statusReason = reason
+    }
+    const nextName = asString(update.name)
+    if (nextName !== undefined) {
+      patch.name = nextName
+    }
+    const nextDescription = asString(update.description)
+    if (nextDescription !== undefined) {
+      patch.description = nextDescription
+    }
+    const nextTechnology = asString(update.technology)
+    if (nextTechnology !== undefined) {
+      patch.technology = nextTechnology
+    }
+    if (typeof update.external === 'boolean') {
+      patch.external = update.external
+    }
+    const nextShape = asString(update.shape)
+    if (nextShape !== undefined) {
+      appearance.shape = nextShape
+    }
+    if (nextContract !== undefined) {
+      appearance.contract = nextContract
+    }
+    const notes = asStringArray(update.notes)
+    if (notes !== undefined) {
+      patch.notes = notes.join('\n')
+    }
+    const properties = normalizeProperties(update.properties)
+    if (properties !== undefined) {
+      const error = validatePropertyLabels(properties, `node '${update.node_id}'`)
+      if (error) {
+        return fail(error)
+      }
+      patch.properties = properties
+    }
+    if (Object.keys(appearance).length > 0) {
+      patch.appearance = appearance
+    }
+    if (Object.keys(patch).length > 1) {
+      nodePatches.push(patch)
+    }
+
+    const locations = normalizeSourceLocations(update.source)
+    if (locations !== undefined) {
+      sourceEntries.push({ node_id: update.node_id, locations })
+    }
+    const sources = normalizeSources(update.sources)
+    if (sources !== undefined) {
+      boundaries.push({ node_id: update.node_id, sources })
+    }
+  }
+
+  if (nodePatches.length > 0) {
+    const nodeResult = await defaultScryerEngine.executeOperation(
+      'scryer.node.update',
+      { nodes: nodePatches },
+      scryerOperationContext(projectPath, `mcp-node-update-${Date.now()}`)
+    )
+    if (!nodeResult.ok) {
+      return fail(nodeResult.error.message, nodeResult.error)
+    }
+  }
+
+  if (sourceEntries.length > 0 || boundaries.length > 0) {
+    const sourceResult = await defaultScryerEngine.executeOperation(
+      'scryer.source.update',
+      {
+        ...(sourceEntries.length > 0 ? { entries: sourceEntries } : {}),
+        ...(boundaries.length > 0 ? { boundaries } : {})
+      },
+      scryerOperationContext(projectPath, `mcp-source-update-${Date.now()}`)
+    )
+    if (!sourceResult.ok) {
+      return fail(sourceResult.error.message, sourceResult.error)
+    }
+  }
+
+  return ok(`Updated ${updates.length} node(s)`)
+}
+
+async function strictAddEdges(projectPath: string, edges: unknown[]): Promise<ScryerToolResult> {
+  return executeStrictScryerOperation(
+    projectPath,
+    'scryer.link.add',
+    {
+      links: edges.map((edge) => {
+        if (!isRecord(edge)) {
+          return {}
+        }
+        return {
+          src: edge.source ?? edge.src,
+          dst: edge.target ?? edge.dst,
+          label: edge.label,
+          ...(typeof edge.method === 'string' ? { method: edge.method } : {})
+        }
+      })
+    },
+    `Added ${edges.length} edge(s)`
+  )
+}
+
+async function strictUpdateEdges(projectPath: string, edges: unknown[]): Promise<ScryerToolResult> {
+  const unsupportedEndpointPatch = edges.find(
+    (edge) => isRecord(edge) && (edge.source !== undefined || edge.target !== undefined)
+  )
+  if (unsupportedEndpointPatch) {
+    return fail('update_edges cannot repoint Scryer 0.3 links; delete and add the link instead')
+  }
+  return executeStrictScryerOperation(
+    projectPath,
+    'scryer.link.update',
+    {
+      links: edges.map((edge) => {
+        if (!isRecord(edge)) {
+          return {}
+        }
+        const data = isRecord(edge.data) ? edge.data : {}
+        return {
+          link_id: edge.edge_id ?? edge.link_id ?? edge.id,
+          ...(typeof edge.label === 'string' ? { label: edge.label } : {}),
+          ...(typeof data.label === 'string' ? { label: data.label } : {}),
+          ...(typeof edge.method === 'string' ? { method: edge.method } : {}),
+          ...(typeof data.method === 'string' ? { method: data.method } : {})
+        }
+      })
+    },
+    `Updated ${edges.length} edge(s)`
+  )
+}
+
+async function strictDeleteNodes(
+  projectPath: string,
+  nodeIds: string[]
+): Promise<ScryerToolResult> {
+  return executeStrictScryerOperation(
+    projectPath,
+    'scryer.node.delete',
+    { node_ids: nodeIds },
+    `Deleted ${nodeIds.length} node(s)`
+  )
+}
+
+async function strictDeleteEdges(
+  projectPath: string,
+  linkIds: string[]
+): Promise<ScryerToolResult> {
+  return executeStrictScryerOperation(
+    projectPath,
+    'scryer.link.delete',
+    { link_ids: linkIds },
+    `Deleted ${linkIds.length} edge(s)`
+  )
+}
+
+async function strictUpdateSourceMap(
+  projectPath: string,
+  args: Record<string, unknown>
+): Promise<ScryerToolResult> {
+  if (Array.isArray(args.entries)) {
+    return executeStrictScryerOperation(
+      projectPath,
+      'scryer.source.update',
+      { entries: args.entries },
+      'Updated source map'
+    )
+  }
+  if (isRecord(args.sourceMap)) {
+    return executeStrictScryerOperation(
+      projectPath,
+      'scryer.source.update',
+      {
+        entries: Object.entries(args.sourceMap).map(([nodeId, locations]) => ({
+          node_id: nodeId,
+          locations
+        }))
+      },
+      'Updated source map'
+    )
+  }
+  return fail('update_source_map requires entries')
+}
+
+async function strictSetGroups(projectPath: string, data: string): Promise<ScryerToolResult> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(data)
+  } catch (error) {
+    return fail(`Invalid group JSON: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  const groups = Array.isArray(parsed) ? parsed : [parsed]
+  return executeStrictScryerOperation(
+    projectPath,
+    'scryer.group.set',
+    { data: groups },
+    `Set ${groups.length} group(s)`
+  )
+}
+
+async function strictDeleteGroup(projectPath: string, groupId: string): Promise<ScryerToolResult> {
+  return executeStrictScryerOperation(
+    projectPath,
+    'scryer.group.delete',
+    { group_id: groupId },
+    `Deleted group '${groupId}'`
+  )
+}
+
 async function addNodes(
   projectPath: string,
   args: Record<string, unknown>
 ): Promise<ScryerToolResult> {
   if (!Array.isArray(args.nodes)) {
     return fail('add_nodes requires arguments.nodes')
+  }
+  if (await isStrictScryerModel(projectPath)) {
+    return fail('add_nodes is not supported for Scryer 0.3 models; use intent add operations')
   }
   const model = await readModel(projectPath)
   const added: string[] = []
@@ -1122,6 +1457,9 @@ async function setNode(
   if (!nodeId || typeof args.data !== 'string') {
     return fail('set_node requires node_id and JSON string data')
   }
+  if (await isStrictScryerModel(projectPath)) {
+    return fail('set_node is not supported for Scryer 0.3 models through the compatibility bridge')
+  }
   const model = await readModel(projectPath)
   if (!model.nodes.some((node) => node.id === nodeId)) {
     return fail(`Node '${nodeId}' not found`)
@@ -1170,6 +1508,9 @@ async function addEdges(
   if (!Array.isArray(args.edges)) {
     return fail('add_edges requires arguments.edges')
   }
+  if (await isStrictScryerModel(projectPath)) {
+    return strictAddEdges(projectPath, args.edges)
+  }
   const model = await readModel(projectPath)
   const nodeIds = new Set(model.nodes.map((node) => node.id))
   const added: string[] = []
@@ -1216,6 +1557,9 @@ async function updateEdges(
 ): Promise<ScryerToolResult> {
   if (!Array.isArray(args.edges)) {
     return fail('update_edges requires arguments.edges')
+  }
+  if (await isStrictScryerModel(projectPath)) {
+    return strictUpdateEdges(projectPath, args.edges)
   }
   const model = await readModel(projectPath)
   const edgeById = new Map(model.edges.map((edge) => [edge.id, edge]))
@@ -1424,9 +1768,13 @@ export async function callScryerTool(
     case 'update_nodes':
       return updateNodes(projectPath, call.arguments)
     case 'delete_nodes': {
-      const ids = new Set(
-        (Array.isArray(call.arguments.node_ids) ? call.arguments.node_ids : []).map(String)
+      const nodeIds = (Array.isArray(call.arguments.node_ids) ? call.arguments.node_ids : []).map(
+        String
       )
+      if (await isStrictScryerModel(projectPath)) {
+        return strictDeleteNodes(projectPath, nodeIds)
+      }
+      const ids = new Set(nodeIds)
       const model = await readModel(projectPath)
       const toDelete = new Set<string>()
       for (const id of ids) {
@@ -1448,9 +1796,13 @@ export async function callScryerTool(
     case 'update_edges':
       return updateEdges(projectPath, call.arguments)
     case 'delete_edges': {
-      const ids = new Set(
-        (Array.isArray(call.arguments.edge_ids) ? call.arguments.edge_ids : []).map(String)
+      const edgeIds = (Array.isArray(call.arguments.edge_ids) ? call.arguments.edge_ids : []).map(
+        String
       )
+      if (await isStrictScryerModel(projectPath)) {
+        return strictDeleteEdges(projectPath, edgeIds)
+      }
+      const ids = new Set(edgeIds)
       const model = await readModel(projectPath)
       const missing = [...ids].filter((id) => !model.edges.some((edge) => edge.id === id))
       if (missing.length > 0) {
@@ -1461,6 +1813,9 @@ export async function callScryerTool(
       return ok(`Deleted ${ids.size} edge(s)`, model)
     }
     case 'update_source_map': {
+      if (await isStrictScryerModel(projectPath)) {
+        return strictUpdateSourceMap(projectPath, call.arguments)
+      }
       const model = await readModel(projectPath)
       const sourceMap = { ...model.sourceMap }
       if (Array.isArray(call.arguments.entries)) {
@@ -1491,6 +1846,9 @@ export async function callScryerTool(
       return ok('Updated source map', model)
     }
     case 'set_flows': {
+      if (await isStrictScryerModel(projectPath)) {
+        return fail('set_flows is not supported for Scryer 0.3 Architecture models')
+      }
       if (typeof call.arguments.data !== 'string') {
         return fail('set_flows requires data')
       }
@@ -1516,6 +1874,9 @@ export async function callScryerTool(
       return ok(`Set ${flows.length} flow(s)`, model)
     }
     case 'delete_flow': {
+      if (await isStrictScryerModel(projectPath)) {
+        return fail('delete_flow is not supported for Scryer 0.3 Architecture models')
+      }
       const flowId = String(call.arguments.flow_id ?? '')
       const model = await readModel(projectPath)
       const before = (model.flows ?? []).length
@@ -1530,6 +1891,9 @@ export async function callScryerTool(
     case 'set_groups': {
       if (typeof call.arguments.data !== 'string') {
         return fail('set_groups requires data')
+      }
+      if (await isStrictScryerModel(projectPath)) {
+        return strictSetGroups(projectPath, call.arguments.data)
       }
       let parsed: Group | Group[]
       try {
@@ -1568,6 +1932,9 @@ export async function callScryerTool(
     }
     case 'delete_group': {
       const groupId = String(call.arguments.group_id ?? '')
+      if (await isStrictScryerModel(projectPath)) {
+        return strictDeleteGroup(projectPath, groupId)
+      }
       const model = await readModel(projectPath)
       const before = (model.groups ?? []).length
       model.groups = (model.groups ?? []).filter((group) => group.id !== groupId)

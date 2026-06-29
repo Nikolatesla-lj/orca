@@ -8,8 +8,15 @@ describe('architecture view model adapter', () => {
       version: '0.3',
       layer: 'plan',
       nodes: [
-        { id: 'api', kind: 'system', name: 'API' },
-        { id: 'web', kind: 'container', name: 'Web', parentId: 'api', technology: 'React' }
+        { id: 'api', kind: 'system', name: 'API', appearance: { shape: 'hexagon' } },
+        { id: 'web', kind: 'container', name: 'Web', parentId: 'api', technology: 'React' },
+        {
+          id: 'task',
+          kind: 'symbol',
+          name: 'Task',
+          parentId: 'web',
+          appearance: { symbolKind: 'model' }
+        }
       ],
       links: [{ id: 'link-web-api', src: 'web', dst: 'api', label: 'calls' }],
       groups: [{ id: 'frontend', name: 'Frontend', memberIds: ['web'] }],
@@ -32,7 +39,14 @@ describe('architecture view model adapter', () => {
         { nodeId: 'web', sources: [{ pattern: 'src/web/**', comment: 'owned source boundary' }] }
       ],
       driftIndicators: [],
-      diagnostics: [],
+      diagnostics: [
+        {
+          severity: 'warning',
+          code: 'invalid_hierarchy',
+          message: 'Node web has an invalid parent',
+          path: 'node:web.parentId'
+        }
+      ],
       recommendedNextReads: [],
       summary: { nodeCount: 2, linkCount: 1, groupCount: 1 },
       refresh: { strategy: 'overview' }
@@ -43,11 +57,19 @@ describe('architecture view model adapter', () => {
     expect(model).toMatchObject({
       projectPath: '/repo',
       nodes: [
-        expect.objectContaining({ id: 'api', data: expect.objectContaining({ kind: 'system' }) }),
+        expect.objectContaining({
+          id: 'api',
+          data: expect.objectContaining({ kind: 'system', shape: 'hexagon' })
+        }),
         expect.objectContaining({
           id: 'web',
           parentId: 'api',
           data: expect.objectContaining({ kind: 'container', technology: 'React' })
+        }),
+        expect.objectContaining({
+          id: 'task',
+          parentId: 'web',
+          data: expect.objectContaining({ kind: 'model' })
         })
       ],
       links: [{ id: 'link-web-api', source: 'web', target: 'api', data: { label: 'calls' } }],
@@ -55,6 +77,14 @@ describe('architecture view model adapter', () => {
       sourceMap: { web: [{ pattern: 'src/web.ts' }] },
       boundaries: { web: [{ pattern: 'src/web/**', comment: 'owned source boundary' }] }
     })
+    expect(model.validationWarnings).toEqual([
+      {
+        kind: 'missing-mention',
+        path: 'node:web.parentId',
+        reference: 'invalid_hierarchy',
+        message: 'Node web has an invalid parent'
+      }
+    ])
     expect(model).not.toHaveProperty('edges')
     expect(model).not.toHaveProperty('flows')
   })

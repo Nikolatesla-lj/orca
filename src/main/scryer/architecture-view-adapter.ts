@@ -1,5 +1,6 @@
 import type {
   ArchitectureViewBoundaryRow,
+  ArchitectureViewDiagnostic,
   ArchitectureViewDto,
   ArchitectureViewGroup,
   ArchitectureViewLink,
@@ -15,6 +16,7 @@ import type {
   ScryerReadView
 } from './engine'
 import type { ScryGroup, ScryLink, ScryModel, ScryNode } from './engine/model'
+import { validateModelStructure } from './engine/validators'
 
 export type ArchitectureViewReadInput = {
   projectPath: string
@@ -44,6 +46,7 @@ function nodeDto(node: ScryNode): ArchitectureViewNode {
     ...(node.properties ? { properties: node.properties } : {}),
     ...(node.icon !== undefined ? { icon: node.icon } : {}),
     ...(node.visual !== undefined ? { visual: node.visual } : {}),
+    ...(node.appearance !== undefined ? { appearance: node.appearance } : {}),
     ...(node.notes !== undefined ? { notes: node.notes } : {})
   }
 }
@@ -72,7 +75,7 @@ function groupDto(group: ScryGroup): ArchitectureViewGroup {
 }
 
 function modelFromReadView(view: ScryerReadView): ScryModel | null {
-  return view.fullModel ?? view.model ?? null
+  return (view as ScryerReadView & { fullModel?: ScryModel }).fullModel ?? view.model ?? null
 }
 
 function pathForNode(node: ScryNode, nodesById: Map<string, ScryNode>): string {
@@ -121,6 +124,15 @@ function boundaryRowsFromModel(model: ScryModel): ArchitectureViewBoundaryRow[] 
     .map(([nodeId, sources]) => ({ nodeId, sources }))
 }
 
+function diagnosticsFromModel(model: ScryModel): ArchitectureViewDiagnostic[] {
+  return validateModelStructure(model).map((finding) => ({
+    severity: finding.severity,
+    code: finding.code,
+    message: finding.message,
+    ...(finding.path ? { path: finding.path } : {})
+  }))
+}
+
 function dtoFromModel(
   model: ScryModel,
   view: ScryerReadView,
@@ -149,8 +161,13 @@ function dtoFromModel(
         ...(node.stale !== undefined ? { stale: node.stale } : {}),
         ...(node.vagrant !== undefined ? { vagrant: node.vagrant } : {})
       })),
-    diagnostics: [],
-    recommendedNextReads: view.recommendedNextReads,
+    diagnostics: diagnosticsFromModel(model),
+    recommendedNextReads:
+      (
+        view as ScryerReadView & {
+          recommendedNextReads?: ArchitectureViewDto['recommendedNextReads']
+        }
+      ).recommendedNextReads ?? [],
     ...(selectedNode
       ? {
           selectedDetails: {
@@ -178,9 +195,7 @@ export function createArchitectureViewAdapter(engine: ScryerEngine): Architectur
       const focusNodeId = input.focusNodeId?.trim() || undefined
       const result = await engine.readView(
         {
-          mode: 'full',
-          layer: input.layer ?? 'plan',
-          ...(focusNodeId ? { node_id: focusNodeId } : {})
+          layer: input.layer ?? 'plan'
         },
         {
           ...context,

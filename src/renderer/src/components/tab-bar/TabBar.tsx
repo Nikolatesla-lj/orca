@@ -4,6 +4,7 @@
  * branches share little beyond drag data, so consolidating them would cost
  * more clarity than the ~5 lines of bloat is worth. */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { SortableContext } from '@dnd-kit/sortable'
 import {
   ChevronLeft,
@@ -465,6 +466,7 @@ function TabBarInner({
   // catches the moment focus leaves the renderer (including into a webview).
   const [newTabMenuOpen, setNewTabMenuOpen] = useState(false)
   const [createMenuQuery, setCreateMenuQuery] = useState('')
+  const suppressNewTabMenuOpenRef = useRef(false)
   const pendingNewTabMenuFocusRef = useRef<(() => void) | null>(null)
   const pendingNewTabMenuFocusAnimationRef = useRef<number | null>(null)
   const pendingNewTabMenuFocusRetryRef = useRef<number | null>(null)
@@ -594,7 +596,22 @@ function TabBarInner({
       workspaceHasSimulatorTab
     ]
   )
+  const closeNewTabMenu = (): void => {
+    suppressNewTabMenuOpenRef.current = true
+    flushSync(() => setNewTabMenuOpen(false))
+    requestAnimationFrame(() => {
+      setNewTabMenuOpen(false)
+      suppressNewTabMenuOpenRef.current = false
+    })
+  }
+  const handleNewTabMenuOpenChange = (open: boolean): void => {
+    if (open && suppressNewTabMenuOpenRef.current) {
+      return
+    }
+    setNewTabMenuOpen(open)
+  }
   const handleSelectCreateMenuOption = (option: TabCreateMenuOption): void => {
+    closeNewTabMenu()
     switch (option.kind) {
       case 'new-terminal':
         queueNewActiveTerminalFocusAfterNewTabMenuClose()
@@ -744,7 +761,10 @@ function TabBarInner({
   const newArchitectureMenuItem =
     !terminalOnly && onNewArchitectureTab ? (
       <DropdownMenuItem
-        onSelect={onNewArchitectureTab}
+        onSelect={() => {
+          closeNewTabMenu()
+          onNewArchitectureTab()
+        }}
         className="gap-2 rounded-[7px] px-2 py-1.5 text-[12px] leading-5 font-medium"
       >
         <Network className="size-4 text-muted-foreground" />
@@ -1304,7 +1324,7 @@ function TabBarInner({
       ) : null}
       <DropdownMenu
         open={newTabMenuOpen}
-        onOpenChange={setNewTabMenuOpen}
+        onOpenChange={handleNewTabMenuOpenChange}
         // Why: this menu can stay open after the Mobile Emulator "Hide" action,
         // which shows a toast with a re-enable link; modal would disable body
         // pointer events and make that toast (and other outside UI) unclickable.
@@ -1324,51 +1344,53 @@ function TabBarInner({
             <Plus className="w-3.5 h-3.5" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent
-          align="start"
-          sideOffset={6}
-          className="w-72 max-w-[calc(100vw-1rem)] rounded-[11px] border-border/80 p-1 shadow-[0_16px_36px_rgba(0,0,0,0.24)]"
-          onCloseAutoFocus={(e) => {
-            // Why: terminal-producing menu actions activate a freshly-mounted
-            // xterm. Radix's default focus restore sends focus back to the "+"
-            // trigger after close, stealing it from the new terminal.
-            e.preventDefault()
-            runPendingNewTabMenuFocusAfterClose()
-          }}
-        >
-          {!terminalOnly && onOpenEntry ? (
-            <>
-              <TabBarCreateEntry
-                worktreeId={worktreeId}
-                groupId={resolvedGroupId}
-                menuOpen={newTabMenuOpen}
-                menuOptions={createMenuOptions}
-                agentOptions={agentLaunchOptions}
-                onLaunchAgent={launchAgentFromNewTabEntry}
-                onOpenDefaultTerminal={() => {
-                  queueNewActiveTerminalFocusAfterNewTabMenuClose()
-                  onNewTerminalTab()
-                }}
-                onOpenEntry={onOpenEntry}
-                onQueryChange={setCreateMenuQuery}
-                onSelectMenuOption={handleSelectCreateMenuOption}
-                onDidOpenEntry={() => setNewTabMenuOpen(false)}
-              />
-              {showStaticCreateMenuItems ? <DropdownMenuSeparator /> : null}
-            </>
-          ) : null}
-          {showStaticCreateMenuItems ? standardCreateMenuItems : null}
-          {showStaticCreateMenuItems && showAgentLaunchItems ? (
-            <>
-              <DropdownMenuSeparator />
-              <QuickLaunchAgentMenuItems
-                worktreeId={worktreeId}
-                groupId={resolvedGroupId}
-                onFocusTerminal={queueTerminalTabFocusAfterNewTabMenuClose}
-              />
-            </>
-          ) : null}
-        </DropdownMenuContent>
+        {newTabMenuOpen ? (
+          <DropdownMenuContent
+            align="start"
+            sideOffset={6}
+            className="w-72 max-w-[calc(100vw-1rem)] rounded-[11px] border-border/80 p-1 shadow-[0_16px_36px_rgba(0,0,0,0.24)]"
+            onCloseAutoFocus={(e) => {
+              // Why: terminal-producing menu actions activate a freshly-mounted
+              // xterm. Radix's default focus restore sends focus back to the "+"
+              // trigger after close, stealing it from the new terminal.
+              e.preventDefault()
+              runPendingNewTabMenuFocusAfterClose()
+            }}
+          >
+            {!terminalOnly && onOpenEntry ? (
+              <>
+                <TabBarCreateEntry
+                  worktreeId={worktreeId}
+                  groupId={resolvedGroupId}
+                  menuOpen={newTabMenuOpen}
+                  menuOptions={createMenuOptions}
+                  agentOptions={agentLaunchOptions}
+                  onLaunchAgent={launchAgentFromNewTabEntry}
+                  onOpenDefaultTerminal={() => {
+                    queueNewActiveTerminalFocusAfterNewTabMenuClose()
+                    onNewTerminalTab()
+                  }}
+                  onOpenEntry={onOpenEntry}
+                  onQueryChange={setCreateMenuQuery}
+                  onSelectMenuOption={handleSelectCreateMenuOption}
+                  onDidOpenEntry={closeNewTabMenu}
+                />
+                {showStaticCreateMenuItems ? <DropdownMenuSeparator /> : null}
+              </>
+            ) : null}
+            {showStaticCreateMenuItems ? standardCreateMenuItems : null}
+            {showStaticCreateMenuItems && showAgentLaunchItems ? (
+              <>
+                <DropdownMenuSeparator />
+                <QuickLaunchAgentMenuItems
+                  worktreeId={worktreeId}
+                  groupId={resolvedGroupId}
+                  onFocusTerminal={queueTerminalTabFocusAfterNewTabMenuClose}
+                />
+              </>
+            ) : null}
+          </DropdownMenuContent>
+        ) : null}
       </DropdownMenu>
     </div>
   )

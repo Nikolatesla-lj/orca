@@ -63,6 +63,10 @@ function firstAddedId(envelope: ArchitectureOperationEnvelope | null): string | 
   return typeof id === 'string' ? id : null
 }
 
+function isCodeLevelKind(kind: ArchitectureDiagramKind): boolean {
+  return kind === 'operation' || kind === 'process' || kind === 'model'
+}
+
 type ActiveArchitectureSyncTerminal = {
   projectPath: string
   tabId: string
@@ -364,6 +368,9 @@ export function nodeUpdateInputFromDiagramPatch(
   if (typeof patch.kind === 'string') {
     node.kind = scryerKindForDiagramKind(patch.kind)
   }
+  if ('shape' in patch) {
+    node.appearance = { shape: patch.shape ?? null }
+  }
   return Object.keys(node).length > 1 ? { nodes: [node] } : null
 }
 
@@ -377,6 +384,7 @@ function nodeUpdatesForHistorySnapshot(model: ArchitectureDiagramModel): Record<
     ...(node.data.external !== undefined ? { external: node.data.external } : {}),
     ...(node.data.properties !== undefined ? { properties: node.data.properties } : {}),
     ...(node.data.visual !== undefined ? { visual: node.data.visual } : {}),
+    ...(node.data.shape !== undefined ? { appearance: { shape: node.data.shape } } : {}),
     ...(node.parentId !== undefined ? { parent_id: node.parentId } : {})
   }))
 }
@@ -1243,6 +1251,9 @@ export function useArchitectureModelController({
       if (!target) {
         return
       }
+      const codeLevelPath = isCodeLevelKind(target.data.kind)
+        ? buildAncestorPath(current, nodeId)
+        : null
       const epoch = viewMutationEpochRef.current
       if (
         fingerprintArchitectureModel(current) !==
@@ -1288,6 +1299,15 @@ export function useArchitectureModelController({
         }
         nodeDraftsRef.current.delete(nodeId)
         await loadModel('model')
+        if (codeLevelPath) {
+          setExpandedPath(codeLevelPath)
+          selectedNodeIdRef.current = nodeId
+          selectedEdgeIdRef.current = null
+          setSelectedNodeId(nodeId)
+          setSelectedEdgeId(null)
+          setSelectedGroupId(null)
+          setTotalSelected(1)
+        }
         setMessage(`Saved ${target.data.name}`)
       } catch (patchError) {
         const text = patchError instanceof Error ? patchError.message : String(patchError)
@@ -1559,9 +1579,43 @@ export function useArchitectureModelController({
       if (!current || !currentParent || editingLocked) {
         return
       }
-      setMessage(`${kind} symbols require a source file before they can be added.`)
+      const defaultName =
+        kind === 'model'
+          ? `Model${codeLevelNodes.length + 1}`
+          : `${kind}${codeLevelNodes.length + 1}`
+      try {
+        const result = await executeArchitectureWrite(
+          'scryer.symbol.add',
+          {
+            items: [
+              {
+                parent_id: currentParent.id,
+                name: defaultName,
+                description: '',
+                appearance: { symbolKind: kind },
+                ...(kind === 'model' ? { properties: [] } : {})
+              }
+            ]
+          },
+          `Added ${kind}`
+        )
+        const addedId = firstAddedId(result)
+        setExpandedPath([...buildAncestorPath(current, currentParent.id), currentParent.id])
+        if (addedId) {
+          selectedNodeIdRef.current = addedId
+          setSelectedNodeId(addedId)
+          selectedEdgeIdRef.current = null
+          setSelectedEdgeId(null)
+          setSelectedGroupId(null)
+          setTotalSelected(1)
+        }
+      } catch (addError) {
+        const text = addError instanceof Error ? addError.message : String(addError)
+        setError(text)
+        toast.error(text)
+      }
     },
-    [currentParent, editingLocked]
+    [codeLevelNodes.length, currentParent, editingLocked, executeArchitectureWrite]
   )
 
   const deleteNodeById = useCallback(

@@ -132,4 +132,78 @@ describe('scryer link operations', () => {
     expect(committed.links).toHaveLength(1)
     expect(planned.links).toEqual([])
   })
+
+  it('updates link metadata in planned state without changing committed state', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-engine-link-update-'))
+    await writeModel(projectPath, {
+      version: '0.3',
+      nodes: [
+        { id: 'shop', kind: 'system', name: 'Shop' },
+        { id: 'web', kind: 'container', name: 'Web', parentId: 'shop' },
+        { id: 'api', kind: 'container', name: 'API', parentId: 'shop' }
+      ],
+      links: [{ id: 'link-web-api', src: 'web', dst: 'api', label: 'calls' }],
+      groups: [],
+      sourceMap: {},
+      boundaries: {}
+    })
+
+    const result = await createScryerEngine().executeOperation(
+      'scryer.link.update',
+      { links: [{ link_id: 'link-web-api', label: 'publishes event', method: 'HTTP' }] },
+      testContext(projectPath, 'req-link-update')
+    )
+
+    expect(result).toMatchObject({
+      ok: true,
+      operationId: 'scryer.link.update',
+      requestId: 'req-link-update',
+      result: {
+        updatedCount: 1,
+        pendingSummary: { total: 2 }
+      }
+    })
+
+    const committed = JSON.parse(await readFile(join(projectPath, '.scryer', 'model.scry'), 'utf8'))
+    const planned = JSON.parse(await readFile(join(projectPath, '.scryer', 'planned.scry'), 'utf8'))
+    expect(committed.links).toEqual([
+      { id: 'link-web-api', src: 'web', dst: 'api', label: 'calls' }
+    ])
+    expect(planned.links).toEqual([
+      { id: 'link-web-api', src: 'web', dst: 'api', label: 'publishes event', method: 'HTTP' }
+    ])
+  })
+
+  it('rejects missing links before writing planned state', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-engine-link-update-missing-'))
+    await writeModel(projectPath, {
+      version: '0.3',
+      nodes: [
+        { id: 'shop', kind: 'system', name: 'Shop' },
+        { id: 'web', kind: 'container', name: 'Web', parentId: 'shop' },
+        { id: 'api', kind: 'container', name: 'API', parentId: 'shop' }
+      ],
+      links: [{ id: 'link-web-api', src: 'web', dst: 'api', label: 'calls' }],
+      groups: [],
+      sourceMap: {},
+      boundaries: {}
+    })
+
+    const result = await createScryerEngine().executeOperation(
+      'scryer.link.update',
+      { links: [{ link_id: 'missing-link', label: 'publishes event' }] },
+      testContext(projectPath, 'req-link-update-missing')
+    )
+
+    expect(result).toMatchObject({
+      ok: false,
+      operationId: 'scryer.link.update',
+      requestId: 'req-link-update-missing',
+      error: {
+        code: 'not_found',
+        retryable: false
+      }
+    })
+    await expect(readFile(join(projectPath, '.scryer', 'planned.scry'), 'utf8')).rejects.toThrow()
+  })
 })

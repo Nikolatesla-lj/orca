@@ -65,6 +65,78 @@ describe('parseModelData', () => {
     expect(parsed.flows?.[0].steps.map((step) => step.id)).toEqual(['a', 'b'])
   })
 
+  it('projects strict Scryer 0.3 models into the C4 task view shape', () => {
+    const parsed = parseModelData(
+      JSON.stringify({
+        version: '0.3',
+        nodes: [
+          {
+            id: 'system',
+            kind: 'system',
+            name: 'Issue Tracker',
+            description: 'Tracks issues',
+            appearance: {
+              status: 'proposed',
+              contract: { expect: ['API tests pass'], ask: [], never: ['Store secrets'] }
+            }
+          },
+          {
+            id: 'api',
+            kind: 'container',
+            name: 'API',
+            parentId: 'system',
+            appearance: { status: 'proposed' }
+          },
+          {
+            id: 'service',
+            kind: 'component',
+            name: 'Issue Service',
+            parentId: 'api',
+            appearance: { status: 'proposed' }
+          },
+          {
+            id: 'create-task',
+            kind: 'symbol',
+            name: 'createTask',
+            parentId: 'service',
+            properties: [{ label: 'id', description: 'task id' }],
+            appearance: { symbolKind: 'model', status: 'proposed' }
+          }
+        ],
+        links: [{ id: 'edge-api-service', src: 'api', dst: 'service', label: 'uses' }],
+        groups: [{ id: 'backend', name: 'Backend', memberIds: ['api', 'missing'] }],
+        sourceMap: { service: [{ pattern: 'src/service.ts', line: 2 }] },
+        boundaries: { api: [{ pattern: 'src/api/**/*.ts', comment: 'HTTP handlers' }] }
+      })
+    )
+
+    expect(parsed.nodes.find((node) => node.id === 'system')?.data).toMatchObject({
+      kind: 'system',
+      status: 'proposed',
+      contract: {
+        expect: ['API tests pass'],
+        ask: [],
+        never: ['Store secrets']
+      }
+    })
+    expect(parsed.nodes.find((node) => node.id === 'api')?.data.sources).toEqual([
+      { pattern: 'src/api/**/*.ts', comment: 'HTTP handlers' }
+    ])
+    expect(parsed.nodes.find((node) => node.id === 'create-task')).toMatchObject({
+      type: 'model',
+      data: {
+        kind: 'model',
+        status: 'proposed',
+        properties: [{ label: 'id', description: 'task id' }]
+      }
+    })
+    expect(parsed.edges).toEqual([
+      { id: 'edge-api-service', source: 'api', target: 'service', data: { label: 'uses' } }
+    ])
+    expect(parsed.groups).toEqual([{ id: 'backend', name: 'Backend', memberIds: ['api'] }])
+    expect(parsed.sourceMap).toEqual({ service: [{ pattern: 'src/service.ts', line: 2 }] })
+  })
+
   it('normalizes dirty flow branches, source maps, contracts, groups, and mention warnings', () => {
     const parsed = parseModelData(
       JSON.stringify({

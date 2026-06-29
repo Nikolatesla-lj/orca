@@ -68,6 +68,9 @@ const defaultEdgeOptions: DefaultEdgeOptions = {
   type: 'relationship'
 }
 
+const INITIAL_NODE_WIDTH = 180
+const INITIAL_NODE_HEIGHT = 160
+
 function sourceLocationsForNode(
   model: ArchitectureDiagramModel,
   nodeId: string
@@ -760,6 +763,8 @@ function toFlowNode(
     id: node.id,
     type: node.type ?? 'architecture',
     position: node.position ?? { x: 0, y: 0 },
+    initialWidth: INITIAL_NODE_WIDTH,
+    initialHeight: INITIAL_NODE_HEIGHT,
     dragHandle: '.architecture-node-title',
     data: {
       ...node.data,

@@ -98,6 +98,8 @@ export { createScryerStateStore }
 
 export type {
   CreateScryerEngineOptions,
+  ModelEditLease,
+  PendingSummary,
   ScryerCatalogValidationError,
   ScryerCatalogValidationResult,
   ScryerClock,
@@ -112,6 +114,7 @@ export type {
   ScryerOperationErrorCode,
   ScryerOperationId,
   ScryerOperationResult,
+  ScryerPlanFoldInput,
   ScryerPlanFoldResult,
   ScryerPlanPendingResult,
   ScryerProjectRef,

@@ -2,11 +2,28 @@
 import { errorDetailSchemas, operationSchemas } from './schemas'
 import { modelReadOperation } from './operations/model-read'
 import { modelValidateOperation } from './operations/model-validate'
+import { nodeDeleteOperation } from './operations/node-delete'
 import { nodeUpdateOperation } from './operations/node-update'
 import { linkAddOperation } from './operations/link-add'
 import { linkDeleteOperation } from './operations/link-delete'
+import { linkUpdateOperation } from './operations/link-update'
 import { planPendingOperation } from './operations/plan-pending'
 import { planFoldOperation } from './operations/plan-fold'
+import {
+  componentAddOperation,
+  containerAddOperation,
+  driftGetOperation,
+  driftReconcileOperation,
+  groupAddOperation,
+  groupDeleteOperation,
+  groupSetOperation,
+  groupUpdateOperation,
+  modelSetOperation,
+  personAddOperation,
+  sourceUpdateOperation,
+  symbolAddOperation,
+  systemAddOperation
+} from './operations/structural'
 import { failure } from './operations/helpers'
 import type {
   ScryerCatalogValidationError,
@@ -193,6 +210,18 @@ function metadataFor(
   }
 }
 
+const ADD_OPERATIONS = {
+  person: personAddOperation as ScryerOperationExecutor<unknown, unknown>,
+  system: systemAddOperation as ScryerOperationExecutor<unknown, unknown>,
+  container: containerAddOperation as ScryerOperationExecutor<unknown, unknown>,
+  component: componentAddOperation as ScryerOperationExecutor<unknown, unknown>,
+  group: groupAddOperation as ScryerOperationExecutor<unknown, unknown>,
+  symbol: symbolAddOperation as ScryerOperationExecutor<unknown, unknown>
+} satisfies Record<
+  'person' | 'system' | 'container' | 'component' | 'group' | 'symbol',
+  ScryerOperationExecutor<unknown, unknown>
+>
+
 const ROWS: Row[] = [
   {
     id: 'scryer.model.read',
@@ -201,7 +230,7 @@ const ROWS: Row[] = [
     policy: flatPolicy({
       lock: 'commit_if_writing',
       lease: 'none',
-      reads: ['planned', 'committed'],
+      reads: ['planned', 'committed_if_available'],
       maintenanceWrites: [{ target: 'baseline', mode: 'best_effort' }],
       sideEffects: ['baseline_refresh']
     }),
@@ -293,7 +322,7 @@ const ROWS: Row[] = [
     policy: flatPolicy({
       lock: 'exclusive',
       lease: 'write_if_active',
-      reads: ['committed', 'planned'],
+      reads: ['committed_if_available', 'planned'],
       semanticWrites: ['planned'],
       validation: ['write_guards', 'hierarchy_integrity']
     }),
@@ -308,7 +337,7 @@ const ROWS: Row[] = [
     policy: flatPolicy({
       lock: 'exclusive',
       lease: 'write_if_active',
-      reads: ['committed', 'planned'],
+      reads: ['committed_if_available', 'planned'],
       semanticWrites: ['planned'],
       validation: ['link_legality', 'write_guards']
     }),
@@ -328,7 +357,8 @@ const ROWS: Row[] = [
       validation: ['link_legality', 'write_guards']
     }),
     errors: ['not_found'],
-    upstream: [{ symbol: 'links.rs::update_links' }, { symbol: 'UpdateLinkRequest' }]
+    upstream: [{ symbol: 'links.rs::update_links' }, { symbol: 'UpdateLinkRequest' }],
+    execute: linkUpdateOperation as ScryerOperationExecutor<unknown, unknown>
   },
   {
     id: 'scryer.link.delete',
@@ -337,7 +367,7 @@ const ROWS: Row[] = [
     policy: flatPolicy({
       lock: 'exclusive',
       lease: 'write_if_active',
-      reads: ['committed', 'planned'],
+      reads: ['committed_if_available', 'planned'],
       semanticWrites: ['planned'],
       validation: ['write_guards']
     }),
@@ -370,7 +400,8 @@ const ROWS: Row[] = [
       validation: ['write_guards']
     }),
     errors: ['not_found', 'validation_failed'],
-    upstream: [{ symbol: 'nodes.rs::delete_nodes' }, { symbol: 'DeleteNodeRequest' }]
+    upstream: [{ symbol: 'nodes.rs::delete_nodes' }, { symbol: 'DeleteNodeRequest' }],
+    execute: nodeDeleteOperation as ScryerOperationExecutor<unknown, unknown>
   },
   {
     id: 'scryer.node.move',
@@ -419,7 +450,8 @@ const ROWS: Row[] = [
       validation: ['group_integrity', 'write_guards']
     }),
     errors: ['not_found', 'validation_failed'],
-    upstream: [{ symbol: 'misc.rs::set_groups' }, { symbol: 'SetGroupsRequest' }]
+    upstream: [{ symbol: 'misc.rs::set_groups' }, { symbol: 'SetGroupsRequest' }],
+    execute: groupSetOperation as ScryerOperationExecutor<unknown, unknown>
   },
   {
     id: 'scryer.group.update',
@@ -433,7 +465,8 @@ const ROWS: Row[] = [
       validation: ['group_integrity', 'write_guards']
     }),
     errors: ['not_found', 'validation_failed'],
-    upstream: [{ symbol: 'misc.rs::update_group' }, { symbol: 'UpdateGroupRequest' }]
+    upstream: [{ symbol: 'misc.rs::update_group' }, { symbol: 'UpdateGroupRequest' }],
+    execute: groupUpdateOperation as ScryerOperationExecutor<unknown, unknown>
   },
   {
     id: 'scryer.group.delete',
@@ -447,7 +480,8 @@ const ROWS: Row[] = [
       validation: ['group_integrity', 'write_guards']
     }),
     errors: ['not_found'],
-    upstream: [{ symbol: 'misc.rs::delete_group' }, { symbol: 'DeleteGroupRequest' }]
+    upstream: [{ symbol: 'misc.rs::delete_group' }, { symbol: 'DeleteGroupRequest' }],
+    execute: groupDeleteOperation as ScryerOperationExecutor<unknown, unknown>
   },
   ...(['person', 'system', 'container', 'component', 'group', 'symbol'] as const).map((kind) => ({
     id: `scryer.${kind}.add` as ScryerOperationId,
@@ -467,7 +501,8 @@ const ROWS: Row[] = [
     upstream: [
       { symbol: `intent.rs::add_${kind}` },
       { symbol: `Add${kind[0].toUpperCase()}${kind.slice(1)}Request` }
-    ]
+    ],
+    execute: ADD_OPERATIONS[kind] as ScryerOperationExecutor<unknown, unknown>
   })),
   {
     id: 'scryer.source.update',
@@ -476,12 +511,13 @@ const ROWS: Row[] = [
     policy: flatPolicy({
       lock: 'exclusive',
       lease: 'write_if_active',
-      reads: ['planned', 'committed'],
+      reads: ['committed_if_available', 'planned'],
       semanticWrites: ['planned', 'committed'],
       validation: ['source_mapping_integrity', 'write_guards']
     }),
     errors: ['not_found', 'validation_failed'],
-    upstream: [{ symbol: 'misc.rs::update_source_map' }, { symbol: 'UpdateSourceMapRequest' }]
+    upstream: [{ symbol: 'misc.rs::update_source_map' }, { symbol: 'UpdateSourceMapRequest' }],
+    execute: sourceUpdateOperation as ScryerOperationExecutor<unknown, unknown>
   },
   {
     id: 'scryer.plan.fold',
@@ -503,14 +539,15 @@ const ROWS: Row[] = [
     policy: flatPolicy({
       lock: 'exclusive',
       lease: 'none',
-      reads: ['committed'],
+      reads: [],
       semanticWrites: ['committed', 'planned'],
       maintenanceWrites: [{ target: 'baseline', mode: 'best_effort' }],
       validation: ['structural_warnings', 'write_guards'],
       sideEffects: ['baseline_refresh']
     }),
     errors: ['validation_failed'],
-    upstream: [{ symbol: 'nodes.rs::set_model' }, { symbol: 'SetModelRequest' }]
+    upstream: [{ symbol: 'nodes.rs::set_model' }, { symbol: 'SetModelRequest' }],
+    execute: modelSetOperation as ScryerOperationExecutor<unknown, unknown>
   },
   {
     id: 'scryer.container.fill',
@@ -560,14 +597,15 @@ const ROWS: Row[] = [
     policy: flatPolicy({
       lock: 'commit_if_writing',
       lease: 'none',
-      reads: ['committed', 'sync', 'anchors', 'project_tree'],
+      reads: ['committed_if_available', 'sync', 'anchors', 'project_tree'],
       maintenanceWrites: [
         { target: 'sync', mode: 'best_effort' },
         { target: 'anchor_baseline', mode: 'best_effort' }
       ],
       sideEffects: ['seed_sync_if_absent', 'write_anchor_baseline_if_absent']
     }),
-    upstream: [{ symbol: 'read.rs::get_drift' }, { symbol: 'drift.rs' }]
+    upstream: [{ symbol: 'read.rs::get_drift' }, { symbol: 'drift.rs' }],
+    execute: driftGetOperation as ScryerOperationExecutor<unknown, unknown>
   },
   {
     id: 'scryer.drift.flag',
@@ -607,7 +645,8 @@ const ROWS: Row[] = [
       { symbol: 'intent.rs::reconcile_drift' },
       { symbol: 'ReconcileDriftRequest' },
       { symbol: 'drift.rs' }
-    ]
+    ],
+    execute: driftReconcileOperation as ScryerOperationExecutor<unknown, unknown>
   }
 ]
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ArchitectureWorkspace } from '../../../../shared/types'
+import type { ArchitectureViewError } from '../../../../shared/scryer/architecture-view'
 import { joinPath } from '../../lib/path'
 import { hasRecentArchitectureSelfWrite } from './architecture-self-write-registry'
 import { architectureViewToDiagramModel } from './architecture-view-model'
@@ -57,6 +58,24 @@ export function isActiveArchitectureModelChange(
 
 function isCommittedArchitectureModelChange(fileName: string, activeModelName: string): boolean {
   return fileName === `${sanitizeClientModelName(activeModelName)}.scry`
+}
+
+function architectureViewErrorFields(error: ArchitectureViewError): string[] {
+  const detailFields = error.details?.fields
+  if (Array.isArray(detailFields)) {
+    return detailFields.filter((field): field is string => typeof field === 'string')
+  }
+  return error.fieldErrors?.map((fieldError) => fieldError.path).filter(Boolean) ?? []
+}
+
+export function formatArchitectureViewError(error: ArchitectureViewError): string {
+  if (error.code === 'incompatible_model' && error.details?.reason === 'unknown_fields') {
+    const fields = architectureViewErrorFields(error)
+    return fields.length
+      ? `Scryer model contains unsupported fields: ${fields.join(', ')}`
+      : 'Scryer model contains unsupported fields'
+  }
+  return error.message
 }
 
 export function useArchitectureModelSession({
@@ -120,7 +139,7 @@ export function useArchitectureModelSession({
             revision: result.requestId
           }
         }
-        throw new Error(result.error.message)
+        throw new Error(formatArchitectureViewError(result.error))
       }
       return {
         model: architectureViewToDiagramModel(result.result, projectPath),

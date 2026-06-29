@@ -182,10 +182,13 @@ export const incompatibleModelDetailsSchema = z
     path: z.string(),
     expectedVersion: z.literal('0.3'),
     actualVersion: z.string().optional(),
+    fields: z.array(z.string()).optional(),
     reason: z.union([
       z.literal('missing_version'),
       z.literal('unsupported_version'),
-      z.literal('invalid_json')
+      z.literal('invalid_json'),
+      z.literal('unknown_fields'),
+      z.literal('invalid_schema')
     ])
   })
   .strict()
@@ -360,6 +363,8 @@ export const updateNodeItemSchema = z
     responsibilities: z.array(responsibilitySchema).optional(),
     properties: z.array(propertySchema).optional(),
     visual: z.boolean().optional(),
+    appearance: z.record(z.string(), z.unknown()).optional(),
+    notes: z.string().optional(),
     parent_id: z.string().nullable().optional()
   })
   .strict()

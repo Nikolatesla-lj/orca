@@ -670,6 +670,7 @@ export async function executeCatalogOperation(
         code: error.code,
         message: error.message,
         details: error.details,
+        fieldErrors: error.fieldErrors,
         retryable: error.retryable
       })
     }
