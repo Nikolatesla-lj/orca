@@ -36,6 +36,11 @@ import { isNativeFileDropPayload, type NativeFileDropPayload } from '../../share
 import { requestMobileMarkdownFromRenderer } from './mobile-markdown-request-relay'
 import type { CodexAccountSelectionTarget } from '../codex-accounts/runtime-selection'
 import type { ClaudeAccountSelectionTarget } from '../claude-accounts/runtime-selection'
+import { runWorktreeChangeInvalidators } from '../ipc/worktree-change-invalidators'
+import {
+  scheduleWorktreeBaseDirectoryWatcherSync,
+  setWorktreeBaseDirectoryWatcherSyncContext
+} from '../ipc/worktree-base-directory-watcher'
 
 let appReloadHandlerTokenCounter = 0
 let activeAppReloadHandlerToken: number | null = null
@@ -59,6 +64,9 @@ export function attachMainWindowServices(
   registerAppReloadHandler(mainWindow, options?.onBeforeRendererReload)
   registerRepoHandlers(mainWindow, store)
   registerWorktreeHandlers(mainWindow, store, runtime)
+  // Why: repo/settings mutations resync watchers through this attached main-window context.
+  setWorktreeBaseDirectoryWatcherSyncContext(store, mainWindow)
+  scheduleWorktreeBaseDirectoryWatcherSync(store, mainWindow)
   registerWorkspaceCleanupHandlers(store, { runtime, getLocalPtyProvider })
   registerPtyHandlers(
     mainWindow,
@@ -216,8 +224,12 @@ function registerRuntimeWindowLifecycle(
     }
   }
   runtime.setNotifier({
-    worktreesChanged: (repoId, renamed) =>
-      send('worktrees:changed', renamed ? { repoId, renamed } : { repoId }),
+    worktreesChanged: (repoId, renamed) => {
+      // Why: clear detected-worktree scan caches before renderer listeners
+      // handle this event, preventing stale TTL reads after mutations.
+      runWorktreeChangeInvalidators(repoId)
+      send('worktrees:changed', renamed ? { repoId, renamed } : { repoId })
+    },
     worktreeBaseStatus: (event) => send('worktree:baseStatus', event),
     worktreeRemoteBranchConflict: (event) => send('worktree:remoteBranchConflict', event),
     reposChanged: () => send('repos:changed'),
@@ -241,7 +253,8 @@ function registerRuntimeWindowLifecycle(
         worktreeId,
         command: opts.command,
         ...(opts.env ? { env: opts.env } : {}),
-        title: opts.title
+        title: opts.title,
+        ...(opts.presentation ? { presentation: opts.presentation } : {})
       }),
     revealTerminalSession: (worktreeId, opts) =>
       new Promise((resolve, reject) => {
@@ -275,6 +288,7 @@ function registerRuntimeWindowLifecycle(
           ...(opts.launchToken ? { launchToken: opts.launchToken } : {}),
           ...(opts.launchAgent ? { launchAgent: opts.launchAgent } : {}),
           activate: opts.activate !== false,
+          ...(opts.presentation ? { presentation: opts.presentation } : {}),
           // Why: pre-minted tabId from main keeps the renderer's tab id aligned
           // with the paneKey baked into the PTY env at spawn time, so hook
           // events route to the right slot.

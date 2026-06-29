@@ -24,6 +24,7 @@ import { registerRateLimitHandlers } from './rate-limits'
 import { registerRuntimeHandlers } from './runtime'
 import { registerRuntimeEnvironmentHandlers } from './runtime-environments'
 import { registerAiVaultHandlers } from './ai-vault'
+import { registerNativeChatHandlers } from './native-chat'
 import { registerNotificationHandlers } from './notifications'
 import { registerNotebookHandlers } from './notebook'
 import { registerOnboardingHandlers } from './onboarding'
@@ -44,6 +45,7 @@ import { registerShellHandlers } from './shell'
 import { registerPetHandlers } from './pet'
 import { registerUIHandlers, setTrustedUIRendererWebContentsId } from './ui'
 import { registerEmulatorFrameStreamHandlers } from './emulator-frame-stream'
+import { registerEmulatorVideoStreamHandlers } from './emulator-video-stream'
 import { registerSpeechHandlers } from './speech'
 import { registerCodexAccountHandlers } from './codex-accounts'
 import { registerAgentHookHandlers } from './agent-hooks'
@@ -153,6 +155,7 @@ export function registerCoreHandlers(
   registerSessionHandlers(store)
   registerUIHandlers(store)
   registerEmulatorFrameStreamHandlers()
+  registerEmulatorVideoStreamHandlers()
   registerWorkspaceSpaceHandlers(store)
   registerWorkspacePortHandlers(store)
   if (commitMessageAgentEnv) {
@@ -166,7 +169,8 @@ export function registerCoreHandlers(
   registerAiVaultHandlers({
     getAdditionalCodexHomePaths: lifecycleOptions.getAdditionalAiVaultCodexHomePaths
   })
-  registerClipboardHandlers()
+  registerNativeChatHandlers()
+  registerClipboardHandlers(store)
   registerUpdaterHandlers(store)
   registerSpeechHandlers(store)
 }

@@ -21,6 +21,11 @@ import { recordCreatedTerminalPaneSplit } from './terminal-pane-split-completion
 import { splitTerminalPaneWithInheritedCwd } from './terminal-pane-split-with-inherited-cwd'
 import { useAppStore } from '@/store'
 import { recordTerminalUserInputForLeaf } from './terminal-input-activity'
+import {
+  markTerminalFollowOutput,
+  markTerminalPinnedViewport,
+  syncTerminalScrollIntentFromViewport
+} from '@/lib/pane-manager/terminal-scroll-intent'
 
 export function recordKeyboardCreatedTerminalPaneSplit(
   createdPane: unknown,
@@ -127,6 +132,8 @@ type KeyboardHandlersDeps = {
   onSearchSelectedText: (text: string) => void
   onRequestClosePane: (paneId: number) => void
   onClearPaneScrollback: (pane: ManagedPane) => void
+  onSetTitle: (paneId: number) => void
+  onClearPaneTitle: (paneId: number) => void
   searchOpenRef: React.RefObject<boolean>
   searchStateRef: React.RefObject<SearchState>
   macOptionAsAltRef: React.RefObject<MacOptionAsAlt>
@@ -134,6 +141,11 @@ type KeyboardHandlersDeps = {
   terminalShortcutPolicy?: TerminalShortcutPolicy
 }
 
+/**
+ * Installs terminal-pane shortcuts on the tab keyboard scope.
+ * Uses the shared shortcut policy before forwarding unmatched input to xterm
+ * so configurable Orca actions remain consistent across local and SSH panes.
+ */
 export function useTerminalKeyboardShortcuts({
   tabId,
   isActive,
@@ -152,6 +164,8 @@ export function useTerminalKeyboardShortcuts({
   onSearchSelectedText,
   onRequestClosePane,
   onClearPaneScrollback,
+  onSetTitle,
+  onClearPaneTitle,
   searchOpenRef,
   searchStateRef,
   macOptionAsAltRef,
@@ -314,9 +328,13 @@ export function useTerminalKeyboardShortcuts({
           return
         }
         if (action.position === 'top') {
+          markTerminalPinnedViewport(pane.terminal)
           pane.terminal.scrollToLine(0)
+          syncTerminalScrollIntentFromViewport(pane.terminal)
         } else {
+          markTerminalFollowOutput(pane.terminal)
           pane.terminal.scrollToBottom()
+          syncTerminalScrollIntentFromViewport(pane.terminal)
         }
         return
       }
@@ -377,6 +395,28 @@ export function useTerminalKeyboardShortcuts({
           return
         }
         toggleExpandPane(pane.id)
+        return
+      }
+
+      if (action.type === 'setTitle') {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        const pane = manager.getActivePane() ?? manager.getPanes()[0]
+        if (!pane) {
+          return
+        }
+        onSetTitle(pane.id)
+        return
+      }
+
+      if (action.type === 'clearPaneTitle') {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        const pane = manager.getActivePane() ?? manager.getPanes()[0]
+        if (!pane) {
+          return
+        }
+        onClearPaneTitle(pane.id)
         return
       }
 
@@ -449,6 +489,8 @@ export function useTerminalKeyboardShortcuts({
     onSearchSelectedText,
     onRequestClosePane,
     onClearPaneScrollback,
+    onSetTitle,
+    onClearPaneTitle,
     searchOpenRef,
     searchStateRef,
     macOptionAsAltRef,

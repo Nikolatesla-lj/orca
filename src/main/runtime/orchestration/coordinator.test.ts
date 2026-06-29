@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- Why: coordinator tests cover dispatch, DAG ordering, escalation, decision gates, concurrency, and stop — splitting by category would scatter shared setup without improving clarity. */
 import { afterEach, describe, expect, it } from 'vitest'
 import { OrchestrationDb } from './db'
+import { reconcileLifecycleMessage } from './lifecycle-reconciliation'
 import {
   Coordinator,
   DISPATCH_STALE_THRESHOLD,
@@ -20,6 +21,7 @@ function createMockRuntime(): CoordinatorRuntime & {
   createdTerminals: string[]
   listTerminalCalls: (string | undefined)[]
   createTerminalCalls: { worktree?: string; title?: string }[]
+  createdTerminalOptions: { title?: string }[]
   probeDriftCalls: string[]
   probeDriftResult: DriftResult
   setProbeDrift(result: DriftResult): void
@@ -36,6 +38,7 @@ function createMockRuntime(): CoordinatorRuntime & {
     createdTerminals: [] as string[],
     listTerminalCalls: [] as (string | undefined)[],
     createTerminalCalls: [] as { worktree?: string; title?: string }[],
+    createdTerminalOptions: [] as { title?: string }[],
     probeDriftCalls: [] as string[],
     probeDriftResult: null as DriftResult,
     throwProbeDrift: null as Error | null,
@@ -62,6 +65,7 @@ function createMockRuntime(): CoordinatorRuntime & {
       const handle = `term_worker_${mock.createdTerminals.length}`
       mock.createdTerminals.push(handle)
       mock.createTerminalCalls.push({ worktree, title: opts?.title })
+      mock.createdTerminalOptions.push(opts ?? {})
       const worktreeId = worktree?.startsWith('id:') ? worktree.slice(3) : 'wt1'
       mock.terminals.push({ handle, worktreeId, connected: true, writable: true })
       return { handle, worktreeId, title: opts?.title ?? '' }
@@ -156,6 +160,68 @@ describe('Coordinator', () => {
     expect(runtime.sentMessages.length).toBeGreaterThan(0)
   })
 
+  it('records completedTasks when send reconciled worker_done before coordinator read', async () => {
+    db = new OrchestrationDb(':memory:')
+    const runtime = createMockRuntime()
+
+    const task = db.createTask({ spec: 'send-driven completion' })
+    const dispatch = db.createDispatchContext(task.id, 'term_a')
+    const msg = db.insertMessage({
+      from: 'term_a',
+      to: 'coord',
+      subject: 'Done',
+      type: 'worker_done',
+      payload: JSON.stringify({ taskId: task.id, dispatchId: dispatch.id })
+    })
+
+    reconcileLifecycleMessage(db, msg)
+
+    const coordinator = new Coordinator(db, runtime, {
+      spec: 'go',
+      coordinatorHandle: 'coord',
+      pollIntervalMs: 20
+    })
+    const result = await coordinator.run()
+
+    expect(result.status).toBe('completed')
+    expect(result.completedTasks).toContain(task.id)
+  })
+
+  it('does not duplicate completedTasks for repeated completed worker_done messages', async () => {
+    db = new OrchestrationDb(':memory:')
+    const runtime = createMockRuntime()
+
+    const task = db.createTask({ spec: 'duplicate completion' })
+    const dispatch = db.createDispatchContext(task.id, 'term_a')
+    const payload = JSON.stringify({ taskId: task.id, dispatchId: dispatch.id })
+    const first = db.insertMessage({
+      from: 'term_a',
+      to: 'coord',
+      subject: 'Done',
+      type: 'worker_done',
+      payload
+    })
+    db.insertMessage({
+      from: 'term_a',
+      to: 'coord',
+      subject: 'Done again',
+      type: 'worker_done',
+      payload
+    })
+
+    reconcileLifecycleMessage(db, first)
+
+    const coordinator = new Coordinator(db, runtime, {
+      spec: 'go',
+      coordinatorHandle: 'coord',
+      pollIntervalMs: 20
+    })
+    const result = await coordinator.run()
+
+    expect(result.status).toBe('completed')
+    expect(result.completedTasks.filter((id) => id === task.id)).toHaveLength(1)
+  })
+
   it('creates a terminal when none are available', async () => {
     db = new OrchestrationDb(':memory:')
     const runtime = createMockRuntime()
@@ -175,6 +241,7 @@ describe('Coordinator', () => {
     })
 
     expect(runtime.createdTerminals.length).toBe(1)
+    expect(runtime.createdTerminalOptions[0]).not.toHaveProperty('presentation')
 
     // Complete the task
     insertWorkerDone(db, { taskId: task.id, from: runtime.createdTerminals[0] })

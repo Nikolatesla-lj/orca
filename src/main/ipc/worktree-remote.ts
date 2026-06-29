@@ -57,6 +57,7 @@ import type { SshGitProvider } from '../providers/ssh-git-provider'
 import { TUI_AGENT_CONFIG, isTuiAgent } from '../../shared/tui-agent-config'
 import { isWindowsAbsolutePathLike } from '../../shared/cross-platform-path'
 import { getSshGitUsername } from '../git/git-username'
+import { runWorktreeChangeInvalidators } from './worktree-change-invalidators'
 
 type CreateWorktreeArgsWithSystemProvenance = CreateWorktreeArgs & {
   automationProvenance?: AutomationWorkspaceProvenance
@@ -92,7 +93,12 @@ import { createWorktreeLinkedPaths } from './worktree-symlinks'
 import { normalizeSparseDirectories } from './sparse-checkout-directories'
 import { joinWorktreeRelativePath } from '../runtime/runtime-relative-paths'
 import type { IFilesystemProvider } from '../providers/types'
-import { buildSetupRunnerCommand } from '../../shared/setup-runner-command'
+import {
+  buildSetupRunnerCommand,
+  getSetupRunnerCommandPlatformForPath
+} from '../../shared/setup-runner-command'
+import { createSequencedSetupAgentCommands } from '../../shared/setup-agent-sequencing'
+import { shouldWaitForSetupBeforeAgentStartup } from '../../shared/setup-agent-startup-policy'
 import { createWorktreeCreateTimingRecorder } from '../worktree-create-timing'
 import {
   markCodexProjectTrusted,
@@ -121,6 +127,7 @@ type RemoteWorktreeCreateBasePlan = {
 
 type StagedStartupResult = {
   startupTerminal?: CreateWorktreeResult['startupTerminal']
+  activationSetup?: CreateWorktreeResult['setup']
   didSpawnSetup: boolean
   warning?: string
 }
@@ -229,6 +236,26 @@ async function spawnLocalStartupAndSetupTerminals(args: {
   let startupTerminalHandle: string | null = null
   let startupTerminal: CreateWorktreeResult['startupTerminal']
 
+  let sequencedStartup = startup
+  let wrappedSetupCommandStr: string | undefined
+  if (startup && setup?.waitForAgentStartup === true) {
+    const platform = getSetupRunnerCommandPlatformForPath(
+      setup.runnerScriptPath,
+      process.platform === 'win32' ? 'windows' : 'posix'
+    )
+    const sequenced = createSequencedSetupAgentCommands({
+      runnerScriptPath: setup.runnerScriptPath,
+      startupCommand: startup.command,
+      platform
+    })
+    sequencedStartup = {
+      ...startup,
+      command: sequenced.startupCommand,
+      ...(sequenced.startupEnv ? { env: { ...startup.env, ...sequenced.startupEnv } } : {})
+    }
+    wrappedSetupCommandStr = sequenced.setupCommand
+  }
+
   try {
     // Why: after `git worktree add` and metadata registration, a runtime-owned
     // PTY can begin booting the selected agent while setup runs in a sibling
@@ -248,12 +275,13 @@ async function spawnLocalStartupAndSetupTerminals(args: {
       }
     }
     const terminal = await runtime.createTerminal(`id:${worktree.id}`, {
-      command: startup.command,
-      env: startup.env,
-      ...(startup.launchConfig ? { launchConfig: startup.launchConfig } : {}),
+      command: sequencedStartup.command,
+      ...(setup ? { claudeAgentTeamsSourceCommand: startup.command } : {}),
+      env: sequencedStartup.env,
+      ...(sequencedStartup.launchConfig ? { launchConfig: sequencedStartup.launchConfig } : {}),
       ...(isTuiAgent(createdWithAgent) ? { launchAgent: createdWithAgent } : {}),
-      startupCommandDelivery: startup.startupCommandDelivery,
-      telemetry: startup.telemetry,
+      startupCommandDelivery: sequencedStartup.startupCommandDelivery,
+      telemetry: sequencedStartup.telemetry,
       activate: true
     })
     startupTerminalHandle = terminal.handle
@@ -271,10 +299,15 @@ async function spawnLocalStartupAndSetupTerminals(args: {
   let didSpawnSetup = false
   if (setup) {
     try {
-      const setupCommand = buildSetupRunnerCommand(
-        setup.runnerScriptPath,
-        process.platform === 'win32' ? 'windows' : 'posix'
-      )
+      const setupCommand =
+        wrappedSetupCommandStr ??
+        buildSetupRunnerCommand(
+          setup.runnerScriptPath,
+          getSetupRunnerCommandPlatformForPath(
+            setup.runnerScriptPath,
+            process.platform === 'win32' ? 'windows' : 'posix'
+          )
+        )
       const setupLaunchMode =
         (settings as Partial<Pick<GlobalSettings, 'setupScriptLaunchMode'>>)
           .setupScriptLaunchMode ?? 'new-tab'
@@ -306,6 +339,16 @@ async function spawnLocalStartupAndSetupTerminals(args: {
   }
 
   return {
+    ...(setup && !didSpawnSetup
+      ? {
+          activationSetup: {
+            ...setup,
+            ...(startupTerminalHandle && wrappedSetupCommandStr
+              ? { command: wrappedSetupCommandStr }
+              : {})
+          }
+        }
+      : {}),
     ...(startupTerminal ? { startupTerminal } : {}),
     didSpawnSetup,
     ...(warning ? { warning } : {})
@@ -1071,7 +1114,10 @@ async function createRemoteSetupRunnerScript(
   )
   return {
     runnerScriptPath,
-    envVars: getSetupRunnerEnvVars(repo, worktreePath)
+    envVars: getSetupRunnerEnvVars(repo, worktreePath),
+    ...(shouldWaitForSetupBeforeAgentStartup(repo.hookSettings?.setupAgentStartupPolicy)
+      ? { waitForAgentStartup: true }
+      : {})
   }
 }
 
@@ -1328,6 +1374,9 @@ async function getRemoteLocalBaseRefUpdateSuggestionForWorktreeCreate(
 }
 
 export function notifyWorktreesChanged(mainWindow: BrowserWindow, repoId: string): void {
+  // Why: invalidate detected-worktree caches before renderer observers react,
+  // so follow-up listDetected reads post-change state.
+  runWorktreeChangeInvalidators(repoId)
   if (!mainWindow.isDestroyed()) {
     mainWindow.webContents.send('worktrees:changed', { repoId })
   }
@@ -2386,7 +2435,11 @@ export async function createLocalWorktree(
   return {
     worktree: { ...worktree, workspaceLineage },
     ...(workspaceLineage ? { workspaceLineage } : {}),
-    ...(setup && !stagedStartup.didSpawnSetup ? { setup } : {}),
+    ...(stagedStartup.activationSetup
+      ? { setup: stagedStartup.activationSetup }
+      : setup && !stagedStartup.didSpawnSetup
+        ? { setup }
+        : {}),
     ...(defaultTabs ? { defaultTabs } : {}),
     ...(addResult.localBaseRefRefresh
       ? { localBaseRefRefresh: addResult.localBaseRefRefresh }

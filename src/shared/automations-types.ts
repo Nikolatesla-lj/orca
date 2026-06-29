@@ -1,4 +1,4 @@
-import type { TuiAgent } from './types'
+import type { SetupDecision, TuiAgent } from './types'
 import type { TaskSourceContext, WorkspaceRunContext } from './task-source-context'
 
 export type AutomationWorkspaceMode = 'existing' | 'new_per_run'
@@ -111,6 +111,7 @@ export type Automation = {
   workspaceMode: AutomationWorkspaceMode
   workspaceId: string | null
   baseBranch: string | null
+  setupDecision?: SetupDecision
   reuseSession: boolean
   timezone: string
   rrule: string
@@ -141,6 +142,10 @@ export type AutomationRun = {
   chatSessionId: string | null
   terminalSessionId: string | null
   pipelineRunId?: string | null
+  /** Why: a terminal tab can later point at a different pane/PTY. Automation
+   *  run reopening must target the pane that actually executed the run. */
+  terminalPaneKey: string | null
+  terminalPtyId: string | null
   outputSnapshot: AutomationRunOutputSnapshot | null
   precheckResult: AutomationPrecheckResult | null
   usage: AutomationRunUsage | null
@@ -164,6 +169,7 @@ export type AutomationCreateInput = {
   workspaceMode: AutomationWorkspaceMode
   workspaceId?: string | null
   baseBranch?: string | null
+  setupDecision?: SetupDecision
   reuseSession?: boolean
   timezone: string
   rrule: string
@@ -186,6 +192,7 @@ export type AutomationUpdateInput = Partial<
     | 'workspaceMode'
     | 'workspaceId'
     | 'baseBranch'
+    | 'setupDecision'
     | 'reuseSession'
     | 'timezone'
     | 'rrule'
@@ -208,6 +215,8 @@ export type AutomationDispatchResult = {
   workspaceDisplayName?: string | null
   terminalSessionId?: string | null
   pipelineRunId?: string | null
+  terminalPaneKey?: string | null
+  terminalPtyId?: string | null
   outputSnapshot?: AutomationRunOutputSnapshot | null
   precheckResult?: AutomationPrecheckResult | null
   usage?: AutomationRunUsage | null
