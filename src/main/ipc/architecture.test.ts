@@ -531,6 +531,51 @@ describe('registerArchitectureHandlers', () => {
     })
   })
 
+  it('forwards #31 read operation envelopes through generic IPC without write notifications', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-read-ops-'))
+    await mkdir(join(projectPath, '.scryer'), { recursive: true })
+    await writeFile(
+      join(projectPath, '.scryer', 'model.scry'),
+      JSON.stringify({
+        version: '0.3',
+        nodes: [
+          { id: 'shop', kind: 'system', name: 'Shop' },
+          { id: 'api', kind: 'container', name: 'API', parentId: 'shop' }
+        ],
+        links: [],
+        groups: [],
+        sourceMap: {},
+        boundaries: {}
+      }),
+      'utf8'
+    )
+    await writeFile(join(projectPath, 'package.json'), '{"name":"fixture"}\n', 'utf8')
+    const send = vi.fn()
+    const calls = [
+      ['scryer.model.read', { view: 'overview' }],
+      ['scryer.model.search', { query: 'api' }],
+      ['scryer.model.query', { where: [{ field: 'kind', op: 'eq', value: 'container' }] }],
+      ['scryer.rules.read', {}],
+      ['scryer.codebase.read', { maxDepth: 1 }]
+    ] as const
+
+    for (const [operationId, input] of calls) {
+      await expect(
+        handlers.get('architecture:executeScryerOperation')!(
+          { sender: { send } },
+          {
+            projectPath,
+            operationId,
+            requestId: `ipc-${operationId}`,
+            input
+          }
+        )
+      ).resolves.toMatchObject({ ok: true, operationId })
+    }
+
+    expect(send).not.toHaveBeenCalled()
+  })
+
   it('covers focused person.add API wiring through IPC', async () => {
     const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-person-add-'))
     const send = vi.fn()

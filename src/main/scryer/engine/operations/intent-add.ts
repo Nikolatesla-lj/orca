@@ -1,7 +1,7 @@
 import type { ScryGroup, ScryKind, ScryModel, ScryNode } from '../model'
 import type { ScryerOperationExecutor } from '../types'
 import { diffModels, summarizePending } from '../diff'
-import { success } from './helpers'
+import { success } from './operation-result'
 import {
   cloneModel,
   plannedOrFailure,

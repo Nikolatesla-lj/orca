@@ -394,7 +394,12 @@ async function readModelForPrompt(
   if (!isDefaultModelName(modelName, deps)) {
     return deps.readModel(projectPath, modelName)
   }
-  const view = await readViewWithLockRetry(deps, { layer: 'plan' }, projectPath, requestIdPrefix)
+  const view = await readViewWithLockRetry(
+    deps,
+    { layer: 'plan', view: 'full' },
+    projectPath,
+    requestIdPrefix
+  )
   if (!view.ok) {
     throw new Error(view.error.message)
   }
@@ -518,7 +523,7 @@ export function registerArchitectureHandlers(
       }
       const view = await readViewWithLockRetry(
         deps,
-        { layer: 'committed' },
+        { layer: 'committed', view: 'full' },
         args.projectPath,
         'ipc-read'
       )
@@ -546,7 +551,7 @@ export function registerArchitectureHandlers(
       }
       const view = await readViewWithLockRetry(
         deps,
-        { layer: 'committed' },
+        { layer: 'committed', view: 'full' },
         args.projectPath,
         'ipc-read-document'
       )
@@ -637,7 +642,7 @@ export function registerArchitectureHandlers(
           throw new Error(result.error.message)
         }
         const view = await deps.scryerEngine.readView(
-          { layer: 'plan' },
+          { layer: 'plan', view: 'full' },
           contextForEngine(args.projectPath, 'ipc-read')
         )
         if (!view.ok) {
@@ -689,7 +694,7 @@ export function registerArchitectureHandlers(
         )
         const view = await readViewWithLockRetry(
           deps,
-          { layer: 'committed' },
+          { layer: 'committed', view: 'full' },
           args.projectPath,
           'ipc-create-model'
         )

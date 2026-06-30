@@ -5,7 +5,12 @@ import type {
   ScryerOperationResult
 } from '../../main/scryer/engine'
 import type { CommandHandler, HandlerContext } from '../dispatch'
-import { getOptionalStringFlag, getRequiredStringFlag } from '../flags'
+import {
+  getOptionalNonNegativeIntegerFlag,
+  getOptionalPositiveIntegerFlag,
+  getOptionalStringFlag,
+  getRequiredStringFlag
+} from '../flags'
 import { RuntimeClientError } from '../runtime-client'
 
 function operationContext(ctx: HandlerContext): ScryerOperationContext {
@@ -96,10 +101,37 @@ async function complexInput(ctx: HandlerContext): Promise<Record<string, unknown
 
 export const SCRYER_HANDLERS: Record<string, CommandHandler> = {
   'scryer model read': async (ctx) => {
+    const full = ctx.flags.get('full') === true
+    const view = full ? 'full' : getOptionalStringFlag(ctx.flags, 'view')
     await execute(ctx, 'scryer.model.read', {
       project: getOptionalStringFlag(ctx.flags, 'project'),
+      view,
       node: getOptionalStringFlag(ctx.flags, 'node'),
       layer: getOptionalStringFlag(ctx.flags, 'layer')
+    })
+  },
+  'scryer model search': async (ctx) => {
+    await execute(ctx, 'scryer.model.search', {
+      project: getOptionalStringFlag(ctx.flags, 'project'),
+      query: getRequiredStringFlag(ctx.flags, 'query'),
+      kind: getOptionalStringFlag(ctx.flags, 'kind'),
+      layer: getOptionalStringFlag(ctx.flags, 'layer')
+    })
+  },
+  'scryer model query': async (ctx) => {
+    await execute(ctx, 'scryer.model.query', await complexInput(ctx))
+  },
+  'scryer rules read': async (ctx) => {
+    await execute(ctx, 'scryer.rules.read', {
+      topic: getOptionalStringFlag(ctx.flags, 'topic')
+    })
+  },
+  'scryer codebase read': async (ctx) => {
+    await execute(ctx, 'scryer.codebase.read', {
+      project: getOptionalStringFlag(ctx.flags, 'project'),
+      path: getOptionalStringFlag(ctx.flags, 'path'),
+      maxDepth: getOptionalNonNegativeIntegerFlag(ctx.flags, 'max-depth'),
+      maxEntries: getOptionalPositiveIntegerFlag(ctx.flags, 'max-entries')
     })
   },
   'scryer model validate': async (ctx) => {

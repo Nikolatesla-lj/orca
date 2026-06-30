@@ -5,7 +5,7 @@ import type {
   ScryerOperationExecutor
 } from '../types'
 import { diffModels, summarizePending } from '../diff'
-import { failure, success } from './helpers'
+import { failure, success } from './operation-result'
 
 function isScryKind(value: string): value is ScryKind {
   return (

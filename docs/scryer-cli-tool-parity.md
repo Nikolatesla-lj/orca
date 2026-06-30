@@ -125,14 +125,17 @@ an explicit import command outside normal runtime behavior.
 ### Current implementation status
 
 This parity map is the target behavior map, not a claim that every row is
-executable today. Current code registers the 33-operation catalog contract, but
-full executable parity is still split across decision map #31-#35. The current
-Architecture product slice release gate was closed by #36 and is documented in
+executable today. Current code registers the 33-operation catalog contract, and
+#31 has completed the read surface. Remaining full executable parity continues
+through decision map #32-#35. The current Architecture product slice release gate
+was closed by #36 and is documented in
 `docs/orca-scryer-architecture-slice-audit.md`.
 
-Executable in the current Architecture product slice:
+Executable in the current Architecture product and read-surface slices:
 
-- `scryer.model.read`, `scryer.model.validate`
+- `scryer.model.read`, `scryer.model.search`, `scryer.model.query`,
+  `scryer.model.validate`
+- `scryer.rules.read`, `scryer.codebase.read`
 - `scryer.plan.pending`, `scryer.plan.fold`, `scryer.model.set`
 - `scryer.node.update`, `scryer.node.delete`
 - `scryer.link.add`, `scryer.link.update`, `scryer.link.delete`
@@ -145,9 +148,6 @@ Executable in the current Architecture product slice:
 
 Catalog-only operations still needing executors:
 
-- #31 read surface: `scryer.model.search`, `scryer.model.query`,
-  `scryer.rules.read`, `scryer.codebase.read`; the #31 implementation slice
-  also tightens `scryer.model.read` into the formal read surface
 - #32 structural mutation: `scryer.node.set-subtree`, `scryer.node.move`,
   `scryer.responsibility.move`, `scryer.node.descope`
 - #33 health/drift record: `scryer.model.health`, `scryer.drift.flag`
@@ -156,7 +156,7 @@ Catalog-only operations still needing executors:
 
 ### #31 read surface implementation target
 
-#31 is the next implementation target for the read surface. It covers
+#31 is the completed implementation target for the read surface. It covers
 `scryer.model.read`, `scryer.model.search`, `scryer.model.query`,
 `scryer.rules.read`, and `scryer.codebase.read` through engine executors,
 strict schemas, Orca CLI commands, and tests. It does not add new Architecture
@@ -726,7 +726,7 @@ outside the contract.
    - Route product write actions through `engine.executeOperation(...)`; use
      `engine.readView(...)` for render data.
 
-5. Implement remaining read/query operations.
+5. Implement read/query operations. Completed by #31.
    - `scryer.model.search`, `scryer.model.query`, `scryer.rules.read`,
      `scryer.codebase.read`.
 

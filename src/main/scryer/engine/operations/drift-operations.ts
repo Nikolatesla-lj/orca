@@ -5,7 +5,7 @@ import type { ScryModel } from '../model'
 import { scryModelSchema } from '../schemas'
 import type { ScryerOperationExecutor } from '../types'
 import { scryerPaths } from '../paths'
-import { success } from './helpers'
+import { success } from './operation-result'
 import type { RecordInput } from './structural-input'
 
 const DRIFT_SKIP_DIRS = new Set([

@@ -1,9 +1,13 @@
 /* eslint-disable max-lines -- Why: the catalog is the executable 33-operation contract matrix; keeping policy rows together makes coverage and parity review auditable. */
 import { errorDetailSchemas, operationSchemas } from './schemas'
+import { codebaseReadOperation } from './operations/codebase-read'
 import { modelReadOperation } from './operations/model-read'
+import { modelSearchOperation } from './operations/model-search'
+import { modelQueryOperation } from './operations/model-query'
 import { modelValidateOperation } from './operations/model-validate'
 import { nodeDeleteOperation } from './operations/node-delete'
 import { nodeUpdateOperation } from './operations/node-update'
+import { rulesReadOperation } from './operations/rules-read'
 import { linkAddOperation } from './operations/link-add'
 import { linkDeleteOperation } from './operations/link-delete'
 import { linkUpdateOperation } from './operations/link-update'
@@ -24,7 +28,7 @@ import {
   symbolAddOperation,
   systemAddOperation
 } from './operations/structural'
-import { failure } from './operations/helpers'
+import { failure } from './operations/operation-result'
 import type {
   ScryerCatalogValidationError,
   ScryerCatalogValidationResult,
@@ -234,7 +238,7 @@ const ROWS: Row[] = [
       maintenanceWrites: [{ target: 'baseline', mode: 'best_effort' }],
       sideEffects: ['baseline_refresh']
     }),
-    errors: ['not_found'],
+    errors: ['invalid_input', 'incompatible_model', 'io_error', 'internal_error', 'not_found'],
     upstream: [{ symbol: 'read.rs::read_model' }, { symbol: 'ReadModelRequest' }],
     execute: modelReadOperation as ScryerOperationExecutor<unknown, unknown>
   },
@@ -243,29 +247,36 @@ const ROWS: Row[] = [
     capability: 'read',
     risk: 'normal',
     policy: flatPolicy({ lock: 'none', lease: 'none', reads: ['planned', 'committed'] }),
-    upstream: [{ symbol: 'read.rs::search_model' }, { symbol: 'SearchModelRequest' }]
+    errors: ['invalid_input', 'incompatible_model', 'io_error', 'internal_error'],
+    upstream: [{ symbol: 'read.rs::search_model' }, { symbol: 'SearchModelRequest' }],
+    execute: modelSearchOperation as ScryerOperationExecutor<unknown, unknown>
   },
   {
     id: 'scryer.model.query',
     capability: 'read',
     risk: 'normal',
     policy: flatPolicy({ lock: 'none', lease: 'none', reads: ['planned', 'committed'] }),
-    errors: ['not_found'],
-    upstream: [{ symbol: 'read.rs::query_model' }, { symbol: 'QueryModelRequest' }]
+    errors: ['invalid_input', 'incompatible_model', 'io_error', 'internal_error', 'not_found'],
+    upstream: [{ symbol: 'read.rs::query_model' }, { symbol: 'QueryModelRequest' }],
+    execute: modelQueryOperation as ScryerOperationExecutor<unknown, unknown>
   },
   {
     id: 'scryer.rules.read',
     capability: 'read',
     risk: 'normal',
     policy: flatPolicy({ lock: 'none', lease: 'none', reads: ['rules'] }),
-    upstream: [{ symbol: 'read.rs::get_rules' }, { symbol: 'GetRulesRequest' }]
+    errors: ['invalid_input', 'internal_error'],
+    upstream: [{ symbol: 'read.rs::get_rules' }, { symbol: 'GetRulesRequest' }],
+    execute: rulesReadOperation as ScryerOperationExecutor<unknown, unknown>
   },
   {
     id: 'scryer.codebase.read',
     capability: 'read',
     risk: 'normal',
     policy: flatPolicy({ lock: 'none', lease: 'none', reads: ['project_tree'] }),
-    upstream: [{ symbol: 'read.rs::read_codebase' }, { symbol: 'ReadCodebaseRequest' }]
+    errors: ['invalid_input', 'io_error', 'internal_error'],
+    upstream: [{ symbol: 'read.rs::read_codebase' }, { symbol: 'ReadCodebaseRequest' }],
+    execute: codebaseReadOperation as ScryerOperationExecutor<unknown, unknown>
   },
   {
     id: 'scryer.model.validate',

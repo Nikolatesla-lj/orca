@@ -70,7 +70,7 @@ describe('registerArchitectureHandlers native engine migration', () => {
     const model = await handlers.get('architecture:readModel')!(null, { projectPath })
 
     expect(readView).toHaveBeenCalledWith(
-      { layer: 'committed' },
+      { layer: 'committed', view: 'full' },
       expect.objectContaining({ transport: 'ipc', projectRoot: projectPath })
     )
     expect(readModel).not.toHaveBeenCalled()
@@ -290,7 +290,7 @@ describe('registerArchitectureHandlers native engine migration', () => {
       expect.objectContaining({ transport: 'ipc', projectRoot: projectPath })
     )
     expect(readView).toHaveBeenCalledWith(
-      { layer: 'plan' },
+      { layer: 'plan', view: 'full' },
       expect.objectContaining({ transport: 'ipc', projectRoot: projectPath })
     )
     expect(patchNodeData).not.toHaveBeenCalled()
@@ -497,12 +497,12 @@ describe('registerArchitectureHandlers native engine migration', () => {
     expect(readView).toHaveBeenCalledTimes(2)
     expect(readView).toHaveBeenNthCalledWith(
       1,
-      { layer: 'plan' },
+      { layer: 'plan', view: 'full' },
       expect.objectContaining({ transport: 'ipc', projectRoot: projectPath })
     )
     expect(readView).toHaveBeenNthCalledWith(
       2,
-      { layer: 'plan' },
+      { layer: 'plan', view: 'full' },
       expect.objectContaining({ transport: 'ipc', projectRoot: projectPath })
     )
     expect(readModel).not.toHaveBeenCalled()

@@ -40,17 +40,18 @@ operation parity。Native Scryer Engine 已有 33 个 operation id 的 catalog
 contract、schema、policy 和 upstream anchor；其中 Architecture 产品主路径需要的
 operation 已有 executor 并经过 focused verification。#30 审计确认默认模型
 产品主链路真实打通；#36 已把零 partial release gate 的当前 slice 缺口补齐，详见
-`docs/orca-scryer-architecture-slice-audit.md`。其余 11 个 operation 目前仍是
-catalog-only/stub，会落到 `unimplemented(...)`，不能被文档称为已迁移完成。
+`docs/orca-scryer-architecture-slice-audit.md`。#31 已补齐 read/query/rules/codebase
+read surface executor、CLI dispatch、no-write 和 ownership gate。其余 7 个 operation
+目前仍是 catalog-only/stub，会落到 `unimplemented(...)`，不能被文档称为已迁移完成。
 
 | 范围 | 状态 | 说明 |
 | --- | --- | --- |
 | Operation catalog contract | 完成 | 33 个 operation id 已有 catalog row、policy、schema 和 upstream anchor。 |
 | Architecture executable slice | 已实现，release gate 通过 | `model.read/set/validate`、`plan.pending/fold`、node/link/group/source/intent add、`drift.get/reconcile` 等产品主路径 operation 已有 executor；#36 已补当前 release-critical 覆盖缺口。 |
 | #26-#29 product integration | 完成 | legacy semantic owners、`ScryerEditSessionController` + Completion Gate、Architecture View Adapter hard cutover、live UI coverage 已覆盖默认模型主路径。 |
-| Full operation parity | 未完成 | `model.search/query`、`rules.read`、`codebase.read`、`model.health`、`node.set-subtree/move/descope`、`responsibility.move`、`drift.flag`、`container.fill` 仍需 #31-#35 落实。 |
+| Full operation parity | 部分完成 | #31 read surface 已完成；`model.health`、`node.set-subtree/move/descope`、`responsibility.move`、`drift.flag`、`container.fill` 仍需 #32-#35 落实。 |
 | 验证基线 | 当前 release gate 通过 | `corepack pnpm run tc` 通过；engine/IPC/renderer focused tests 通过；Architecture Electron e2e 三件套 22/22 通过，覆盖 active model reload、view-only no-write fingerprint、MCP alias matrix、visible `group.delete` 和 focused `person.add` API wiring。 |
-| 剩余工作 | #31-#35 | 当前 Architecture slice 已闭环；接下来按 read、structural、health/drift、container generation 和 adapter coverage 补 full operation parity。 |
+| 剩余工作 | #32-#35 | 当前 Architecture slice 和 #31 read surface 已闭环；接下来按 structural、health/drift、container generation 和 adapter coverage 补 full operation parity。 |
 | 明确不迁移 | 保持边界 | Scryer MCP server 产品路径、Tauri shell、独立 provider/settings UI、docs/templates marketplace、Rust sidecar runtime、正常 runtime 隐式 pre-0.3 自动迁移。 |
 
 ## Scryer 功能链
@@ -373,12 +374,12 @@ Orca/Scryer 数据，应另做显式 import 命令。
 
 当前状态：operation catalog foundation 已落地，Architecture 产品主路径已经经
 `executeOperation(...)` 与 `readView(...)` 跨过 Native Scryer Engine seam。
-但 full 33-operation parity 尚未完成：catalog 里仍有 11 个 operation 没有
+但 full 33-operation parity 尚未完成：catalog 里仍有 7 个 operation 没有
 executor。transport adapter 只能对已 executable 的 operation 宣称已迁移。
 
 | 能力族 | 当前 executable | 仍需落实 |
 | --- | --- | --- |
-| Read/query | `scryer.model.read`、`scryer.model.validate` | `scryer.model.search`、`scryer.model.query`、`scryer.rules.read`、`scryer.codebase.read`：#31 |
+| Read/query | `scryer.model.read`、`scryer.model.search`、`scryer.model.query`、`scryer.rules.read`、`scryer.codebase.read`、`scryer.model.validate` | 无单独剩余；#31 read surface gate 已覆盖 |
 | Plan/model write | `scryer.plan.pending`、`scryer.plan.fold`、`scryer.model.set` | 无单独剩余；继续由 #30 audit 证明链路 |
 | Structural writes | `scryer.node.update`、`scryer.node.delete`、`scryer.link.add/update/delete` | `scryer.node.set-subtree`、`scryer.node.move`、`scryer.responsibility.move`、`scryer.node.descope`：#32 |
 | Source/group | `scryer.source.update`、`scryer.group.add/set/update/delete` | full parity coverage gate：#35 |
@@ -407,7 +408,7 @@ executor。transport adapter 只能对已 executable 的 operation 宣称已迁�
 - `git diff --check`
 
 产品集成固化已完成到 #29；#30 已完成 catalog reality 审计；#36 已关闭当前
-Architecture slice strict release gate。下一轮 decision frontier 是 #31-#35：
+Architecture slice strict release gate。当前 decision frontier 是 #32-#35：
 
 - #26：主进程默认模型 read/patch/drift/reconcile 和 `mcp-tools.ts` Scryer 0.3 compatibility shim 已清除 cataloged-operation legacy fallback；renderer 的旧 `C4ModelData` 文档保存主路径已在 #28 hard cutover 中移除，而不是继续作为兼容层收敛。
 - #27：已固化 `ScryerEditSessionController` + Completion Gate。agent `done` 之后会检查 planned pending foldability 和 validation，再决定是否允许 fold；lease token 只属于 main-process/controller/engine trusted context，renderer/preload DTO、DOM/log/prompt 和 renderer `executeScryerOperation(...)` 输入不暴露也不接收 `leaseToken`。
@@ -415,7 +416,7 @@ Architecture slice strict release gate。下一轮 decision frontier 是 #31-#35
 - #29：已扩大 live UI intent/behavior coverage，稳定 product path 的真实可见控件读写已跨 `readView(...)` / `executeOperation(...)`，view-only 状态不改 `.scryer/model.scry`；group nesting / bulk group restore 仍以 operation-backed setup 加文件效果断言覆盖，不作为 headless pointer-dnd gate。
 - #30：已审计 executable Architecture slice 的真实前后端链路，并把 operation catalog reality 写入 `docs/orca-scryer-architecture-slice-audit.md`。
 - #36：已补 #30 发现的当前 slice release gate 缺口：active model reload、非默认模型管理 out-of-scope 决策、view-only no-write fingerprint、MCP alias matrix、`group.delete` 可见路径、`person.add` focused API 覆盖。
-- #31：补 read/query/rules/codebase executable operations。
+- #31：已补 read/query/rules/codebase executable operations 和 read-surface gate。
 - #32：补 set-subtree、node move、responsibility move、descope executable operations。
 - #33：补 health report 和 drift semantic flag executable operations。
 - #34：补 container fill atomic generation executable operation。
@@ -517,5 +518,5 @@ IPC adapter、drift/sync 和 agent done 联动都有实现与 focused tests。
 
 decision map #28-#29 已完成：Architecture View Adapter hard cutover 和 live UI
 intent/behavior tests 都已落地。#30 审计和 #36 release gate hardening 已把当前
-Architecture slice 闭环。当前继续顺序是用 #31-#35 补 11 个 catalog-only
-operation 的 executor、adapter 和覆盖。PR 发布/验收仍应避免把 full parity 未完成项误写成当前 PR 已完成。
+Architecture slice 闭环。#31 read surface 已闭环。当前继续顺序是用 #32-#35
+补 7 个 catalog-only operation 的 executor、adapter 和覆盖。PR 发布/验收仍应避免把 full parity 未完成项误写成当前 PR 已完成。

@@ -5,7 +5,7 @@ import type {
   ScryerPlanFoldResult
 } from '../types'
 import { diffModels } from '../diff'
-import { failure, success } from './helpers'
+import { failure, success } from './operation-result'
 
 function selectors(input: ScryerPlanFoldInput): ScryerFoldTarget[] {
   const targets: ScryerFoldTarget[] = []

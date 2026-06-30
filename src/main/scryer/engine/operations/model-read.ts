@@ -1,5 +1,6 @@
 import type { ScryerModelReadInput, ScryerModelReadResult, ScryerOperationExecutor } from '../types'
-import { failure, success } from './helpers'
+import { selectModelRead } from '../read-selector'
+import { failure, success } from './operation-result'
 
 export const modelReadOperation: ScryerOperationExecutor<
   ScryerModelReadInput,
@@ -13,8 +14,19 @@ export const modelReadOperation: ScryerOperationExecutor<
       contractOperationId: 'scryer.model.read'
     })
   }
+  const selected = selectModelRead(model, input)
+  if (!selected.ok) {
+    return failure(
+      selected.failure.code,
+      selected.failure.message,
+      selected.failure.details,
+      selected.failure.fieldErrors ? { fieldErrors: selected.failure.fieldErrors } : {}
+    )
+  }
+  const result: ScryerModelReadResult =
+    layer === 'committed' ? { ...selected.result, baselineRefreshed: true } : selected.result
   return success({
-    result: { layer, model, ...(layer === 'committed' ? { baselineRefreshed: true } : {}) },
+    result,
     changes: layer === 'committed' ? { baseline: 'refresh' } : undefined
   })
 }

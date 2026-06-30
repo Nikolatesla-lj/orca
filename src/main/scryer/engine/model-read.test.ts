@@ -40,16 +40,22 @@ describe('scryer.model.read', () => {
       operationId: 'scryer.model.read',
       requestId: 'req-1',
       result: {
+        view: 'overview',
         layer: 'plan',
-        model: {
-          version: '0.3',
-          nodes: [],
-          links: [],
-          groups: [],
-          sourceMap: {},
-          boundaries: {}
-        }
+        version: '0.3',
+        nodeCount: 0,
+        linkCount: 0,
+        groupCount: 0,
+        overview: []
       }
+    })
+    await expect(
+      engine.readView({}, testContext(projectPath, 'read-view-default'))
+    ).resolves.toMatchObject({
+      ok: true,
+      operationId: 'scryer.model.read',
+      requestId: 'read-view-default',
+      result: { view: 'overview', layer: 'plan' }
     })
   })
 

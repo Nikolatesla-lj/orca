@@ -3,7 +3,7 @@ import type {
   ScryerModelValidateResult,
   ScryerOperationExecutor
 } from '../types'
-import { failure, success } from './helpers'
+import { failure, success } from './operation-result'
 
 export const modelValidateOperation: ScryerOperationExecutor<
   ScryerModelValidateInput,

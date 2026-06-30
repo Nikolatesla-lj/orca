@@ -8,9 +8,42 @@ export const SCRYER_COMMAND_SPECS: CommandSpec[] = [
     path: ['scryer', 'model', 'read'],
     summary: 'Read a Scryer 0.3 model through the Native Scryer Engine',
     usage:
-      'orca scryer model read [--project <path>] [--layer plan|committed] [--node <id>] [--json]',
-    allowedFlags: [...SCRYER_FLAGS, 'layer', 'node'],
-    examples: ['orca scryer model read --json']
+      'orca scryer model read [--project <path>] [--layer plan|committed] [--view overview|subtree|full] [--node <id>] [--full] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'layer', 'node', 'view', 'full'],
+    examples: ['orca scryer model read --json', 'orca scryer model read --full --json']
+  },
+  {
+    path: ['scryer', 'model', 'search'],
+    summary: 'Search Scryer model nodes through the Native Scryer Engine',
+    usage:
+      'orca scryer model search --query <text> [--kind person|system|container|component|symbol] [--project <path>] [--layer plan|committed] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'query', 'kind', 'layer'],
+    examples: ['orca scryer model search --query auth --json']
+  },
+  {
+    path: ['scryer', 'model', 'query'],
+    summary: 'Query Scryer model nodes by structural predicates',
+    usage: 'orca scryer model query --json-input - [--project <path>] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'json-input'],
+    notes: ['The JSON input must contain `where` or `conditions`.'],
+    examples: [
+      'echo \'{"where":[{"field":"kind","op":"eq","value":"component"}]}\' | orca scryer model query --json-input - --json'
+    ]
+  },
+  {
+    path: ['scryer', 'rules', 'read'],
+    summary: 'Read Scryer modeling rules as structured payloads',
+    usage: 'orca scryer rules read [--topic <text>] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'topic'],
+    examples: ['orca scryer rules read --json', 'orca scryer rules read --topic links --json']
+  },
+  {
+    path: ['scryer', 'codebase', 'read'],
+    summary: 'Read a bounded annotated project tree for modeling context',
+    usage:
+      'orca scryer codebase read [--project <path>] [--path <path>] [--max-depth <n>] [--max-entries <n>] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'path', 'max-depth', 'max-entries'],
+    examples: ['orca scryer codebase read --project . --json']
   },
   {
     path: ['scryer', 'model', 'validate'],

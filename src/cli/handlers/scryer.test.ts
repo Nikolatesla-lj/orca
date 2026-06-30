@@ -54,8 +54,10 @@ describe('orca scryer CLI handlers', () => {
       ok: true,
       operationId: 'scryer.model.read',
       result: {
+        view: 'overview',
         layer: 'plan',
-        model: { version: '0.3' }
+        version: '0.3',
+        overview: [expect.objectContaining({ id: 'api' })]
       }
     })
   })

@@ -415,7 +415,10 @@ Scope this ticket to repository docs only. The detailed status table belongs in
 `docs/orca-scryer-migration.md`; this decision map should stay compact.
 Acceptance means linked status docs no longer equate Architecture slice
 completion with full Scryer operation parity, and every remaining executable
-operation gap is assigned to #31-#35. Verification is documentation-level:
+operation gap is assigned to tracked decision-map issues. As of the #31
+implementation, the read surface gap is closed and the remaining operation gaps
+are #32-#35.
+Verification is documentation-level:
 `git diff --check` plus targeted stale-phrase searches.
 
 ## #26: How Should Legacy Scryer Semantic Paths Be Retired?
@@ -528,12 +531,13 @@ slice covers model read/set/validate, plan pending/fold, node update/delete,
 link add/update/delete, source update, group add/set/update/delete,
 person/system/container/component/symbol add, drift get, and drift reconcile.
 
+After #31, the read surface is also executable:
+`scryer.model.search`, `scryer.model.query`, `scryer.rules.read`, and
+`scryer.codebase.read` have engine executors and read-surface release gates.
 The catalog-only operations still needing executors are:
-`scryer.model.search`, `scryer.model.query`, `scryer.rules.read`,
-`scryer.codebase.read`, `scryer.model.health`,
-`scryer.node.set-subtree`, `scryer.node.move`,
-`scryer.responsibility.move`, `scryer.container.fill`,
-`scryer.node.descope`, and `scryer.drift.flag`.
+`scryer.model.health`, `scryer.node.set-subtree`, `scryer.node.move`,
+`scryer.responsibility.move`, `scryer.container.fill`, `scryer.node.descope`,
+and `scryer.drift.flag`.
 
 Before claiming the Architecture slice complete, audit the already-executable
 product path as an end-to-end chain: visible renderer control -> renderer intent
@@ -555,7 +559,8 @@ coverage, MCP compatibility has a supported/rejected alias matrix, visible
 `scryer.group.delete` removes planned groups, and `scryer.person.add` has
 focused IPC/API coverage. Non-default model manager save-as/delete remains
 explicitly outside the current Architecture 0.3 release-critical path. Full
-Scryer operation parity is still separate #31-#35 work.
+Scryer operation parity still has separate #32-#35 work after the #31 read
+surface closure.
 
 ## #31: How Should Read Surface Completion Land?
 

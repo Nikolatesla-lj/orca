@@ -1,6 +1,6 @@
 import { scryModelSchema } from '../schemas'
 import type { ScryerOperationExecutor } from '../types'
-import { failure, success } from './helpers'
+import { failure, success } from './operation-result'
 import {
   cloneModel,
   fieldErrorsFromZod,

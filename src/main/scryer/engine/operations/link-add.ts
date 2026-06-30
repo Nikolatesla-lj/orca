@@ -2,7 +2,7 @@ import type { ScryModel } from '../model'
 import type { ScryerLinkAddInput, ScryerLinkAddResult, ScryerOperationExecutor } from '../types'
 import { diffModels, summarizePending } from '../diff'
 import { linkViolation } from '../validators'
-import { failure, success } from './helpers'
+import { failure, success } from './operation-result'
 
 function cloneModel(model: ScryModel): ScryModel {
   return JSON.parse(JSON.stringify(model)) as ScryModel

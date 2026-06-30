@@ -28,8 +28,9 @@ This document remains useful as the historical specification for full Scryer
 operation parity, but it should not be read as proof that every operation below
 is executable today. The current catalog still contains operation rows that fall
 through to `unimplemented(...)`. Follow-up product-integration hardening through
-#29 and #36 has completed for the default-model release-critical path; full
-operation parity continues through decision map #31-#35.
+#29, #31, and #36 have completed for the default-model and read-surface
+release-critical paths; full operation parity continues through decision map
+#32-#35.
 
 - #25: reconcile linked docs with completed operation migration.
 - #26: main-process legacy Scryer semantic fallback retired or reduced to shims.
@@ -38,7 +39,7 @@ operation parity continues through decision map #31-#35.
 - #29: live UI intent and behavior coverage expanded and verified.
 - #30: audit current executable slice and document catalog reality.
 - #36: strict Architecture slice release gate gaps from the #30 audit closed.
-- #31: finish read/query/rules/codebase executors.
+- #31: read/query/rules/codebase executors and read-surface gate completed.
 - #32: finish structural mutation executors.
 - #33: finish health and drift-record executors.
 - #34: finish atomic container generation.
@@ -60,8 +61,8 @@ This PRD covers the complete Scryer Operation Migration Work Set for decision
 map tickets #16-#24. In the planning context, "complete" meant the remaining
 operation families were specified and issue-ready together. In current code,
 "complete" should only be used with a qualifier such as "default-model
-Architecture main path"; the stricter current-slice release gate remains #36,
-and the full operation-family list below remains the parity target for #31-#35.
+Architecture main path" or "#31 read surface"; the stricter current-slice release
+gate remains #36, and the remaining operation-family parity target is #32-#35.
 
 The implementation rule remains relevant for future maintenance: changes should
 proceed as vertical operation-family slices. Each task slice should carry real
@@ -75,10 +76,10 @@ behavior.
 1. Read/query operations:
    `scryer.model.search`, `scryer.model.query`, `scryer.rules.read`,
    `scryer.codebase.read`, plus the Scryer Read Surface upgrade and any
-   remaining `scryer.model.read` parity gaps. Current status: open for #31 as
-   a zero-partial read parity slice with engine executors, strict schemas, Orca
-   CLI commands, golden payload tests, no-write fingerprints, and ownership
-   tests.
+   remaining `scryer.model.read` parity gaps. Current status: completed for
+   #31 as a zero-partial read parity slice with engine executors, strict
+   schemas, Orca CLI commands, golden payload tests, no-write fingerprints, and
+   ownership tests.
 2. Core structural writes:
    `scryer.model.set`, `scryer.node.set-subtree`, `scryer.node.delete`,
    `scryer.node.move`, `scryer.node.descope`, `scryer.responsibility.move`,

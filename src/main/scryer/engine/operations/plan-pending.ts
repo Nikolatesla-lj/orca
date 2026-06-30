@@ -4,7 +4,7 @@ import type {
   ScryerPlanPendingResult
 } from '../types'
 import { diffModels, summarizePending } from '../diff'
-import { failure, success } from './helpers'
+import { failure, success } from './operation-result'
 
 export const planPendingOperation: ScryerOperationExecutor<
   ScryerPlanPendingInput,

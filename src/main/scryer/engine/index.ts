@@ -72,7 +72,11 @@ export function createScryerEngine(options: CreateScryerEngineOptions = {}): Scr
       }) as Promise<ScryerOperationResult<T>>
     },
     readView(input, context) {
-      return this.executeOperation<ScryerReadView>('scryer.model.read', input, context)
+      return this.executeOperation<ScryerReadView>(
+        'scryer.model.read',
+        input,
+        context
+      )
     }
   }
 }

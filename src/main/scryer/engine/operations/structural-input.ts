@@ -1,6 +1,6 @@
 import type { ScryModel, ScryResponsibility } from '../model'
 import type { ScryerFieldError } from '../types'
-import { failure } from './helpers'
+import { failure } from './operation-result'
 
 export type RecordInput = Record<string, unknown>
 

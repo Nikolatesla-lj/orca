@@ -13,7 +13,7 @@ glossary. The compact planning authority is
 
 当前 Orca 迁移已有真实 Architecture 产品链路：ReactFlow 画布、节点/边编辑、group 编辑、source map、drift、Native Scryer Engine operation layer、sync/cancel/finish 都走了真实 `.scryer/model.scry` / `.scryer/planned.scry` 和 Electron IPC。#26-#29 产品集成固化已完成到 Architecture View Adapter hard cutover 和 live UI coverage。旧 flow 功能是 Orca 历史扩展，不属于 upstream Scryer 0.3 Architecture 模型，已在 #28 hard cutover 中从正常产品路径移除。
 
-不要把这解读成 full Scryer operation parity 已完成。当前 catalog 注册 33 个 operation id，其中稳定 Architecture product slice 已有 executor；`model.search/query`、`rules.read`、`codebase.read`、`model.health`、`node.set-subtree/move/descope`、`responsibility.move`、`drift.flag`、`container.fill` 仍是 catalog-only/stub，需要 decision map #31-#35 落实。
+不要把这解读成 full Scryer operation parity 已完成。当前 catalog 注册 33 个 operation id，其中稳定 Architecture product slice 和 #31 read surface 已有 executor；`model.health`、`node.set-subtree/move/descope`、`responsibility.move`、`drift.flag`、`container.fill` 仍是 catalog-only/stub，需要 decision map #32-#35 落实。
 
 当前关键结构是 `useArchitectureModelController`：它把模型读取、写入、文件监听、外部变更 diff、高亮、follow 外部变更、撤销/重做、drift、sync/cancel/finish 和 Orca agent 完成状态监听集中到一个前端控制层，并接入 Orca 原生 tab/store/IPC/agent terminal。
 
@@ -143,7 +143,7 @@ flowchart LR
 
 主要剩余差距：
 
-- Full operation parity：当前还需要 #31-#35 补齐 catalog-only operations 的 executor、adapter 和 coverage；这不同于 #28/#29 Architecture 产品链路。
+- Full operation parity：#31 read surface 已完成；当前还需要 #32-#35 补齐剩余 catalog-only operations 的 executor、adapter 和 coverage；这不同于 #28/#29 Architecture 产品链路。
 - PR 准备：#28/#29/#30/#36 release-gate diff 已在 clean worktree 中和相邻历史改动分离，并已完成 final review/test gate；后续是推送 PR 和人工验收。
 - #26-#29 已完成，#36 release gate 已关闭：legacy semantic owners 已降级为 engine-backed shim 或清理出 cataloged-operation 语义路径；`ScryerEditSessionController` + Completion Gate 已固化；Architecture renderer 已消费 `ArchitectureViewDto`；live UI coverage 已扩大到稳定 product path 的真实可见控件和 `.scryer` 文件效果，包含 active model reload、view-only no-write、MCP alias matrix、visible `group.delete` 和 focused `person.add` API 覆盖。
 - group bubble 目前是按节点范围计算的 ReactFlow overlay，未做 `bubblesets-js` 的有机曲线形状。
@@ -280,7 +280,7 @@ Scryer 已经把 `ExternalChanged` 的前端表现做得更细：高亮、diff�
 | GroupsView     | dnd、成员、嵌套、canvas groups 模式                                    | dnd、成员、嵌套、multi-select 建组、canvas group overlay      | 已迁移主要交互                                     |
 | SyncBar        | agent-event 自动更新日志、完成后 mark synced/reload/sync_diff          | Orca terminal prompt + finish/cancel + agent done 自动 finish | 已接 Orca agent 状态                               |
 | drift          | Rust 检测 source map 和结构变化                                        | TypeScript 检测 source map 和结构变化                         | 已有真实逻辑，继续扩大 e2e                         |
-| Scryer Operation Surface | Scryer upstream tool runtime                                 | Orca-native Native Scryer Engine catalog；Architecture product slice executable | #26-#29 产品集成固化已完成；full operation parity 仍需 #31-#35 |
+| Scryer Operation Surface | Scryer upstream tool runtime                                 | Orca-native Native Scryer Engine catalog；Architecture product slice 和 #31 read surface executable | #26-#29 产品集成固化已完成；full operation parity 仍需 #32-#35 |
 | AI advisor     | Scryer 独立 provider、hints、fill with AI                              | 按要求未迁移                                                  | 不迁移独立 provider；可接 Orca agent 能力          |
 | Tauri shell    | Tauri desktop app                                                      | 按要求未迁移                                                  | 正确舍弃                                           |
 
@@ -290,7 +290,7 @@ Scryer 已经把 `ExternalChanged` 的前端表现做得更细：高亮、diff�
 
 剩余差异：
 
-1. #31-#35：需要补齐 catalog-only operations 的 executor、adapter 和 coverage。
+1. #32-#35：需要补齐剩余 catalog-only operations 的 executor、adapter 和 coverage。
 2. PR 准备：#28/#29/#30/#36 docs/code/test diff 已隔离为可 review 的 clean-branch 变更集，后续是推送 PR 和人工验收。
 3. group bubble 是真实成员范围 overlay，但还不是 `bubblesets-js` 有机曲线。
 4. AI provider 不迁移是明确边界；如果要 AI fill，需要走 Orca agent，而不是 Scryer provider。

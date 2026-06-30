@@ -44,7 +44,7 @@ no `partial` passing state.
 
 | Operation group | Operation ids | Status | Notes |
 | --- | --- | --- | --- |
-| Read/view | `scryer.model.read` | covered | Default renderer reads and prompt reads cross `readView(...)`. |
+| Read/view | `scryer.model.read`, `scryer.model.search`, `scryer.model.query`, `scryer.rules.read`, `scryer.codebase.read` | covered | Default renderer reads and prompt reads cross `readView(...)`; #31 read surface uses catalog executors, real CLI dispatch, generic IPC, no-write, and ownership gates. |
 | Validation | `scryer.model.validate` | covered | Engine validation and MCP `validate_model` tests cover warnings/errors; no separate visible UI validation command is required today. |
 | Plan | `scryer.plan.pending`, `scryer.plan.fold` | covered | Engine fold/pending tests plus sync completion gate cover the release path. |
 | Node/link edits | `scryer.node.update`, `scryer.node.delete`, `scryer.link.add`, `scryer.link.update`, `scryer.link.delete` | covered | Live visible controls and engine state effects exist. |
@@ -55,7 +55,7 @@ no `partial` passing state.
 | Less-visible intent add | `scryer.person.add` | covered | Focused IPC/API test asserts planned node creation and renderer notification. |
 | Model replacement | `scryer.model.set` | covered | IPC/e2e strict model set rejects invalid fields and writes model state. |
 | Drift | `scryer.drift.get`, `scryer.drift.reconcile` | covered | Live drift report/dismiss and IPC seam tests exist. |
-| Catalog-only pending parity | `scryer.model.search`, `scryer.model.query`, `scryer.rules.read`, `scryer.codebase.read`, `scryer.model.health`, `scryer.node.set-subtree`, `scryer.node.move`, `scryer.responsibility.move`, `scryer.container.fill`, `scryer.node.descope`, `scryer.drift.flag` | gap | These are catalog rows but still route to `unimplemented(...)`; they belong to #31-#35, not #30 pass criteria. |
+| Catalog-only pending parity | `scryer.model.health`, `scryer.node.set-subtree`, `scryer.node.move`, `scryer.responsibility.move`, `scryer.container.fill`, `scryer.node.descope`, `scryer.drift.flag` | gap | These are catalog rows but still route to `unimplemented(...)`; they belong to #32-#35, not #30/#31 pass criteria. |
 
 ## Compatibility Shim Matrix
 
@@ -69,7 +69,7 @@ no `partial` passing state.
 
 ## Out Of Scope For This Audit
 
-- Full parity for the 11 catalog-only operations listed above.
+- Full parity for the 7 catalog-only operations listed above.
 - Scryer Tauri shell, Scryer MCP server product packaging, provider/settings UI,
   docs/templates marketplace, and Rust sidecar runtime.
 - Automatic pre-0.3 runtime migration as a normal product path.
@@ -87,6 +87,6 @@ UI plus file effects. The stricter #36 gate is closed for the current
 release-critical Architecture slice.
 
 This does not mean full Scryer operation parity is complete. The catalog-only
-operations listed above remain #31-#35 work, and non-default model manager UX is
+operations listed above remain #32-#35 work, and non-default model manager UX is
 outside the current Architecture 0.3 release gate unless a later product
 decision promotes it to release-critical.

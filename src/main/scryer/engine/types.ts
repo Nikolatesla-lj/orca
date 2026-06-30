@@ -549,16 +549,247 @@ export type ScryerErrorMapper = {
 
 export type ScryerReadViewInput = {
   project?: string
+  view?: 'overview' | 'subtree' | 'full'
   node?: string
   layer?: ScryerLayer
 }
 
-export type ScryerReadView = {
+export type ScryerRecommendedRead = {
+  operationId: ScryerOperationId
+  input: Record<string, unknown>
+  reason: string
+}
+
+export type ScryerReadOverviewNode = {
+  id: string
+  kind: ScryModel['nodes'][number]['kind']
+  name: string
+  path: string
+  depth: number
+  childCount: number
+  directSymbolCount: number
+  responsibilityCount: number
+  propertyCount: number
+  groupCount: number
+  hasSourceAnchors: boolean
+  hasBoundaries: boolean
+  hasExternalLinks: boolean
+  hiddenSymbolDescendants: boolean
+  hasChildren: boolean
+  parentId?: string
+  description?: string
+  technology?: string
+  external?: boolean
+  stale?: boolean
+  vagrant?: boolean
+}
+
+export type ScryerReadNodeSummary = {
+  id: string
+  kind: ScryModel['nodes'][number]['kind']
+  name: string
+  path: string
+  depth: number
+  childCount: number
+  nResp: number
+  nProps: number
+  parentId?: string
+  description?: string
+  technology?: string
+  external?: boolean
+  stale?: boolean
+  vagrant?: boolean
+}
+
+export type ScryerModelOverviewResult = {
+  view: 'overview'
   layer: ScryerLayer
-  model: ScryModel
-  view?: unknown
-  truncated?: boolean
+  version: ScryModel['version']
+  nodeCount: number
+  linkCount: number
+  groupCount: number
+  truncated: boolean
+  overview: ScryerReadOverviewNode[]
+  recommendedNextReads: ScryerRecommendedRead[]
   baselineRefreshed?: boolean
+}
+
+export type ScryerModelSubtreeResult = {
+  view: 'subtree'
+  layer: ScryerLayer
+  version: ScryModel['version']
+  nodeCount: number
+  linkCount: number
+  groupCount: number
+  node: ScryerReadNodeSummary
+  descendants: ScryModel['nodes']
+  internalLinks: ScryModel['links']
+  externalLinks: ScryModel['links']
+  contextNodes: ScryerReadNodeSummary[]
+  referencesForChildren: Array<{
+    id: string
+    kind: ScryModel['nodes'][number]['kind']
+    name: string
+    path: string
+    direction: 'incoming' | 'outgoing'
+    label: string
+  }>
+  sourceMap: ScryModel['sourceMap']
+  boundaries: ScryModel['boundaries']
+  degraded: boolean
+  truncated: boolean
+  approximateSizeBytes?: number
+  children?: ScryerReadNodeSummary[]
+  recommendedNextReads: ScryerRecommendedRead[]
+  baselineRefreshed?: boolean
+}
+
+export type ScryerModelFullResult = {
+  view: 'full'
+  layer: ScryerLayer
+  version: ScryModel['version']
+  nodeCount: number
+  linkCount: number
+  groupCount: number
+  model: ScryModel
+  baselineRefreshed?: boolean
+}
+
+export type ScryerReadView =
+  | ScryerModelOverviewResult
+  | ScryerModelSubtreeResult
+  | ScryerModelFullResult
+
+export type ScryerModelSearchInput = {
+  project?: string
+  query: string
+  kind?: ScryModel['nodes'][number]['kind']
+  layer?: ScryerLayer
+}
+
+export type ScryerSearchMatch = {
+  field: string
+  value: string
+  match: 'exact' | 'fuzzy'
+  score: number
+}
+
+export type ScryerModelSearchHit = {
+  id: string
+  kind: ScryModel['nodes'][number]['kind']
+  name: string
+  path: string
+  score: number
+  matched: ScryerSearchMatch[]
+  parentId?: string
+}
+
+export type ScryerModelSearchResult = {
+  layer: ScryerLayer
+  query: string
+  resultCount: number
+  truncated: boolean
+  hits: ScryerModelSearchHit[]
+  kind?: ScryModel['nodes'][number]['kind']
+}
+
+export type ScryerQueryCondition = {
+  field: string
+  op: 'eq' | 'ne' | 'contains' | 'gt' | 'gte' | 'lt' | 'lte' | 'exists' | 'absent'
+  value?: string | number | boolean
+}
+
+export type ScryerModelQueryInput = {
+  project?: string
+  where: ScryerQueryCondition[]
+  under?: string
+  layer?: ScryerLayer
+}
+
+export type ScryerModelQueryHit = {
+  id: string
+  kind: ScryModel['nodes'][number]['kind']
+  name: string
+  path: string
+  nResp: number
+  nProps: number
+  childCount: number
+  parentId?: string
+  external?: boolean
+  visual?: boolean
+  empty?: boolean
+  vagrant?: boolean
+}
+
+export type ScryerModelQueryResult = {
+  layer: ScryerLayer
+  resultCount: number
+  truncated: boolean
+  hits: ScryerModelQueryHit[]
+  where: ScryerQueryCondition[]
+  under?: string
+}
+
+export type ScryerRuleIndexEntry = {
+  id: string
+  title: string
+  tags: string[]
+}
+
+export type ScryerRuleDetail = ScryerRuleIndexEntry & {
+  body: string
+}
+
+export type ScryerRulesReadInput = {
+  topic?: string
+}
+
+export type ScryerRulesReadResult =
+  | {
+      mode: 'index'
+      rules: ScryerRuleIndexEntry[]
+    }
+  | {
+      mode: 'topic'
+      topic: string
+      rules: ScryerRuleDetail[]
+    }
+  | {
+      mode: 'miss'
+      topic: string
+      guidance: 'choose_topic_from_index'
+      rules: ScryerRuleIndexEntry[]
+    }
+
+export type ScryerCodebaseReadInput = {
+  project?: string
+  path?: string
+  maxDepth?: number
+  maxEntries?: number
+}
+
+export type ScryerCodebaseMarker = 'manifest' | 'infrastructure' | 'environment'
+
+export type ScryerCodebaseEntry = {
+  path: string
+  name: string
+  kind: 'file' | 'directory'
+  depth: number
+  markers: ScryerCodebaseMarker[]
+}
+
+export type ScryerCodebaseReadResult = {
+  root: string
+  entries: ScryerCodebaseEntry[]
+  summary: {
+    fileCount: number
+    directoryCount: number
+    manifestCount: number
+    infrastructureCount: number
+    environmentCount: number
+    skippedCount: number
+  }
+  truncated: boolean
 }
 
 export type ScryerModelReadInput = ScryerReadViewInput

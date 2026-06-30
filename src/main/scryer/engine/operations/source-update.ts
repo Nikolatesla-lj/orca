@@ -1,6 +1,6 @@
 import type { ScryModel } from '../model'
 import type { ScryerOperationExecutor } from '../types'
-import { success } from './helpers'
+import { success } from './operation-result'
 import { cloneModel, plannedOrFailure, stringField, type RecordInput } from './structural-input'
 
 function locationsFromInput(value: unknown): ScryModel['sourceMap'][string] {
