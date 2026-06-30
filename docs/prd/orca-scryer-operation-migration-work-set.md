@@ -75,7 +75,10 @@ behavior.
 1. Read/query operations:
    `scryer.model.search`, `scryer.model.query`, `scryer.rules.read`,
    `scryer.codebase.read`, plus the Scryer Read Surface upgrade and any
-   remaining `scryer.model.read` parity gaps. Current status: open for #31.
+   remaining `scryer.model.read` parity gaps. Current status: open for #31 as
+   a zero-partial read parity slice with engine executors, strict schemas, Orca
+   CLI commands, golden payload tests, no-write fingerprints, and ownership
+   tests.
 2. Core structural writes:
    `scryer.model.set`, `scryer.node.set-subtree`, `scryer.node.delete`,
    `scryer.node.move`, `scryer.node.descope`, `scryer.responsibility.move`,
@@ -132,40 +135,197 @@ that slice touches an existing product path for the included operations. The
 remaining Architecture UI, IPC, agent bridge, and legacy semantic owners move in
 the final adapter-retirement slice.
 
+#31 has a stricter read-surface completion gate. It is incomplete if any
+included read operation still uses a `z.record` success placeholder, lacks an
+exact golden payload assertion for upstream behavior, omits a no-write
+fingerprint for `.scryer/model.scry` and `.scryer/planned.scry`, lacks
+black-box CLI envelope coverage, breaks existing `readView(...)` or
+`ArchitectureViewAdapter` tests, or constructs read payloads through
+`mcp-tools.ts`, legacy C4 adapters, or ad hoc raw `.scryer` JSON reads instead
+of catalog/pipeline executors. The only allowed read-side file effect is the
+declared committed `model.read` baseline maintenance behavior.
+
 ## Read Surface Decision
 
 The read/query slice must be described and implemented around the Scryer Read
-Selector. `readView(...)` becomes a real Read Surface because one deep engine
-module, not each adapter, owns the transformation from canonical model state to
-agent-, CLI-, UI-, and test-facing read payloads.
+Selector for model-state reads. `readView(...)` becomes a real Read Surface
+because one deep engine module, not each adapter, owns the transformation from
+canonical model state to agent-, CLI-, UI-, and test-facing model read payloads.
 
 The Read Selector's external seam is small: it receives canonical
 committed/planned `ScryModel` state plus a validated read request, and it returns
-one validated read payload. Its implementation owns the complexity behind that
-seam:
+one validated model read payload. Its implementation owns the complexity behind
+that seam:
 
 - model overview, subtree, and full-model payloads
 - text search payloads with exact/fuzzy match metadata
 - structural query payloads with scope and hit-limit metadata
-- rules index and topic drill-in payloads
-- annotated codebase tree payloads
 - read-mode selection guidance such as `recommendedNextReads`
 - subtree size degradation into a child skeleton when detailed output would be
   too large
 
+`scryer.rules.read` and `scryer.codebase.read` are still #31 read operations,
+but they are sibling executors rather than Read Selector behavior: rules reads
+load the Orca-owned rules asset, and codebase reads scan the project tree.
+
+The Read Selector is an internal deep module, not a new product seam. Product
+callers keep using `executeOperation(...)`; CLI handlers, IPC, agent callers,
+and `ArchitectureViewAdapter` are adapters. They may map flags or renderer
+needs to operation inputs and render standard envelopes, but they must not
+assemble read payloads, run fuzzy search or query predicates, implement
+subtree degradation, or read raw `.scryer` files. Operation executors stay thin:
+they select the policy-loaded model layer, invoke the Read Selector, and return
+the selector payload through the shared result envelope.
+
 State-store only loads canonical model state. Read/query operation executors
-only select the requested read behavior and call the Read Selector. The pipeline
-validates the selected payload schema before returning the shared operation
-envelope. CLI, IPC, UI, agents, and tests consume the standardized payloads;
-they must not construct overview, subtree, search, or query shapes from raw
-model files.
+only select the requested model read behavior and call the Read Selector. The
+pipeline validates the selected payload schema before returning the shared
+operation envelope. CLI, IPC, UI, agents, and tests consume the standardized
+payloads; they must not construct overview, subtree, search, or query shapes
+from raw model files.
 
 Treat the `scryer.model.read` result shape from the foundation PR as
 provisional. The first read/query task slice replaces it with the formal Read
 Surface input/result model before implementing the remaining read/query
-operations. Catalog input normalization may accept legacy aliases such as
-`node`, but executors and new adapters consume canonical fields such as
-`view: "overview" | "subtree" | "full"` and `node_id`.
+operations. Catalog input normalization may accept aliases when needed, but
+engine and CLI payload fields preserve upstream Scryer names such as `overview`,
+`nodeCount`, `internalLinks`, `externalLinks`, `contextNodes`,
+`referencesForChildren`, `matched`, `nResp`, and `nProps`. Renderer-facing
+DTOs may transform those fields only at the adapter boundary.
+
+`scryer.model.read` uses canonical input
+`{ view?: "overview" | "subtree" | "full"; node?: string; layer?: "plan" | "committed"; project?: string }`.
+To preserve upstream ergonomics, omitted `view` defaults to `overview` when
+`node` is absent and `subtree` when `node` is present. CLI supports
+`--view full` and the convenience alias `--full`; both map to `view: "full"`.
+`subtree` requires `node`; `overview` and `full` reject `node`; conflicting
+`--full --node <id>` style input must return the standard `invalid_input`
+envelope. Full reads stay explicit and available for Architecture rendering,
+export, debug, fixtures, and direct user requests, but are not the default
+first read.
+
+Full reads return a minimal discriminated wrapper rather than a bare model:
+`{ view: "full"; layer; version: "0.3"; nodeCount; linkCount; groupCount; model }`.
+`recommendedNextReads` is scoped to `model.read` navigation payloads. Overview
+may recommend subtree/search/query reads, degraded subtree reads may recommend
+direct-child subtree reads, and subtree reads may recommend related context
+targets. Search/query results already carry candidate ids, rules misses carry
+guidance, and codebase reads carry entries; those payloads do not require
+`recommendedNextReads` for #31.
+
+The test surface follows the module seams. `read-selector.test.ts` owns exact
+in-memory golden payloads for overview, subtree, explicit full reads, search,
+query, caps, truncation, exact/fuzzy match metadata, and oversized-subtree
+degradation. Operation tests own catalog, pipeline, schema validation,
+standard envelopes, layer selection, committed-read baseline maintenance,
+standardized errors, and read no-write fingerprints. Black-box CLI tests own
+command specs, flag mapping, JSON envelopes, and exit codes; they should not
+duplicate the selector's detailed fuzzy/query fixtures.
+
+Search parity is defined by observable upstream behavior, not by reproducing
+Rust scoring internals byte-for-byte. Terms are split on whitespace and ANDed
+across `name`, `description`, `technology`, responsibility statements, and
+property labels. Exact substring matches must rank above fuzzy matches; results
+sort by descending score while preserving model order for ties; optional `kind`
+filters by Scryer kind; cap is 50; and each result exposes upstream-style
+`matched` entries with `field`, `value`, `match: "exact" | "fuzzy"`, and
+`score`.
+
+Query parity is limited to the upstream predicate language in #31. Supported
+fields are string `kind`, `name`, `description`, and `technology`; boolean
+`external`, `visual`, `empty`, and `vagrant`; number `responsibilityCount`,
+`propertyCount`, and `childCount`; plus count aliases `responsibilities`,
+`properties`, and `children`. Conditions are ANDed. Operators are `eq`/`ne` for
+all field types, `contains` for strings, `gt`/`gte`/`lt`/`lte` for numbers, and
+upstream-style `exists`/`absent` presence checks. Unknown fields, invalid
+operators, type mismatches, and malformed predicates return `invalid_input`;
+unknown `under` scope returns `not_found`; cap is 200. `empty` remains the
+upstream empty-symbol semantic and must not mean "node has no children."
+
+Read-operation failures use Orca's standard `ScryerOperationResult` envelope,
+not upstream MCP prose. `invalid_input` covers malformed search, query, kind,
+view, and view/node combinations; `not_found` covers missing subtree and
+query-scope nodes; `io_error` covers codebase scan/path failures;
+`incompatible_model` comes from existing state-store compatibility and
+closed-schema checks; and `internal_error` covers Read Selector invariants or
+success-schema validation failures. CLI `--json` prints the envelope unchanged;
+non-JSON CLI output may be human-readable but exits non-zero for `ok:false`.
+
+Rules and codebase read payloads are structured even though upstream MCP renders
+text. `scryer.rules.read` returns a rules index when `topic` is absent, full
+matching rule bodies when `topic` hits, and a miss payload with
+`guidance: "choose_topic_from_index"` plus the index when no topic matches. It
+must not return one preformatted text blob from the engine. `scryer.codebase.read`
+returns a structured project-tree payload with `root`, ordered entries
+(`path`, `name`, `kind`, `depth`, `markers`), and summary counts. CLI non-JSON
+rendering may format those payloads as upstream-style text; JSON, engine, and
+agent callers consume the typed structure.
+
+`scryer.codebase.read` must stay a bounded modeling-context scan. It accepts
+only project/workspace-contained paths, respects `.gitignore`, skips
+dependency/build folders such as `.git`, `node_modules`, `dist`, `build`,
+`out`, `.next`, `.turbo`, `target`, and `coverage`, and returns stable-sorted
+entries. Depth and entry caps are part of the contract and must surface
+`truncated: true` when applied. Marker detection is deterministic: manifests
+include common package/build files such as `package.json`, `Cargo.toml`,
+`pyproject.toml`, `go.mod`, `pom.xml`, and Gradle files; infrastructure includes
+`Dockerfile`, `docker-compose.yml`, `fly.toml`, `.github/workflows/*`, and
+Terraform files; environment templates include `.env.example`, `.env.sample`,
+and `.env.template`.
+
+No-write fingerprints are a #31 release gate. Plan-layer `model.read`, search,
+query, rules reads, and codebase reads must not change `.scryer/model.scry`,
+`.scryer/planned.scry`, `.scryer/history.jsonl`, `.scryer/.sync`,
+`.scryer/.anchors.json`, `.scryer/.build_edges.json`, or
+`.scryer/model.baseline.scry`. A committed `model.read` may refresh only
+`.scryer/model.baseline.scry`; it must not mutate model truth or drift/history
+sidecars.
+
+Golden tests should use a small purpose-built Scryer 0.3 model, not a large
+real project model. The fixture must cover hierarchy, an empty symbol, internal
+and external links, groups, name/description/responsibility/property search
+matches, sourceMap entries, and boundaries. Stress fixtures are separate and
+generated for cap/degradation behavior: 51 search hits, 201 query hits, and an
+oversized subtree. Stress tests assert cap/truncation/degradation outcomes, not
+a full large golden payload.
+
+#31 adapter scope is deliberately narrow. It does not add new renderer UI,
+rules-browser UI, codebase-tree UI, Electron live workflows, or new agent
+workflow/prompt behavior. It must keep existing generic operation adapters
+usable: focused IPC/adapter coverage should prove #31 read operations can cross
+the generic `executeScryerOperation` / `executeOperation(...)` path and return
+standard envelopes. Full remaining product-surface and adapter coverage belongs
+to #35.
+
+CLI coverage is black-box through the real command dispatch path. Tests must
+run commands for model read overview, subtree, and explicit full reads; model
+search; model query through `--json-input -`; rules index and topic reads; and
+codebase read. Assertions cover command availability, argument mapping,
+parseable JSON stdout, operation ids, result shape, and non-zero exit for
+invalid input. Handler-only, command-spec-only, or engine-mocked tests do not
+satisfy #31.
+
+Ownership tests should statically reject legacy or adapter imports in #31 read
+implementation files. `model-read`, `model-search`, `model-query`,
+`rules-read`, `codebase-read`, and `read-selector` must not import
+`mcp-tools.ts`, model-store modules, legacy C4 adapters/types, renderer
+modules, or CLI modules. Filesystem access is allowed only in `codebase-read`
+or a private scan helper; rules asset access is allowed only in `rules-read`.
+
+#31 may be implemented in phases, but it is not complete until every phase and
+gate passes. The implementation order should be: Read Selector plus small and
+stress fixtures; strict schemas; `model.read/search/query`, `rules.read`, and
+`codebase.read` executors; CLI specs and handlers; selector, operation,
+no-write, ownership, black-box CLI, and focused generic IPC tests; then
+docs/status cleanup. Engine-only work, CLI-only work, or tests missing
+no-write/ownership coverage remain partial. After #31 closes, full Scryer
+operation parity is still open until #32-#35 close.
+
+Organize the #31 PR as one vertical slice with logical commits: first
+`docs: tighten #31 read parity gate`, then `feat: implement #31 read surface
+executors`, then `feat: expose #31 read operations through CLI`. The first
+commit contains only decision/PRD/parity documentation; the implementation
+commits carry code and tests.
 
 ### Upstream Read Strategy To Preserve
 
@@ -1568,9 +1728,9 @@ Required payload shapes for broad migration:
 
 | Result type | Required fields | Optional fields | Notes |
 | --- | --- | --- | --- |
-| `ScryerReadView` | `mode`, `layer`, `summary`, `nodes`, `links`, `recommendedNextReads` | `truncated`, `hiddenCounts`, `breadcrumbs`, `coverage`, `fullModel` | `fullModel` appears only for explicit full reads. |
-| `ScryerSearchResult` | `query`, `hits`, `results`, `truncated` | `recommendedNextReads` | Results include id, kind, path, score, exact fields, and fuzzy fields. |
-| `ScryerQueryResult` | `hits`, `results`, `truncated` | `recommendedNextReads` | Results include id, kind, name, path, counts, and empty-symbol flag. |
+| `ScryerReadView` | `view`, `layer`, payload-specific fields | `recommendedNextReads` for overview/subtree navigation payloads | Explicit full reads return `{ view: "full"; layer; version; nodeCount; linkCount; groupCount; model }` and do not need `recommendedNextReads`. |
+| `ScryerSearchResult` | `query`, `hits`, `results`, `truncated` | - | Results include id, kind, path, score, and upstream-style `matched`; candidate ids are the next read targets. |
+| `ScryerQueryResult` | `hits`, `results`, `truncated` | - | Results include id, kind, name, path, `nResp`, `nProps`, and optional empty-symbol flag; candidate ids are the next read targets. |
 | `ScryerAddedItemsResult` | `added`, `counts`, `recommendedNextReads` | `sourceKeys`, `boundaryKeys` | `added` entries include minted ids, kind, name, parent ids, responsibility ids, property labels, and group ids where relevant. |
 | `ScryerStructuralMutationResult` | `changed`, `counts`, `recommendedNextReads` | `removed`, `moved`, `detachedGroups`, `normalized` | Use for model/subtree set, move, delete, descope, responsibility move, and link update summaries. |
 | `ScryerSourceRoutingResult` | `updatedCount`, `routes`, `normalizedWholeSymbolRanges` | `clearedKeys`, `recommendedNextReads` | `routes` records committed versus planned ownership; warning objects remain in `meta.warnings`. |
