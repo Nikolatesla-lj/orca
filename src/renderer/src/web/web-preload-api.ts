@@ -464,6 +464,7 @@ function createWebPreloadApi(): Partial<PreloadApi> {
       restart: () => Promise.resolve(window.location.reload()),
       reload: () => Promise.resolve(window.location.reload()),
       awaitFirstWindowStartupServices: () => Promise.resolve(),
+      startupDiagnostic: () => Promise.resolve(),
       getKeyboardInputSourceId: () => Promise.resolve(null),
       setUnreadDockBadgeCount: () => Promise.resolve(),
       getFloatingTerminalCwd: () => Promise.resolve(''),
@@ -2542,6 +2543,7 @@ function createPtyApi(): NonNullable<Partial<PreloadApi>['pty']> {
     hasChildProcesses: () => Promise.resolve(false),
     getForegroundProcess: () => Promise.resolve(null),
     getCwd: () => Promise.resolve('~'),
+    getSize: () => Promise.resolve(null),
     listSessions: () => Promise.resolve([]),
     getMainBufferSnapshot: () => Promise.resolve(null),
     getRendererDeliveryDebugSnapshot: () =>

@@ -187,6 +187,10 @@ import type { RuntimeEnvironmentSubscriptionHandle } from './runtime-environment
 import type { HostedReviewForBranchArgs } from '../shared/hosted-review'
 import type { ReadClipboardTextOptions } from '../shared/clipboard-text'
 import type {
+  LocalhostWorktreeLabelResult,
+  LocalhostWorktreeLabelRoute
+} from '../shared/localhost-worktree-labels'
+import type {
   CrashReportBreadcrumbData,
   CrashReportSubmitArgs,
   CrashReportSubmitResult,
@@ -430,6 +434,8 @@ document.addEventListener(
   true
 )
 
+const startupDiagnosticsEnabled = process.env.ORCA_STARTUP_DIAGNOSTICS === '1'
+
 // Custom APIs for renderer
 const api = {
   app: {
@@ -452,6 +458,10 @@ const api = {
     reload: (): Promise<void> => ipcRenderer.invoke('app:reload'),
     awaitFirstWindowStartupServices: (): Promise<void> =>
       ipcRenderer.invoke('app:awaitFirstWindowStartupServices'),
+    startupDiagnostic: (event: string, details?: Record<string, unknown>): Promise<void> =>
+      startupDiagnosticsEnabled
+        ? ipcRenderer.invoke('app:startupDiagnostic', event, details)
+        : Promise.resolve(),
     // Why: on macOS this returns the active input mode, or the layout ID when
     // no IME mode is selected, so renderer keyboard workarounds can distinguish
     // CJK IMEs and compose layouts from plain US QWERTY (see issue #1205).
@@ -752,6 +762,7 @@ const api = {
       sessionId?: string
       shellOverride?: string
       projectRuntime?: ProjectExecutionRuntimeResolution
+      terminalColorQueryReplies?: { foreground?: string; background?: string }
       // Why: closes the SIGKILL race documented in INVESTIGATION.md by
       // letting main patch + sync-flush the (worktreeId, tabId, leafId →
       // ptyId) binding before pty:spawn returns. Only the renderer's
@@ -860,6 +871,12 @@ const api = {
     /** Resolve the live cwd of a PTY via `/proc` (Linux) or `lsof` (macOS).
      *  Returns `''` when the id is unknown or the platform cannot resolve one. */
     getCwd: (id: string): Promise<string> => ipcRenderer.invoke('pty:getCwd', { id }),
+
+    /** The PTY's last APPLIED size (its real winsize), or null if unknown.
+     *  Lets the renderer detect drift after a resize was dropped main-side and
+     *  re-assert, instead of trusting the size it last fired blind. */
+    getSize: (id: string): Promise<{ cols: number; rows: number } | null> =>
+      ipcRenderer.invoke('pty:getSize', { id }),
 
     onData: (
       callback: (data: { id: string; data: string; seq?: number; rawLength?: number }) => void
@@ -1673,6 +1690,11 @@ const api = {
       return () => ipcRenderer.removeListener('settings:changed', listener)
     }
   },
+
+  localhostWorktreeLabels: {
+    register: (args: LocalhostWorktreeLabelRoute): Promise<LocalhostWorktreeLabelResult> =>
+      ipcRenderer.invoke('localhostWorktreeLabels:register', args)
+  } satisfies PreloadApi['localhostWorktreeLabels'],
 
   keybindings: {
     get: (): Promise<KeybindingFileSnapshot> => ipcRenderer.invoke('keybindings:get'),
