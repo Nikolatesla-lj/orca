@@ -33,6 +33,7 @@ import {
   type ScryerReadView,
   type ScryerReadViewInput
 } from '../scryer/engine'
+import { emptyScryModel } from '../scryer/engine/model'
 import {
   createScryerEditSessionController,
   type ScryerEditSessionController
@@ -57,6 +58,7 @@ import type {
 import { BUILT_IN_SCRYER_TEMPLATES } from '../../shared/scryer/templates'
 
 const watchers = new Map<string, FSWatcher>()
+const watcherSubscribers = new Map<string, Set<IpcMainInvokeEvent['sender']>>()
 const watcherModelChangedTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const WATCHER_MODEL_CHANGED_DEBOUNCE_MS = 75
 const READ_VIEW_LOCK_RETRY_DELAYS_MS = [25, 75, 150]
@@ -213,11 +215,21 @@ export function changedScryerModelFileForOperation(operationId: ScryerOperationI
   return SCRYER_PLAN_FILE_WRITE_OPERATIONS.has(operationId) ? 'planned.scry' : 'model.scry'
 }
 
-function scheduleWatchedModelChanged(
-  event: IpcMainInvokeEvent,
-  projectPath: string,
-  fileName: string
-): void {
+function notifyWatchedModelChanged(key: string, projectPath: string, fileName: string): void {
+  const subscribers = watcherSubscribers.get(key)
+  if (!subscribers) {
+    return
+  }
+  for (const sender of subscribers) {
+    if (typeof sender.isDestroyed === 'function' && sender.isDestroyed()) {
+      subscribers.delete(sender)
+      continue
+    }
+    sender.send('architecture:modelChanged', { projectPath, fileName })
+  }
+}
+
+function scheduleWatchedModelChanged(key: string, projectPath: string, fileName: string): void {
   const timerKey = `${projectPath}\0${fileName}`
   const currentTimer = watcherModelChangedTimers.get(timerKey)
   if (currentTimer) {
@@ -225,7 +237,7 @@ function scheduleWatchedModelChanged(
   }
   const timer = setTimeout(() => {
     watcherModelChangedTimers.delete(timerKey)
-    event.sender.send('architecture:modelChanged', { projectPath, fileName })
+    notifyWatchedModelChanged(key, projectPath, fileName)
   }, WATCHER_MODEL_CHANGED_DEBOUNCE_MS)
   watcherModelChangedTimers.set(timerKey, timer)
 }
@@ -373,6 +385,26 @@ function architectureModelFromReadView(
   }
 }
 
+async function readModelForPrompt(
+  projectPath: string,
+  modelName: string | null | undefined,
+  deps: ArchitectureHandlerDeps,
+  requestIdPrefix: string
+): Promise<C4ModelData> {
+  if (!isDefaultModelName(modelName, deps)) {
+    return deps.readModel(projectPath, modelName)
+  }
+  const view = await readViewWithLockRetry(deps, { layer: 'plan' }, projectPath, requestIdPrefix)
+  if (!view.ok) {
+    throw new Error(view.error.message)
+  }
+  const model = architectureModelFromReadView(projectPath, view.result)
+  if (model) {
+    return model
+  }
+  throw new Error('Scryer readView result did not include a full model for prompt preparation')
+}
+
 async function readRendererExtensionState(
   projectPath: string,
   modelName: string | null | undefined,
@@ -455,6 +487,7 @@ export function closeArchitectureWatchers(): void {
     watcher.close()
   }
   watchers.clear()
+  watcherSubscribers.clear()
   for (const timer of watcherModelChangedTimers.values()) {
     clearTimeout(timer)
   }
@@ -647,6 +680,40 @@ export function registerArchitectureHandlers(
       event,
       args: { projectPath: string; modelName?: string | null; templateId?: string | null }
     ) => {
+      if (isDefaultModelName(args.modelName, deps) && !args.templateId) {
+        await ensureNoActiveEditSession(args.projectPath, deps)
+        const result = await writeDefaultScryModelThroughEngine(
+          args.projectPath,
+          emptyScryModel(),
+          deps
+        )
+        const view = await readViewWithLockRetry(
+          deps,
+          { layer: 'committed' },
+          args.projectPath,
+          'ipc-create-model'
+        )
+        if (!view.ok) {
+          throw new Error(view.error.message)
+        }
+        const extensionState = await readRendererExtensionState(
+          args.projectPath,
+          args.modelName,
+          deps
+        )
+        const model = architectureModelFromReadView(args.projectPath, view.result, extensionState)
+        if (!model) {
+          throw new Error(
+            'Scryer readView result did not include a full model for renderer mapping'
+          )
+        }
+        notifyModelChanged(event, args.projectPath, args.modelName, deps)
+        return {
+          modelName: deps.sanitizeProjectModelName(args.modelName),
+          model,
+          revision: result.revision
+        }
+      }
       const model = await deps.createProjectModel(args.projectPath, {
         modelName: args.modelName,
         templateId: args.templateId
@@ -698,7 +765,12 @@ export function registerArchitectureHandlers(
   registrar.handle(
     'architecture:prepareNodeFillPrompt',
     async (_event, args: { projectPath: string; modelName?: string | null; nodeId: string }) => {
-      const model = await deps.readModel(args.projectPath, args.modelName)
+      const model = await readModelForPrompt(
+        args.projectPath,
+        args.modelName,
+        deps,
+        'ipc-node-fill-prompt'
+      )
       const node = model.nodes.find((candidate) => candidate.id === args.nodeId)
       if (!node) {
         throw new Error(`Node '${args.nodeId}' not found`)
@@ -719,7 +791,12 @@ export function registerArchitectureHandlers(
   registrar.handle(
     'architecture:prepareAdvisorPrompt',
     async (_event, args: { projectPath: string; modelName?: string | null }) => {
-      const model = await deps.readModel(args.projectPath, args.modelName)
+      const model = await readModelForPrompt(
+        args.projectPath,
+        args.modelName,
+        deps,
+        'ipc-advisor-prompt'
+      )
       return {
         prompt: advisorPrompt({
           modelName: deps.sanitizeProjectModelName(args.modelName),
@@ -856,6 +933,9 @@ export function registerArchitectureHandlers(
 
   registrar.handle('architecture:watchModel', async (event, args: { projectPath: string }) => {
     const key = projectKey(args.projectPath, deps)
+    const subscribers = watcherSubscribers.get(key) ?? new Set<IpcMainInvokeEvent['sender']>()
+    subscribers.add(event.sender)
+    watcherSubscribers.set(key, subscribers)
     if (watchers.has(key)) {
       return
     }
@@ -864,10 +944,11 @@ export function registerArchitectureHandlers(
       if (!filename || !shouldNotifyModelFile(filename)) {
         return
       }
-      scheduleWatchedModelChanged(event, args.projectPath, String(filename))
+      scheduleWatchedModelChanged(key, args.projectPath, String(filename))
     })
     watcher.on('error', () => {
       watchers.delete(key)
+      watcherSubscribers.delete(key)
     })
     watchers.set(key, watcher)
   })

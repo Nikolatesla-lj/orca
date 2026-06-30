@@ -1,5 +1,6 @@
 import type {
   ArchitectureViewBoundaryRow,
+  ArchitectureViewDiagnostic,
   ArchitectureViewDto,
   ArchitectureViewGroup,
   ArchitectureViewLink,
@@ -15,6 +16,7 @@ import type {
   ScryerReadView
 } from './engine'
 import type { ScryGroup, ScryLink, ScryModel, ScryNode } from './engine/model'
+import { validateModelStructure } from './engine/validators'
 
 export type ArchitectureViewReadInput = {
   projectPath: string
@@ -44,6 +46,7 @@ function nodeDto(node: ScryNode): ArchitectureViewNode {
     ...(node.properties ? { properties: node.properties } : {}),
     ...(node.icon !== undefined ? { icon: node.icon } : {}),
     ...(node.visual !== undefined ? { visual: node.visual } : {}),
+    ...(node.appearance !== undefined ? { appearance: node.appearance } : {}),
     ...(node.notes !== undefined ? { notes: node.notes } : {})
   }
 }
@@ -121,6 +124,15 @@ function boundaryRowsFromModel(model: ScryModel): ArchitectureViewBoundaryRow[] 
     .map(([nodeId, sources]) => ({ nodeId, sources }))
 }
 
+function diagnosticsFromModel(model: ScryModel): ArchitectureViewDiagnostic[] {
+  return validateModelStructure(model).map((finding) => ({
+    severity: finding.severity,
+    code: finding.code,
+    message: finding.message,
+    ...(finding.path ? { path: finding.path } : {})
+  }))
+}
+
 function dtoFromModel(
   model: ScryModel,
   view: ScryerReadView,
@@ -149,10 +161,13 @@ function dtoFromModel(
         ...(node.stale !== undefined ? { stale: node.stale } : {}),
         ...(node.vagrant !== undefined ? { vagrant: node.vagrant } : {})
       })),
-    diagnostics: [],
+    diagnostics: diagnosticsFromModel(model),
     recommendedNextReads:
-      (view as ScryerReadView & { recommendedNextReads?: ArchitectureViewDto['recommendedNextReads'] })
-        .recommendedNextReads ?? [],
+      (
+        view as ScryerReadView & {
+          recommendedNextReads?: ArchitectureViewDto['recommendedNextReads']
+        }
+      ).recommendedNextReads ?? [],
     ...(selectedNode
       ? {
           selectedDetails: {

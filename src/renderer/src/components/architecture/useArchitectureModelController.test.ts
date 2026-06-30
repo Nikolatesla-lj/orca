@@ -108,6 +108,7 @@ describe('architecture model controller helpers', () => {
         name: 'handleRequest',
         description: '',
         technology: 'TypeScript',
+        shape: 'cylinder',
         properties: [{ label: 'id', description: 'identifier' }],
         _needsLayout: true
       })
@@ -119,11 +120,15 @@ describe('architecture model controller helpers', () => {
           name: 'handleRequest',
           description: '',
           technology: 'TypeScript',
+          appearance: { shape: 'cylinder' },
           properties: [{ label: 'id', description: 'identifier' }]
         }
       ]
     })
 
+    expect(nodeUpdateInputFromDiagramPatch('api', { shape: undefined })).toEqual({
+      nodes: [{ node_id: 'api', appearance: { shape: null } }]
+    })
     expect(nodeUpdateInputFromDiagramPatch('api', { _needsLayout: true })).toBeNull()
   })
 

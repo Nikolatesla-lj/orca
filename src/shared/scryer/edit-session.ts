@@ -6,11 +6,7 @@ export type ScryerCompletionGateNextAction =
   | 'blocked_by_lease'
 
 export type ScryerCompletionGateBlocker = {
-  code:
-    | 'validation_error'
-    | 'unknown_pending_kind'
-    | 'unknown_pending_change'
-    | 'lease_conflict'
+  code: 'validation_error' | 'unknown_pending_kind' | 'unknown_pending_change' | 'lease_conflict'
   message: string
   path?: string
   details?: Record<string, unknown>

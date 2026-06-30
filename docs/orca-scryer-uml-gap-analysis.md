@@ -11,7 +11,9 @@ glossary. The compact planning authority is
 
 ## 结论
 
-当前 Orca 迁移已有真实链路：ReactFlow 画布、节点/边编辑、group 编辑、source map、drift、Native Scryer Engine operation layer、sync/cancel/finish 都走了真实 `.scryer/model.scry` 和 Electron IPC。#41-#49 已完成 broad operation migration；#26-#29 产品集成固化也已完成到 Architecture View Adapter hard cutover 和 live UI coverage。旧 flow 功能是 Orca 历史扩展，不属于 upstream Scryer 0.3 Architecture 模型，已在 #28 hard cutover 中从正常产品路径移除。
+当前 Orca 迁移已有真实 Architecture 产品链路：ReactFlow 画布、节点/边编辑、group 编辑、source map、drift、Native Scryer Engine operation layer、sync/cancel/finish 都走了真实 `.scryer/model.scry` / `.scryer/planned.scry` 和 Electron IPC。#26-#29 产品集成固化已完成到 Architecture View Adapter hard cutover 和 live UI coverage。旧 flow 功能是 Orca 历史扩展，不属于 upstream Scryer 0.3 Architecture 模型，已在 #28 hard cutover 中从正常产品路径移除。
+
+不要把这解读成 full Scryer operation parity 已完成。当前 catalog 注册 33 个 operation id，其中稳定 Architecture product slice 已有 executor；`model.search/query`、`rules.read`、`codebase.read`、`model.health`、`node.set-subtree/move/descope`、`responsibility.move`、`drift.flag`、`container.fill` 仍是 catalog-only/stub，需要 decision map #31-#35 落实。
 
 当前关键结构是 `useArchitectureModelController`：它把模型读取、写入、文件监听、外部变更 diff、高亮、follow 外部变更、撤销/重做、drift、sync/cancel/finish 和 Orca agent 完成状态监听集中到一个前端控制层，并接入 Orca 原生 tab/store/IPC/agent terminal。
 
@@ -107,7 +109,7 @@ flowchart LR
 Orca 当前做对的地方：
 
 - 没有迁移 Scryer Tauri 外壳，而是接入 Orca 原生 tab、preload、Electron IPC、store、agent terminal。
-- #41-#49 已把 broad operation migration 收敛进 Native Scryer Operation Catalog、typed operation contracts、pipeline、state-store、planner/reporter modules 和 parity/ownership tests。
+- Native Scryer Operation Catalog、typed operation contracts、pipeline、state-store、schemas 和 ownership tests 已建立；Architecture 产品主路径的 executable operations 已跨过 engine seam。
 - `beginSync` 写 pre-sync snapshot 和 `.implementing`，所以切换 tab、重启后还能恢复 sync 中状态。
 - source map 直接打开 Orca editor，不再走 Scryer 的独立 `open_in_editor`。
 - `useArchitectureModelController` 已集中管理模型状态、外部变更 diff/follow、undo/redo 和 sync 生命周期。
@@ -141,8 +143,9 @@ flowchart LR
 
 主要剩余差距：
 
-- PR 稳定化：当前需要把 dirty worktree 按 #28 hard cutover、#29 live UI coverage、docs/status cleanup 和相邻历史改动拆清楚，再做 final review 和人工验收。
-- #26-#29 已完成：legacy semantic owners 已降级为 engine-backed shim 或清理出 cataloged-operation 语义路径；`ScryerEditSessionController` + Completion Gate 已固化；Architecture renderer 已消费 `ArchitectureViewDto`；live UI coverage 已扩大到稳定 product path 的真实可见控件和 `.scryer` 文件效果，group nesting / bulk group restore 保持 operation-backed setup 加文件效果断言。
+- Full operation parity：当前还需要 #31-#35 补齐 catalog-only operations 的 executor、adapter 和 coverage；这不同于 #28/#29 Architecture 产品链路。
+- PR 准备：#28/#29/#30/#36 release-gate diff 已在 clean worktree 中和相邻历史改动分离，并已完成 final review/test gate；后续是推送 PR 和人工验收。
+- #26-#29 已完成，#36 release gate 已关闭：legacy semantic owners 已降级为 engine-backed shim 或清理出 cataloged-operation 语义路径；`ScryerEditSessionController` + Completion Gate 已固化；Architecture renderer 已消费 `ArchitectureViewDto`；live UI coverage 已扩大到稳定 product path 的真实可见控件和 `.scryer` 文件效果，包含 active model reload、view-only no-write、MCP alias matrix、visible `group.delete` 和 focused `person.add` API 覆盖。
 - group bubble 目前是按节点范围计算的 ReactFlow overlay，未做 `bubblesets-js` 的有机曲线形状。
 - Scryer 的独立 AI advisor/provider 按用户要求不迁移；如果以后要“AI 填充节点”，应该接 Orca agent 能力，而不是新增 provider 设置。
 
@@ -277,20 +280,21 @@ Scryer 已经把 `ExternalChanged` 的前端表现做得更细：高亮、diff�
 | GroupsView     | dnd、成员、嵌套、canvas groups 模式                                    | dnd、成员、嵌套、multi-select 建组、canvas group overlay      | 已迁移主要交互                                     |
 | SyncBar        | agent-event 自动更新日志、完成后 mark synced/reload/sync_diff          | Orca terminal prompt + finish/cancel + agent done 自动 finish | 已接 Orca agent 状态                               |
 | drift          | Rust 检测 source map 和结构变化                                        | TypeScript 检测 source map 和结构变化                         | 已有真实逻辑，继续扩大 e2e                         |
-| Scryer Operation Surface | Scryer upstream tool runtime                                 | Orca-native CLI + Native Scryer Engine                         | #41-#49 broad operation migration 和 #26-#29 产品集成固化已完成；剩余是 PR 稳定化 |
+| Scryer Operation Surface | Scryer upstream tool runtime                                 | Orca-native Native Scryer Engine catalog；Architecture product slice executable | #26-#29 产品集成固化已完成；full operation parity 仍需 #31-#35 |
 | AI advisor     | Scryer 独立 provider、hints、fill with AI                              | 按要求未迁移                                                  | 不迁移独立 provider；可接 Orca agent 能力          |
 | Tauri shell    | Tauri desktop app                                                      | 按要求未迁移                                                  | 正确舍弃                                           |
 
 ## 8. 剩余风险
 
-核心链路已有真实读写路径：画布、GroupsView、SyncBar、Native Scryer Engine operation layer、drift 和 sync snapshot。FlowScriptView 属于历史扩展，不再作为 #28/#29 完成目标。
+核心链路已有真实读写路径：画布、GroupsView、SyncBar、Native Scryer Engine operation layer、drift 和 sync snapshot。FlowScriptView 属于历史扩展，不再作为 #28/#29 完成目标。#30/#36 审计见 `docs/orca-scryer-architecture-slice-audit.md`：当前 Architecture 默认模型 release-critical 主链路已打通并通过严格 zero-partial release gate。剩余 operation parity gap 不阻塞当前 Architecture 默认模型主路径的前后端打通判断，但会阻塞“full Scryer parity complete”的声明。
 
 剩余差异：
 
-1. PR 稳定化：需要把 #28/#29/docs 和相邻历史改动拆成可 review 的变更集。
-2. group bubble 是真实成员范围 overlay，但还不是 `bubblesets-js` 有机曲线。
-3. AI provider 不迁移是明确边界；如果要 AI fill，需要走 Orca agent，而不是 Scryer provider。
-4. 视觉密度和细节仍可能和 Scryer 有差异，但主要交互、状态管理、持久化和 live e2e 已覆盖。
+1. #31-#35：需要补齐 catalog-only operations 的 executor、adapter 和 coverage。
+2. PR 准备：#28/#29/#30/#36 docs/code/test diff 已隔离为可 review 的 clean-branch 变更集，后续是推送 PR 和人工验收。
+3. group bubble 是真实成员范围 overlay，但还不是 `bubblesets-js` 有机曲线。
+4. AI provider 不迁移是明确边界；如果要 AI fill，需要走 Orca agent，而不是 Scryer provider。
+5. 视觉密度和细节仍可能和 Scryer 有差异；主要默认模型交互、状态管理、持久化和 release-critical live e2e 已覆盖，但像素级视觉复刻仍不是当前 gate。
 
 ## 9. 第二阶段细粒度迁移清单完成情况
 
@@ -338,7 +342,7 @@ Scryer 已经把 `ExternalChanged` 的前端表现做得更细：高亮、diff�
    - 人类操作：创建/编辑/撤销/重做节点、links、group；flow 若保留，作为 Orca extension 单独验证。
    - agent 操作：工具层/CLI 写入多层级节点，UI diff/highlight/followAI。
    - sync 操作：begin -> agent 写 model -> 自动/手动 finish -> baseline 更新 -> drift 清空。
-   - 状态：#29 已扩大 live coverage，覆盖稳定 product path 的真实可见控件、links、source/group 编辑、standard envelope、drift、sync/cancel/finish 和重启恢复；group nesting / bulk group restore 继续用 operation-backed setup 加文件效果断言。
+   - 状态：#29 已扩大 live coverage，覆盖稳定 product path 的真实可见控件、links、source/group 编辑、standard envelope、drift、sync/cancel/finish 和重启恢复；group nesting / bulk group restore 继续用 operation-backed setup 加文件效果断言。#30 继续把这些覆盖整理成前端-后端链路审计矩阵。
 
 ## 10. Orca 适配原则
 

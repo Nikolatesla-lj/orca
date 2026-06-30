@@ -56,9 +56,9 @@ describe('scryer drift operations', () => {
       testContext(projectPath, 'req-drift-get')
     )
 
-    expect(JSON.parse(await readFile(join(projectPath, '.scryer', '.sync.json'), 'utf8'))).toHaveProperty(
-      'reconciledAt'
-    )
+    expect(
+      JSON.parse(await readFile(join(projectPath, '.scryer', '.sync.json'), 'utf8'))
+    ).toHaveProperty('reconciledAt')
     expect(result).toMatchObject({
       ok: true,
       result: {

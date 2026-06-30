@@ -2,13 +2,18 @@
    it owns app lifecycle, service wiring, window creation, and hook/daemon
    startup. Splitting by line count would fragment tightly coupled startup
    logic across files without a cleaner ownership seam. */
-import { existsSync } from 'fs'
-import { join } from 'path'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import os from 'node:os'
-import { app, BrowserWindow, ipcMain, nativeTheme } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme } from 'electron'
 import { electronApp, is } from '@electron-toolkit/utils'
 import * as QRCode from 'qrcode'
-import { Store, initDataPath } from './persistence'
+import {
+  Store,
+  initDataPath,
+  getCanonicalUserDataPath,
+  migrateMobilePairingDataToCanonicalUserDataPath
+} from './persistence'
 import { applyAppIcon } from './app-icon'
 import { StatsCollector, initStatsPath } from './stats/collector'
 import { ClaudeUsageStore, initClaudeUsagePath } from './claude-usage/store'
@@ -17,6 +22,7 @@ import { OpenCodeUsageStore, initOpenCodeUsagePath } from './opencode-usage/stor
 import { killAllPty } from './ipc/pty'
 import { initDaemonPtyProvider, disconnectDaemon, shutdownDaemon } from './daemon/daemon-init'
 import { closeAllWatchers } from './ipc/filesystem-watcher'
+import { disposeWorktreeBaseDirectoryWatchers } from './ipc/worktree-base-directory-watcher'
 import { registerCoreHandlers } from './ipc/register-core-handlers'
 import { initObservability, shutdownObservability } from './observability'
 import { startSpan } from './observability/tracer'
@@ -62,6 +68,7 @@ import {
   suppressDevEducationForStore
 } from './startup/dev-education-suppression'
 import { maybeRedirectAppImageCliLaunch } from './startup/appimage-cli-redirect'
+import { maybeRedirectPackagedCliEntryLaunch } from './startup/packaged-cli-entry-redirect'
 import { startFirstWindowStartupServices } from './startup/first-window-startup-services'
 import { getDevInstanceIdentity } from './startup/dev-instance-identity'
 import { hydrateShellPath, mergePathSegments } from './startup/hydrate-shell-path'
@@ -145,6 +152,7 @@ import {
   type SyntheticAgentTitleProfile
 } from '../shared/synthetic-agent-title'
 import type { AgentStatusState } from '../shared/agent-status-types'
+import { resolveTuiAgentPermissionMode } from '../shared/tui-agent-permissions'
 import { KeybindingService } from './keybindings/keybinding-service'
 import { applyElectronProxySettings } from './network/proxy-settings'
 import { preserveAgentAuthBeforeRestart } from './agent-auth-restart-preservation'
@@ -183,6 +191,18 @@ let firstWindowStartupServicesReady: Promise<void> = Promise.resolve()
 let localPtyStartupReady: Promise<void> = Promise.resolve()
 const AGENT_STATE_CRASH_BREADCRUMB_MIN_INTERVAL_MS = 30_000
 const isServeMode = process.argv.includes('--serve')
+// Why: on Windows a CLI-shaped launch (Orca.exe <unpacked CLI entry>) that lost
+// ELECTRON_RUN_AS_NODE would otherwise boot the GUI, lose the single-instance
+// lock to a running window, and exit silently. Redirect it to node mode here,
+// before the lock gate below can bounce it.
+const packagedCliEntryRedirect = maybeRedirectPackagedCliEntryLaunch({
+  isPackaged: app.isPackaged,
+  resourcesPath: process.resourcesPath,
+  execPath: process.execPath
+})
+if (packagedCliEntryRedirect.redirected) {
+  app.exit(packagedCliEntryRedirect.status)
+}
 const appImageCliRedirect = maybeRedirectAppImageCliLaunch({
   isPackaged: app.isPackaged,
   resourcesPath: process.resourcesPath,
@@ -503,23 +523,41 @@ ipcMain.handle('app:awaitFirstWindowStartupServices', async () => {
   await firstWindowStartupServicesReady
 })
 
+ipcMain.handle(
+  'app:startupDiagnostic',
+  (_event, event: string, details?: Record<string, unknown>) => {
+    if (!startupDiagnosticsEnabled || !event.startsWith('renderer-')) {
+      return
+    }
+    logStartupMilestone(event, details && typeof details === 'object' ? details : {})
+  }
+)
+
 function startDesktopFirstWindowStartupServices(): Promise<void> {
+  logStartupMilestone('first-window-startup-services-start')
   const startupServices = startFirstWindowStartupServices({
     // Why: the persistent-terminal daemon is desktop-only. Headless `orca serve`
     // registers its PTY runtime separately and must not spawn the desktop daemon
     // or hook loopback listener.
-    startDaemonPtyProvider: (signal) => initDaemonPtyProvider(signal),
+    startDaemonPtyProvider: async (signal) => {
+      logStartupMilestone('startup-service-start', { service: 'daemon-pty-provider' })
+      await initDaemonPtyProvider(signal)
+      logStartupMilestone('startup-service-done', { service: 'daemon-pty-provider' })
+    },
     // Why: PTY spawn env reads ORCA_AGENT_HOOK_* from the live server state, so
     // the renderer awaits this barrier before restored terminals reconnect.
-    startAgentHookServer: () =>
-      agentHookServer.start({
+    startAgentHookServer: async () => {
+      logStartupMilestone('startup-service-start', { service: 'agent-hook-server' })
+      await agentHookServer.start({
         env: app.isPackaged ? 'production' : 'development',
         // Why: hooks source this endpoint file at invocation time, so old PTY
         // env still reaches the current Orca process after an app restart.
         // Dev uses a namespace because all worktrees share `orca-dev`.
         userDataPath: app.getPath('userData'),
         endpointNamespace: devAgentHookEndpointNamespace
-      }),
+      })
+      logStartupMilestone('startup-service-done', { service: 'agent-hook-server' })
+    },
     onDaemonError: (error) => {
       console.error('[daemon] Failed to start daemon PTY provider, falling back to local:', error)
     },
@@ -531,6 +569,12 @@ function startDesktopFirstWindowStartupServices(): Promise<void> {
   })
   firstWindowStartupServicesReady = startupServices.firstWindowReady
   localPtyStartupReady = startupServices.localPtyReady
+  void firstWindowStartupServicesReady.then(() => {
+    logStartupMilestone('first-window-startup-services-ready')
+  })
+  void localPtyStartupReady.then(() => {
+    logStartupMilestone('local-pty-startup-ready')
+  })
   return firstWindowStartupServicesReady
 }
 
@@ -674,6 +718,14 @@ function openMainWindow(): BrowserWindow {
         reason: details.reason,
         expectedTeardown: getExpectedTeardownScope(webContentsId)
       }),
+    onRendererRecoveryExhausted: ({ details, recentRecoveryCount }) => {
+      recordCrashBreadcrumb('renderer_recovery_circuit_breaker_open', {
+        reason: details.reason,
+        exitCode: details.exitCode ?? null,
+        recentRecoveryCount
+      })
+      void presentRendererRecoveryPrompt(recentRecoveryCount)
+    },
     deferLoad: true,
     title: devInstanceIdentity.name,
     getKeybindings: () => keybindings?.getOverrides(),
@@ -841,7 +893,20 @@ function openMainWindow(): BrowserWindow {
       // Why: some native OSC titles miss terminal idle/permission frames.
       // Inject hook-derived frames so the renderer title tracker updates too.
       const profile = getSyntheticAgentTitleProfile(payload.agentType)
-      if (profile && shouldDriveSyntheticAgentTitleFromHook(payload.agentType, payload.state)) {
+      const suppressSyntheticCodexAutoApprovalTitle =
+        payload.agentType === 'codex' &&
+        (payload.state === 'waiting' || payload.state === 'blocked')
+          ? shouldSuppressCodexAutoApprovalSyntheticTitleFromHook({
+              agentType: payload.agentType,
+              state: payload.state,
+              launchConfig: runtime?.getAgentStatusLaunchConfigForPaneKey(paneKey, { launchToken })
+            })
+          : false
+      if (
+        profile &&
+        shouldDriveSyntheticAgentTitleFromHook(payload.agentType, payload.state) &&
+        !suppressSyntheticCodexAutoApprovalTitle
+      ) {
         driveSyntheticTitleFromHook(paneKey, payload.state, profile)
       }
     }
@@ -885,6 +950,35 @@ function sendOpenCrashReport(targetWindow?: BrowserWindow | null): void {
   const webContents =
     targetWindow && !targetWindow.isDestroyed() ? targetWindow.webContents : mainWindow?.webContents
   webContents?.send('ui:openCrashReport')
+}
+
+// Why: when the renderer crash-loops, the breaker stops auto-reloading and the
+// window is left blank. The renderer is dead, so a main-process dialog is the
+// only surface that can offer a retry or a clean quit instead of a silent loop.
+async function presentRendererRecoveryPrompt(recentRecoveryCount: number): Promise<void> {
+  if (isQuitting) {
+    return
+  }
+  const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined
+  const options = {
+    type: 'error' as const,
+    buttons: ['Reload', 'Quit'],
+    defaultId: 0,
+    cancelId: 1,
+    title: 'Orca keeps failing to load',
+    message: 'The app window crashed repeatedly and stopped reloading automatically.',
+    detail: `Orca tried to recover ${recentRecoveryCount} times in a row without success. This is often a graphics-driver or installation problem. Reload to try again, or quit and relaunch Orca.`
+  }
+  const { response } = window
+    ? await dialog.showMessageBox(window, options)
+    : await dialog.showMessageBox(options)
+  if (response === 0 && mainWindow && !mainWindow.isDestroyed()) {
+    recordCrashBreadcrumb('renderer_recovery_manual_retry')
+    loadMainWindow(mainWindow)
+  } else if (response === 1) {
+    isQuitting = true
+    app.quit()
+  }
 }
 
 function recordProcessGoneCrash(
@@ -973,9 +1067,16 @@ function shutdownWatchersOnce(): Promise<void> {
   if (!watcherShutdownPromise) {
     // Why: @parcel/watcher tears down native async work during unsubscribe.
     // Electron must wait for that cleanup before Node's environment exits.
-    watcherShutdownPromise = closeAllWatchers()
-      .catch((error) => {
-        console.error('[filesystem-watcher] shutdown failed:', error)
+    watcherShutdownPromise = Promise.allSettled([
+      closeAllWatchers(),
+      disposeWorktreeBaseDirectoryWatchers()
+    ])
+      .then((results) => {
+        for (const result of results) {
+          if (result.status === 'rejected') {
+            console.error('[filesystem-watcher] shutdown failed:', result.reason)
+          }
+        }
       })
       .then(() => {
         watcherShutdownDone = true
@@ -1259,6 +1360,32 @@ function driveSyntheticTitleFromHook(
   sendSyntheticTitle(ptyId, `\x1b]0;${label}\x07${needsUserInput ? '\x07' : ''}`, {
     force: true
   })
+}
+
+function shouldSuppressCodexAutoApprovalSyntheticTitleFromHook(args: {
+  agentType: string | null | undefined
+  state: AgentStatusState
+  launchConfig:
+    | {
+        agentArgs?: string | null
+        agentEnv?: Record<string, string> | null
+      }
+    | null
+    | undefined
+}): boolean {
+  if (args.agentType !== 'codex' || (args.state !== 'waiting' && args.state !== 'blocked')) {
+    return false
+  }
+  if (!args.launchConfig) {
+    return false
+  }
+  return (
+    resolveTuiAgentPermissionMode({
+      agent: 'codex',
+      agentArgs: args.launchConfig.agentArgs,
+      agentEnv: args.launchConfig.agentEnv
+    }) === 'yolo'
+  )
 }
 
 app.whenReady().then(async () => {
@@ -1632,9 +1759,17 @@ app.whenReady().then(async () => {
     app.exit(1)
     return
   }
+  // Why: existing installs may have already written mobile pairing credentials
+  // under the late app.getPath('userData') directory. Copy any missing files
+  // forward before the runtime switches exclusively to the canonical path.
+  migrateMobilePairingDataToCanonicalUserDataPath(app.getPath('userData'))
   runtimeRpc = new OrcaRuntimeRpcServer({
     runtime,
-    userDataPath: app.getPath('userData'),
+    // Why: mobile pairing (DeviceRegistry + E2EE keypair + runtime metadata)
+    // must share the stable path captured before app.setName(), not a late
+    // app.getPath('userData') that resolves elsewhere and drops paired devices
+    // across restarts/updates. See persistence.ts:getCanonicalUserDataPath.
+    userDataPath: getCanonicalUserDataPath(),
     enableWebSocket: true,
     ...(isE2E ? { wsPort: 0 } : {}),
     ...(devWsPort !== undefined ? { wsPort: devWsPort } : {}),
@@ -1780,7 +1915,9 @@ app.on('will-quit', (e) => {
           .then(() => awaitRuntimeFileWatcherUnsubscribes())
           .then(() => {
             if (ownedRuntimeId) {
-              clearRuntimeMetadataIfOwned(app.getPath('userData'), ownedPid, ownedRuntimeId)
+              // Why: must match the path the runtime server wrote metadata to
+              // (getCanonicalUserDataPath), not late app.getPath('userData').
+              clearRuntimeMetadataIfOwned(getCanonicalUserDataPath(), ownedPid, ownedRuntimeId)
             }
           })
           .catch((error) => {

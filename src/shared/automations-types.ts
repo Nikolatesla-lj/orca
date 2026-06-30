@@ -1,4 +1,4 @@
-import type { TuiAgent } from './types'
+import type { SetupDecision, TuiAgent } from './types'
 import type { TaskSourceContext, WorkspaceRunContext } from './task-source-context'
 
 export type AutomationWorkspaceMode = 'existing' | 'new_per_run'
@@ -111,6 +111,7 @@ export type Automation = {
   workspaceMode: AutomationWorkspaceMode
   workspaceId: string | null
   baseBranch: string | null
+  setupDecision?: SetupDecision
   reuseSession: boolean
   timezone: string
   rrule: string
@@ -168,6 +169,7 @@ export type AutomationCreateInput = {
   workspaceMode: AutomationWorkspaceMode
   workspaceId?: string | null
   baseBranch?: string | null
+  setupDecision?: SetupDecision
   reuseSession?: boolean
   timezone: string
   rrule: string
@@ -190,6 +192,7 @@ export type AutomationUpdateInput = Partial<
     | 'workspaceMode'
     | 'workspaceId'
     | 'baseBranch'
+    | 'setupDecision'
     | 'reuseSession'
     | 'timezone'
     | 'rrule'

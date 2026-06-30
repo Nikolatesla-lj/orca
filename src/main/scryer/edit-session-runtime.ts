@@ -5,11 +5,7 @@ import type {
 } from './edit-session-controller'
 
 export type ScryerMutableAgentRunRuntime = ScryerAgentRunRuntime & {
-  setRunStatus(
-    agentRunId: string,
-    status: ScryerAgentRunStatus,
-    options?: { emit?: boolean }
-  ): void
+  setRunStatus(agentRunId: string, status: ScryerAgentRunStatus, options?: { emit?: boolean }): void
   clearRun(agentRunId: string): void
 }
 

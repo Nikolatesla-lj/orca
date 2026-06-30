@@ -84,10 +84,13 @@ module.exports = {
   // app.asar.unpacked/node_modules/.
   // Why: remote runtime connections use WebSocket + E2EE from the packaged CLI
   // before the GUI process starts, so those deps need the same treatment.
+  // Why: out/package.json pins compiled output to CommonJS so parent
+  // package.json files with type=module cannot change the packaged CLI loader.
   // Why: sherpa-onnx native bindings (platform-specific subpackages) must be
   // unpacked because they ship .node addons + .dylib/.so files that cannot be
   // dlopen()'d from inside the asar archive.
   asarUnpack: [
+    'out/package.json',
     'out/cli/**',
     'out/shared/**',
     'out/main/agent-hooks/**',

@@ -363,6 +363,8 @@ export const updateNodeItemSchema = z
     responsibilities: z.array(responsibilitySchema).optional(),
     properties: z.array(propertySchema).optional(),
     visual: z.boolean().optional(),
+    appearance: z.record(z.string(), z.unknown()).optional(),
+    notes: z.string().optional(),
     parent_id: z.string().nullable().optional()
   })
   .strict()

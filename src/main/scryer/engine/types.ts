@@ -584,6 +584,8 @@ export type UpdateNodeItem = {
   responsibilities?: ScryModel['nodes'][number]['responsibilities']
   properties?: ScryModel['nodes'][number]['properties']
   visual?: boolean
+  appearance?: ScryModel['nodes'][number]['appearance']
+  notes?: string
   parent_id?: string | null
 }
 

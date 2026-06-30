@@ -73,6 +73,20 @@ export const nodeUpdateOperation: ScryerOperationExecutor<
     if (patch.visual !== undefined) {
       node.visual = patch.visual || undefined
     }
+    if (patch.notes !== undefined) {
+      node.notes = patch.notes || undefined
+    }
+    if (patch.appearance !== undefined) {
+      const nextAppearance = { ...node.appearance }
+      for (const [key, value] of Object.entries(patch.appearance)) {
+        if (value === null) {
+          delete nextAppearance[key]
+        } else {
+          nextAppearance[key] = value
+        }
+      }
+      node.appearance = Object.keys(nextAppearance).length > 0 ? nextAppearance : undefined
+    }
     if (patch.parent_id !== undefined) {
       node.parentId = patch.parent_id ?? undefined
     }

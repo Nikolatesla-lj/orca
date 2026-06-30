@@ -126,17 +126,12 @@ async function atomicWriteJson(path: string, value: unknown): Promise<void> {
   await rename(tmpPath, path)
 }
 
-function matchesLeaseIntent(
-  active: ScryerEditLease,
-  input: AcquireScryerEditLeaseInput
-): boolean {
+function matchesLeaseIntent(active: ScryerEditLease, input: AcquireScryerEditLeaseInput): boolean {
   if (input.token && active.token === input.token) {
     return true
   }
   return Boolean(
-    input.agentRunId &&
-      active.agentRunId === input.agentRunId &&
-      active.owner === input.owner
+    input.agentRunId && active.agentRunId === input.agentRunId && active.owner === input.owner
   )
 }
 

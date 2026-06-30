@@ -40,6 +40,7 @@ export type ScryAppearance = {
   distPath?: string
   builtAt?: number
   sourceHash?: string
+  [key: string]: unknown
 }
 
 export type ScryNode = {

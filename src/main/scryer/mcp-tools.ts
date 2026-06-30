@@ -71,6 +71,25 @@ async function isStrictScryerModel(projectPath: string): Promise<boolean> {
   return false
 }
 
+async function readMcpCompatibleModel(projectPath: string): Promise<C4ModelData> {
+  const candidates = [
+    `${getProjectScryerDir(projectPath)}/planned.scry`,
+    getProjectModelPath(projectPath)
+  ]
+  for (const candidate of candidates) {
+    try {
+      const raw = await readFile(candidate, 'utf8')
+      const data = JSON.parse(raw) as unknown
+      if (isRecord(data) && data.version === '0.3') {
+        return { ...parseModelData(raw), projectPath }
+      }
+    } catch {
+      // Fall through to the next candidate, then legacy model storage.
+    }
+  }
+  return readModel(projectPath)
+}
+
 function scryerOperationContext(projectPath: string, requestId: string) {
   return {
     requestId,
@@ -590,7 +609,7 @@ async function getTask(
   projectPath: string,
   args: Record<string, unknown>
 ): Promise<ScryerToolResult> {
-  const model = await readModel(projectPath)
+  const model = await readMcpCompatibleModel(projectPath)
   const scopeId = asString(args.node_id ?? args.nodeId)
 
   const isDescendantOf = (nodeId: string, ancestorId: string): boolean => {
@@ -1133,25 +1152,46 @@ async function updateNodes(
   return ok(`Updated ${updated.length} node(s)`, model)
 }
 
-async function strictUpdateNodes(projectPath: string, updates: unknown[]): Promise<ScryerToolResult> {
+async function strictUpdateNodes(
+  projectPath: string,
+  updates: unknown[]
+): Promise<ScryerToolResult> {
   const nodePatches: Record<string, unknown>[] = []
   const sourceEntries: Record<string, unknown>[] = []
   const boundaries: Record<string, unknown>[] = []
+  const compatibilityModel = await readMcpCompatibleModel(projectPath)
 
   for (const update of updates) {
     if (!isRecord(update) || typeof update.node_id !== 'string') {
       return fail('Each update_nodes item requires node_id')
     }
-    const unsupported = ['status', 'reason', 'contract', 'notes', 'shape', 'sources'].filter(
-      (key) => key !== 'sources' && update[key] !== undefined
-    )
-    if (unsupported.length > 0) {
-      return fail(
-        `update_nodes cannot apply legacy field(s) to Scryer 0.3 models: ${unsupported.join(', ')}`
-      )
-    }
+    const node = compatibilityModel.nodes.find((candidate) => candidate.id === update.node_id)
+    const appearance: Record<string, unknown> = {}
+    const nextContract = normalizeContract(update.contract)
 
     const patch: Record<string, unknown> = { node_id: update.node_id }
+    if (update.status !== undefined) {
+      if (!node) {
+        return fail(`Node '${update.node_id}' not found`)
+      }
+      if (!isStatus(update.status)) {
+        return fail(`Node '${update.node_id}' has invalid status '${String(update.status)}'`)
+      }
+      const reason = asString(update.reason)?.trim() ?? ''
+      if (!reason) {
+        return fail(`Node '${update.node_id}': reason is required when changing status`)
+      }
+      if (update.status === 'verified') {
+        const unmet = validateVerifiedGate(compatibilityModel, node, nextContract)
+        if (unmet.length > 0) {
+          return fail(
+            `Cannot set '${update.node_id}' to verified. These expect contract items are not yet passed:\n${unmet.join('\n')}`
+          )
+        }
+      }
+      appearance.status = update.status
+      appearance.statusReason = reason
+    }
     const nextName = asString(update.name)
     if (nextName !== undefined) {
       patch.name = nextName
@@ -1167,6 +1207,17 @@ async function strictUpdateNodes(projectPath: string, updates: unknown[]): Promi
     if (typeof update.external === 'boolean') {
       patch.external = update.external
     }
+    const nextShape = asString(update.shape)
+    if (nextShape !== undefined) {
+      appearance.shape = nextShape
+    }
+    if (nextContract !== undefined) {
+      appearance.contract = nextContract
+    }
+    const notes = asStringArray(update.notes)
+    if (notes !== undefined) {
+      patch.notes = notes.join('\n')
+    }
     const properties = normalizeProperties(update.properties)
     if (properties !== undefined) {
       const error = validatePropertyLabels(properties, `node '${update.node_id}'`)
@@ -1174,6 +1225,9 @@ async function strictUpdateNodes(projectPath: string, updates: unknown[]): Promi
         return fail(error)
       }
       patch.properties = properties
+    }
+    if (Object.keys(appearance).length > 0) {
+      patch.appearance = appearance
     }
     if (Object.keys(patch).length > 1) {
       nodePatches.push(patch)
@@ -1267,7 +1321,10 @@ async function strictUpdateEdges(projectPath: string, edges: unknown[]): Promise
   )
 }
 
-async function strictDeleteNodes(projectPath: string, nodeIds: string[]): Promise<ScryerToolResult> {
+async function strictDeleteNodes(
+  projectPath: string,
+  nodeIds: string[]
+): Promise<ScryerToolResult> {
   return executeStrictScryerOperation(
     projectPath,
     'scryer.node.delete',
@@ -1276,7 +1333,10 @@ async function strictDeleteNodes(projectPath: string, nodeIds: string[]): Promis
   )
 }
 
-async function strictDeleteEdges(projectPath: string, linkIds: string[]): Promise<ScryerToolResult> {
+async function strictDeleteEdges(
+  projectPath: string,
+  linkIds: string[]
+): Promise<ScryerToolResult> {
   return executeStrictScryerOperation(
     projectPath,
     'scryer.link.delete',

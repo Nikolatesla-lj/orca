@@ -22,12 +22,8 @@ import {
   getEagerPtyBufferHandle
 } from './pty-dispatcher'
 import { drainPreHandlerPtyData, drainPreHandlerPtyExit } from './pty-pre-handler-buffer'
-import type {
-  PtyTransport,
-  IpcPtyTransportOptions,
-  PtyConnectResult,
-  PtyDataMeta
-} from './pty-dispatcher'
+import type { PtyDataMeta } from './pty-dispatcher'
+import type { IpcPtyTransportOptions, PtyConnectResult, PtyTransport } from './pty-transport-types'
 import { createBellDetector } from './bell-detector'
 import {
   createAgentStatusOscProcessor,
@@ -44,14 +40,14 @@ export {
   subscribeToPtyExit,
   unregisterPtyDataHandlers
 } from './pty-dispatcher'
+export type { EagerPtyHandle } from './pty-dispatcher'
 export type {
-  EagerPtyHandle,
+  IpcPtyTransportOptions,
   LocalPtySessionMetadata,
-  PtyTransport,
   PtyBufferSnapshot,
   PtyConnectResult,
-  IpcPtyTransportOptions
-} from './pty-dispatcher'
+  PtyTransport
+} from './pty-transport-types'
 export { extractLastOscTitle } from '../../../../shared/agent-detection'
 
 const SSH_SESSION_EXPIRED_ERROR = 'SSH_SESSION_EXPIRED'
@@ -446,6 +442,7 @@ export function createIpcPtyTransport(opts: IpcPtyTransportOptions = {}): PtyTra
     leafId,
     shellOverride,
     projectRuntime,
+    terminalColorQueryReplies,
     telemetry,
     onPtyExit,
     onTitleChange,
@@ -708,6 +705,7 @@ export function createIpcPtyTransport(opts: IpcPtyTransportOptions = {}): PtyTra
           ...(leafId ? { leafId } : {}),
           ...(shellOverride ? { shellOverride } : {}),
           ...(projectRuntime ? { projectRuntime } : {}),
+          ...(terminalColorQueryReplies ? { terminalColorQueryReplies } : {}),
           ...(telemetry ? { telemetry } : {})
         })
         const spawnResult = result as PtyConnectResult & { isReattach?: boolean }

@@ -2,11 +2,19 @@
 
 These were implementation-ready issue drafts for the Native Scryer Engine
 operation migration work set. The operation migration and follow-up #26-#29
-product-integration slices have since been implemented and verified; this file
-is retained as historical planning context, not as a fresh backlog.
+product-integration slices carried the stable Architecture product path through
+the engine seam and live UI coverage, and #36 has closed the current
+Architecture slice release gate from the #30 audit. Full operation parity is not
+complete: some operation rows in the 33-operation catalog remain
+contract-only and still need executors, adapter wiring, and tests through
+decision map #31-#35.
+
+This file is retained as historical planning context and a parity reference,
+not as proof that every slice below is already executable.
 
 Do not publish these slices as new unchecked issues without first revalidating
-them against the current decision map and code.
+them against the current decision map and code. Current follow-up issue
+boundaries are #31-#35 in `docs/orca-scryer-decision-map.md`.
 
 ## Parent
 
@@ -783,7 +791,9 @@ state-store transaction.
 
 ## Slice 8: Retire Legacy Adapter Semantics Behind Engine Seams
 
-Status: completed through #26-#28 product-integration work.
+Status: completed for the stable Architecture product path through #26-#28.
+Remaining operation-family adapters continue through #35 after #31-#34 add the
+missing executors.
 
 ### Parent
 
@@ -908,7 +918,9 @@ through `readView(...)` or `executeOperation(...)`.
 
 ## Slice 9: Prove Broad Migration Readiness With Parity, Ownership, And Live UI Gates
 
-Status: completed through #29 live UI coverage and operation readiness gates.
+Status: partially completed. #29 proves the stable Architecture product path;
+full operation readiness remains open for #35 after #31-#34 add executors for
+the catalog-only operations.
 
 ### Parent
 

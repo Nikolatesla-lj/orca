@@ -159,7 +159,9 @@ function formatZodPath(path: unknown[], key?: string): string {
   return key ? (base ? `${base}.${key}` : key) : base || 'input'
 }
 
-function fieldErrorsFromZod(error: { issues?: unknown }): { path: string; message: string; code?: string }[] {
+function fieldErrorsFromZod(error: {
+  issues?: unknown
+}): { path: string; message: string; code?: string }[] {
   const issues = Array.isArray(error.issues)
     ? (error.issues as { path?: unknown[]; message?: string; code?: string; keys?: string[] }[])
     : []

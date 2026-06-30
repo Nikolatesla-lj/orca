@@ -3,15 +3,41 @@ import type {
   ArchitectureDiagramKind,
   ArchitectureDiagramLink,
   ArchitectureDiagramModel,
-  ArchitectureDiagramNode
+  ArchitectureDiagramNode,
+  ArchitectureDiagramShape
 } from './architecture-diagram-types'
 
-function diagramKind(kind: ArchitectureViewDto['nodes'][number]['kind']): ArchitectureDiagramKind {
-  return kind === 'symbol' ? 'operation' : kind
+const KNOWN_SHAPES = new Set<ArchitectureDiagramShape>([
+  'rectangle',
+  'person',
+  'cylinder',
+  'pipe',
+  'trapezoid',
+  'bucket',
+  'hexagon'
+])
+
+function diagramKind(node: ArchitectureViewDto['nodes'][number]): ArchitectureDiagramKind {
+  if (node.kind !== 'symbol') {
+    return node.kind
+  }
+  const symbolKind = node.appearance?.symbolKind
+  return symbolKind === 'operation' || symbolKind === 'process' || symbolKind === 'model'
+    ? symbolKind
+    : 'operation'
 }
 
 function nodeType(kind: ArchitectureDiagramKind): ArchitectureDiagramNode['type'] {
   return kind === 'operation' || kind === 'process' || kind === 'model' ? kind : 'architecture'
+}
+
+function shapeFromAppearance(
+  appearance: Record<string, unknown> | undefined
+): ArchitectureDiagramShape | undefined {
+  const shape = appearance?.shape
+  return typeof shape === 'string' && KNOWN_SHAPES.has(shape as ArchitectureDiagramShape)
+    ? (shape as ArchitectureDiagramShape)
+    : undefined
 }
 
 export function architectureViewToDiagramModel(
@@ -21,7 +47,8 @@ export function architectureViewToDiagramModel(
   return {
     projectPath,
     nodes: view.nodes.map((node): ArchitectureDiagramNode => {
-      const kind = diagramKind(node.kind)
+      const kind = diagramKind(node)
+      const shape = shapeFromAppearance(node.appearance)
       return {
         id: node.id,
         type: nodeType(kind),
@@ -33,6 +60,7 @@ export function architectureViewToDiagramModel(
           kind,
           ...(node.technology !== undefined ? { technology: node.technology } : {}),
           ...(node.external !== undefined ? { external: node.external } : {}),
+          ...(shape ? { shape } : {}),
           ...(node.properties
             ? {
                 properties: node.properties.map((property) => ({
@@ -67,6 +95,14 @@ export function architectureViewToDiagramModel(
     })),
     sourceMap: view.sourceMap,
     boundaries: view.boundaries,
+    validationWarnings: view.diagnostics
+      .filter((diagnostic) => diagnostic.severity === 'warning')
+      .map((diagnostic) => ({
+        kind: 'missing-mention',
+        path: diagnostic.path ?? '',
+        reference: diagnostic.code,
+        message: diagnostic.message
+      })),
     refPositions: {}
   }
 }

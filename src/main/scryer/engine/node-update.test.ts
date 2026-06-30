@@ -43,6 +43,7 @@ describe('scryer.node.update', () => {
           {
             node_id: 'api',
             name: 'Public API',
+            notes: 'Runtime notes',
             responsibilities: [{ id: 'resp-1', statement: 'serves user requests' }]
           }
         ]
@@ -65,6 +66,7 @@ describe('scryer.node.update', () => {
     expect(committed.nodes[0].name).toBe('API')
     expect(committed.nodes[0].responsibilities).toEqual([])
     expect(planned.nodes[0].name).toBe('Public API')
+    expect(planned.nodes[0].notes).toBe('Runtime notes')
     expect(planned.nodes[0].responsibilities).toEqual([
       { id: 'resp-1', statement: 'serves user requests' }
     ])
@@ -98,6 +100,130 @@ describe('scryer.node.update', () => {
         code: 'lock_busy',
         retryable: true
       }
+    })
+  })
+
+  it('merges and clears node appearance patches', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-engine-node-appearance-'))
+    await writeModel(projectPath, {
+      version: '0.3',
+      nodes: [{ id: 'api', kind: 'system', name: 'API', appearance: { status: 'proposed' } }],
+      links: [],
+      groups: [],
+      sourceMap: {},
+      boundaries: {}
+    })
+
+    const shaped = await createScryerEngine().executeOperation(
+      'scryer.node.update',
+      { nodes: [{ node_id: 'api', appearance: { shape: 'hexagon' } }] },
+      testContext(projectPath, 'req-node-appearance-set')
+    )
+    expect(shaped).toMatchObject({ ok: true })
+    const plannedWithShape = JSON.parse(
+      await readFile(join(projectPath, '.scryer', 'planned.scry'), 'utf8')
+    )
+    expect(plannedWithShape.nodes[0].appearance).toEqual({
+      status: 'proposed',
+      shape: 'hexagon'
+    })
+
+    const cleared = await createScryerEngine().executeOperation(
+      'scryer.node.update',
+      { nodes: [{ node_id: 'api', appearance: { shape: null } }] },
+      testContext(projectPath, 'req-node-appearance-clear')
+    )
+    expect(cleared).toMatchObject({ ok: true })
+    const plannedWithoutShape = JSON.parse(
+      await readFile(join(projectPath, '.scryer', 'planned.scry'), 'utf8')
+    )
+    expect(plannedWithoutShape.nodes[0].appearance).toEqual({ status: 'proposed' })
+  })
+
+  it('keeps appearance metadata when adding symbols', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-engine-symbol-appearance-'))
+    await writeModel(projectPath, {
+      version: '0.3',
+      nodes: [{ id: 'controller', kind: 'component', name: 'Controller' }],
+      links: [],
+      groups: [],
+      sourceMap: {},
+      boundaries: {}
+    })
+
+    const result = await createScryerEngine().executeOperation(
+      'scryer.symbol.add',
+      {
+        items: [
+          {
+            parent_id: 'controller',
+            name: 'Task',
+            appearance: { symbolKind: 'model' },
+            properties: []
+          }
+        ]
+      },
+      testContext(projectPath, 'req-symbol-appearance')
+    )
+
+    expect(result).toMatchObject({ ok: true })
+    const planned = JSON.parse(await readFile(join(projectPath, '.scryer', 'planned.scry'), 'utf8'))
+    expect(planned.nodes).toContainEqual(
+      expect.objectContaining({
+        kind: 'symbol',
+        parentId: 'controller',
+        name: 'Task',
+        appearance: { symbolKind: 'model' },
+        properties: []
+      })
+    )
+  })
+
+  it('rejects group.update re-parenting before writing planned state', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-engine-group-update-parent-'))
+    await writeModel(projectPath, {
+      version: '0.3',
+      nodes: [
+        { id: 'shop', kind: 'system', name: 'Shop' },
+        { id: 'api', kind: 'container', name: 'API', parentId: 'shop' },
+        { id: 'web', kind: 'container', name: 'Web', parentId: 'shop' }
+      ],
+      links: [],
+      groups: [
+        { id: 'group-api', name: 'API group', memberIds: ['api'], parentNodeId: 'shop' },
+        { id: 'group-web', name: 'Web group', memberIds: ['web'], parentNodeId: 'shop' }
+      ],
+      sourceMap: {},
+      boundaries: {}
+    })
+
+    const result = await createScryerEngine().executeOperation(
+      'scryer.group.update',
+      {
+        items: [{ group_id: 'group-web', parent_group_id: 'group-api' }]
+      },
+      testContext(projectPath, 'req-group-update-parent')
+    )
+
+    expect(result).toMatchObject({
+      ok: false,
+      operationId: 'scryer.group.update',
+      requestId: 'req-group-update-parent',
+      error: {
+        code: 'invalid_input',
+        retryable: false,
+        fieldErrors: [
+          {
+            path: 'items[].parent_group_id',
+            message: 'Re-parenting is not supported by group.update'
+          }
+        ]
+      }
+    })
+    await expect(
+      readFile(join(projectPath, '.scryer', 'planned.scry'), 'utf8')
+    ).rejects.toMatchObject({
+      code: 'ENOENT'
     })
   })
 

@@ -166,7 +166,9 @@ describe('scryer link operations', () => {
 
     const committed = JSON.parse(await readFile(join(projectPath, '.scryer', 'model.scry'), 'utf8'))
     const planned = JSON.parse(await readFile(join(projectPath, '.scryer', 'planned.scry'), 'utf8'))
-    expect(committed.links).toEqual([{ id: 'link-web-api', src: 'web', dst: 'api', label: 'calls' }])
+    expect(committed.links).toEqual([
+      { id: 'link-web-api', src: 'web', dst: 'api', label: 'calls' }
+    ])
     expect(planned.links).toEqual([
       { id: 'link-web-api', src: 'web', dst: 'api', label: 'publishes event', method: 'HTTP' }
     ])

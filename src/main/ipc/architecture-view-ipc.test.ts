@@ -431,6 +431,83 @@ describe('registerArchitectureHandlers native engine migration', () => {
     })
   })
 
+  it('prepares default-model AI prompts through readView instead of legacy model reads', async () => {
+    handlers.clear()
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-prompt-read-view-'))
+    const readModel = vi.fn(defaultArchitectureDeps.readModel)
+    const readView = vi.fn(async () => ({
+      ok: true,
+      operationId: 'scryer.model.read',
+      requestId: 'ipc-prompt-read-view',
+      result: {
+        mode: 'full',
+        layer: 'plan',
+        summary: { nodeCount: 2, linkCount: 0, groupCount: 0 },
+        nodes: [],
+        links: [],
+        recommendedNextReads: [],
+        model: {
+          version: '0.3',
+          nodes: [
+            { id: 'api', kind: 'system', name: 'API', description: 'HTTP API' },
+            {
+              id: 'handler',
+              kind: 'component',
+              name: 'Handler',
+              description: 'Request handler',
+              parentId: 'api'
+            }
+          ],
+          links: [],
+          groups: [],
+          sourceMap: {},
+          boundaries: {}
+        }
+      }
+    }))
+    const registrar: ArchitectureIpcRegistrar = {
+      handle: (channel, handler) => {
+        handlers.set(channel, handler as (_event: unknown, args: unknown) => Promise<unknown>)
+      }
+    }
+    registerArchitectureHandlers(registrar, {
+      ...defaultArchitectureDeps,
+      readModel,
+      scryerEngine: {
+        executeOperation: vi.fn() as unknown as ScryerEngine['executeOperation'],
+        readView: readView as unknown as ScryerEngine['readView']
+      }
+    })
+
+    await expect(
+      handlers.get('architecture:prepareNodeFillPrompt')!(null, {
+        projectPath,
+        modelName: 'model',
+        nodeId: 'handler'
+      })
+    ).resolves.toMatchObject({
+      prompt: expect.stringContaining('Fill out the internals of "Handler"')
+    })
+    await expect(
+      handlers.get('architecture:prepareAdvisorPrompt')!(null, { projectPath, modelName: 'model' })
+    ).resolves.toMatchObject({
+      prompt: expect.stringContaining('Review the C4 architecture model "model"')
+    })
+
+    expect(readView).toHaveBeenCalledTimes(2)
+    expect(readView).toHaveBeenNthCalledWith(
+      1,
+      { layer: 'plan' },
+      expect.objectContaining({ transport: 'ipc', projectRoot: projectPath })
+    )
+    expect(readView).toHaveBeenNthCalledWith(
+      2,
+      { layer: 'plan' },
+      expect.objectContaining({ transport: 'ipc', projectRoot: projectPath })
+    )
+    expect(readModel).not.toHaveBeenCalled()
+  })
+
   it('exposes a seam spy for migrated IPC calls through the Native Scryer Engine', async () => {
     handlers.clear()
     const executeOperation = vi.fn(

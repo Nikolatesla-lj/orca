@@ -93,14 +93,16 @@ async function seedArchitectureModel(
       }
       const nodes = (inputModel.nodes ?? []).map((node) => {
         const data = (node.data ?? node) as Record<string, unknown>
-        const kind =
+        const symbolKind =
           data.kind === 'operation' || data.kind === 'process' || data.kind === 'model'
-            ? 'symbol'
-            : data.kind
+            ? data.kind
+            : null
+        const kind = symbolKind !== null ? 'symbol' : data.kind
         return {
           id: String(node.id),
           kind,
           name: String(data.name ?? node.id),
+          ...(symbolKind ? { appearance: { symbolKind } } : {}),
           ...(node.parentId ? { parentId: String(node.parentId) } : {}),
           ...(typeof data.external === 'boolean' ? { external: data.external } : {}),
           ...(typeof data.technology === 'string' ? { technology: data.technology } : {}),
@@ -1027,6 +1029,28 @@ test.describe('Architecture tab live Scryer sync', () => {
         { timeout: 10_000 }
       )
       .toEqual(['api', 'worker'])
+
+    const runtimeBeforeDelete = readPlannedGroups().find((group) => group.name === 'Runtime')
+    if (!runtimeBeforeDelete) {
+      throw new Error('Expected Runtime group before deleting it')
+    }
+    const runtimeCard = orcaPage.locator(
+      `[data-testid="architecture-group-card"][data-group-id="${runtimeBeforeDelete.id}"]`
+    )
+    const runtimeCardBox = await runtimeCard.boundingBox()
+    expect(runtimeCardBox).not.toBeNull()
+    await orcaPage.mouse.click(runtimeCardBox!.x + 28, runtimeCardBox!.y + 16)
+    await expect(orcaPage.getByTestId('architecture-selected-group-editor')).toBeVisible({
+      timeout: 10_000
+    })
+    await expect(orcaPage.getByTestId('architecture-selected-group-name')).toHaveValue('Runtime')
+    await orcaPage.getByTestId('architecture-selected-group-delete').click({ force: true })
+    await expect
+      .poll(() => readPlannedGroups().some((group) => group.id === runtimeBeforeDelete.id), {
+        timeout: 10_000
+      })
+      .toBe(false)
+    await expect(runtimeCard).toHaveCount(0)
   })
 
   test('opens source-map files in the Orca editor and restores the pre-sync model on cancel', async ({
@@ -1090,9 +1114,7 @@ test.describe('Architecture tab live Scryer sync', () => {
     await expect(shopTreeNode).toBeVisible({ timeout: 10_000 })
     await shopTreeNode.getByTestId('architecture-tree-drill-node').click({ force: true })
     await orcaPage.getByTestId('architecture-zoom-fit').click({ force: true })
-    const apiCanvasNode = orcaPage.locator(
-      '[data-testid="architecture-node"][data-node-id="api"]'
-    )
+    const apiCanvasNode = orcaPage.locator('[data-testid="architecture-node"][data-node-id="api"]')
     await expect(apiCanvasNode).toBeVisible({ timeout: 10_000 })
     const apiSourceLink = apiCanvasNode.getByTestId('architecture-source-link').filter({
       hasText: 'src/index.ts'
@@ -1348,32 +1370,29 @@ test.describe('Architecture tab live Scryer sync', () => {
       rmSync(path.join(worktreePath, '.scryer'), { recursive: true, force: true })
 
       await openArchitectureTab(firstLaunch.page)
-      await firstLaunch.page.evaluate(
-        async (worktreePath) => {
-          await window.api.architecture.executeScryerOperation({
-            projectPath: worktreePath,
-            operationId: 'scryer.model.set',
-            input: {
-              data: {
-                version: '0.3',
-                nodes: [
-                  {
-                    id: 'system',
-                    kind: 'system',
-                    name: 'Restart Shop',
-                    description: 'Persisted architecture'
-                  }
-                ],
-                links: [],
-                groups: [],
-                sourceMap: {},
-                boundaries: {}
-              }
+      await firstLaunch.page.evaluate(async (worktreePath) => {
+        await window.api.architecture.executeScryerOperation({
+          projectPath: worktreePath,
+          operationId: 'scryer.model.set',
+          input: {
+            data: {
+              version: '0.3',
+              nodes: [
+                {
+                  id: 'system',
+                  kind: 'system',
+                  name: 'Restart Shop',
+                  description: 'Persisted architecture'
+                }
+              ],
+              links: [],
+              groups: [],
+              sourceMap: {},
+              boundaries: {}
             }
-          })
-        },
-        worktreePath
-      )
+          }
+        })
+      }, worktreePath)
 
       await expect(firstLaunch.page.getByTestId('architecture-panel')).toBeVisible({
         timeout: 10_000
@@ -1454,8 +1473,7 @@ test.describe('Architecture tab live Scryer sync', () => {
                 unifiedArchitectureTabCount: Object.values(state?.unifiedTabsByWorktree ?? {})
                   .flat()
                   .filter((tab) => tab.contentType === 'architecture').length,
-                activeArchitectureTabIdByWorktree:
-                  state?.activeArchitectureTabIdByWorktree ?? {},
+                activeArchitectureTabIdByWorktree: state?.activeArchitectureTabIdByWorktree ?? {},
                 worktreeIds: Object.values(state?.worktreesByRepo ?? {})
                   .flat()
                   .map((entry) => entry.id)

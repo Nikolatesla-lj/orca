@@ -45,6 +45,7 @@ export type ArchitectureViewNode = {
   properties?: ArchitectureViewProperty[]
   icon?: string
   visual?: boolean
+  appearance?: Record<string, unknown>
   notes?: string
 }
 

@@ -162,6 +162,78 @@ function nodeTypeForKind(kind: string): C4Node['type'] {
   return 'c4'
 }
 
+function isC4Kind(value: unknown): value is C4Kind {
+  return (
+    value === 'person' ||
+    value === 'system' ||
+    value === 'container' ||
+    value === 'component' ||
+    value === 'operation' ||
+    value === 'process' ||
+    value === 'model'
+  )
+}
+
+function normalizeNodeSources(value: unknown): C4NodeData['sources'] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined
+  }
+  const sources = value
+    .filter(isRecord)
+    .map((source) => ({
+      pattern: String(source.pattern ?? ''),
+      comment: String(source.comment ?? '')
+    }))
+    .filter((source) => source.pattern)
+  return sources.length > 0 ? sources : undefined
+}
+
+function normalizeStrictNode(rawNode: unknown, boundaries: unknown): C4Node {
+  const node = isRecord(rawNode) ? rawNode : {}
+  const id = typeof node.id === 'string' ? node.id : globalThis.crypto.randomUUID()
+  const appearance = isRecord(node.appearance) ? node.appearance : {}
+  const rawKind = node.kind
+  const symbolKind = isC4Kind(appearance.symbolKind) ? appearance.symbolKind : 'operation'
+  const kind: C4Kind = rawKind === 'symbol' ? symbolKind : isC4Kind(rawKind) ? rawKind : 'system'
+  const rawContract = appearance.contract ?? node.contract
+  const contract = rawContract ? migrateContract(rawContract) : undefined
+  const rawStatus = appearance.status ?? node.status
+  const status =
+    typeof rawStatus === 'string' && VALID_STATUSES.has(rawStatus as Status)
+      ? (rawStatus as Status)
+      : undefined
+  const sources = isRecord(boundaries) ? normalizeNodeSources(boundaries[id]) : undefined
+  return {
+    id,
+    type: nodeTypeForKind(kind),
+    ...(typeof node.parentId === 'string' ? { parentId: node.parentId } : {}),
+    position: { x: 0, y: 0 },
+    data: {
+      name: typeof node.name === 'string' ? node.name : String(node.id ?? 'Unnamed'),
+      description: typeof node.description === 'string' ? node.description : '',
+      kind,
+      ...(typeof node.technology === 'string' ? { technology: node.technology } : {}),
+      ...(typeof node.external === 'boolean' ? { external: node.external } : {}),
+      ...(typeof appearance.shape === 'string'
+        ? { shape: appearance.shape as C4NodeData['shape'] }
+        : {}),
+      ...(sources ? { sources } : {}),
+      ...(status ? { status } : {}),
+      ...(contract ? { contract } : {}),
+      ...(typeof node.notes === 'string' ? { notes: node.notes.split('\n').filter(Boolean) } : {}),
+      ...(Array.isArray(node.properties)
+        ? {
+            properties: node.properties.filter(isRecord).map((property) => ({
+              label: String(property.label ?? ''),
+              description: String(property.description ?? '')
+            }))
+          }
+        : {}),
+      _needsLayout: true
+    }
+  }
+}
+
 function normalizeNode(rawNode: unknown): C4Node {
   const node = isRecord(rawNode) ? rawNode : {}
   const rawData = isRecord(node.data) ? node.data : {}
@@ -339,6 +411,48 @@ export function parseModelData(raw: string): C4ModelData {
     )
   }
   const root = isRecord(data) ? data : {}
+  if (root.version === '0.3') {
+    const nodes = Array.isArray(root.nodes)
+      ? root.nodes.map((node) => normalizeStrictNode(node, root.boundaries))
+      : []
+    const nodeIds = new Set(nodes.map((node) => node.id))
+    const seenEdgeIds = new Set<string>()
+    const edges = (Array.isArray(root.links) ? root.links : []).flatMap((link): C4Edge[] => {
+      if (!isRecord(link) || typeof link.id !== 'string' || seenEdgeIds.has(link.id)) {
+        return []
+      }
+      const source = typeof link.src === 'string' ? link.src : undefined
+      const target = typeof link.dst === 'string' ? link.dst : undefined
+      if (!source || !target || !nodeIds.has(source) || !nodeIds.has(target)) {
+        return []
+      }
+      seenEdgeIds.add(link.id)
+      return [
+        {
+          id: link.id,
+          source,
+          target,
+          data: {
+            label: typeof link.label === 'string' ? link.label : '',
+            ...(typeof link.method === 'string' ? { method: link.method } : {})
+          }
+        }
+      ]
+    })
+    const groups = normalizeGroups(root.groups, nodeIds)
+    const sourceMap = normalizeSourceMap(root.sourceMap, nodeIds)
+    const validationWarnings = collectMentionWarnings({ nodes, flows: [] })
+    const parsed: C4ModelData = {
+      nodes,
+      edges,
+      startingLevel: 'system',
+      sourceMap,
+      refPositions: {},
+      groups,
+      flows: []
+    }
+    return validationWarnings.length > 0 ? { ...parsed, validationWarnings } : parsed
+  }
   const nodes = Array.isArray(root.nodes) ? root.nodes.map(normalizeNode) : []
   const seenEdgeIds = new Set<string>()
   const edges = (Array.isArray(root.edges) ? root.edges : []).filter((edge): edge is C4Edge => {
