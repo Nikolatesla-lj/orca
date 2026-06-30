@@ -448,29 +448,54 @@ Warnings may be returned without blocking when the model is structurally usable
 but incomplete, such as empty symbols, missing descriptions, missing source
 anchors, unmapped claims, or other quality findings.
 
+For `scryer.node.set-subtree`, Orca intentionally tightens upstream behavior.
+The operation replaces descendants under an existing root node only; it does not
+create or replace the root, and a payload node with the root id is a hard error.
+The payload accepts only `{ nodes, links? }`. New `sourceMap` and `boundaries`
+entries must be written through `scryer.source.update`; `set-subtree` may clean
+source entries and boundaries for removed descendants, but it must not author new
+anchors. `nodes: []` is valid and clears the root's descendants. Payload ids
+must be unique and must not collide with preserved subtree-external node, link,
+or responsibility ids. Payload links may connect nodes inside the new subtree or
+connect a new subtree node to an existing external node, but at least one
+endpoint must be inside the new subtree. Links whose endpoints are both outside
+the replacement subtree, missing endpoints, duplicate link ids, duplicate
+endpoint pairs, self-links, and C4-illegal links are hard errors. Unlike
+upstream, Orca does not silently skip invalid links.
+
 ### Planned Structural Semantics
 
 `scryer.node.delete` and `scryer.node.descope` have different meanings.
 `node.delete` is a planned deletion: it stages code-removal work in planned
 state, and committed state must not pretend the code is gone until the deletion
 is implemented and folded. `node.descope` is a model correction: code may remain,
-but the model should stop representing it at that altitude; it writes planned
-and committed state together where upstream semantics require that correction.
+but the model should stop representing it at that altitude. In Orca #32 it is a
+planned-only correction, even though upstream writes planned and committed
+together. The result must make clear that this is model correction work, not a
+request to delete code; a later explicit fold or accept path moves the correction
+to committed state.
 
 `scryer.node.move` is a structural move, not delete-and-recreate. The moved node
 keeps its id, responsibilities, properties, descendants, and source anchors.
-The planner validates the new parent, C4 hierarchy, cycles, external-parent
-rules, old group membership cleanup, and resulting link legality. Orca is
-stricter than upstream's "move, then validate" guidance: a move that would leave
-illegal links should fail with structured validation details that identify the
-links requiring update or deletion.
+For batch requests the planner validates the final candidate model, not the
+caller-provided order. It validates the new parent, C4 hierarchy, cycles,
+external-parent rules, old group membership cleanup, duplicate move conflicts,
+and resulting link legality. Orca is stricter than upstream's "move, then
+validate" guidance: a move that would leave illegal links should fail with
+structured validation details that identify the links requiring update or
+deletion. Moving a node removes old group memberships that are no longer legal
+and deletes groups made invalid by cleanup, but it never guesses target group
+membership; an explicit group operation or explicit adapter sequence must set
+that relation.
 
 `scryer.responsibility.move` preserves the responsibility id and source anchors.
 `sourceMap` ownership follows the responsibility id, not the old node. This
 matches upstream `move_responsibilities`, which moves the same responsibility
 object to the destination owner and relies on id-keyed `source_map`; fold later
 commits the responsibility by id to the planned owner and keeps anchors in
-lockstep.
+lockstep. The #32 operation only moves node-owned responsibilities from node to
+node. Group responsibility moves are out of scope and should be designed as an
+explicit future operation if needed.
 
 `scryer.link.update` preserves endpoints. It may patch descriptive fields such
 as `label` and `method`, but it must not accept `src` or `dst` as patchable
@@ -487,6 +512,18 @@ payloads, the planner validates the whole candidate mutation before state-store
 commits anything. If any item is missing, illegal, malformed, or would leave the
 model invalid, the operation returns a structured failure and the
 committed/planned files remain unchanged.
+
+Structural cleanup is planner-owned. Removing nodes through delete, descope, or
+subtree replacement removes connected links, dead sourceMap entries, boundaries,
+and group memberships. Groups whose parent node is removed, whose membership
+falls below the valid threshold, or whose nesting becomes illegal are deleted;
+deleting a group never deletes member nodes. `descope` first relocates each
+target node's own non-vagrant responsibilities to the parent, preserving
+id-keyed source anchors, then removes descendants and drops descendant or
+vagrant responsibilities. `node.move` and `responsibility.move` preserve
+sourceMap and boundaries because the moved elements still exist. No-op move
+requests succeed with an info finding, do not write files, and do not append
+history.
 
 Structural cleanup is shared engine behavior, not duplicated operation-local
 deletion code. Validators detect orphan links, missing endpoints, invalid group

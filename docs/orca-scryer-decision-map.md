@@ -766,6 +766,52 @@ legality checks, atomic commit behavior, and no legacy fallback. Acceptance
 requires golden state assertions for planned/committed effects and adapter tests
 for any UI/CLI path that exposes the operations.
 
+Track this work with umbrella issue
+[#56](https://github.com/Nikolatesla-lj/orca/issues/56) and child issues:
+[#57](https://github.com/Nikolatesla-lj/orca/issues/57) (`#32A` planner
+foundation), [#58](https://github.com/Nikolatesla-lj/orca/issues/58) (`#32B`
+`node.set-subtree`), [#59](https://github.com/Nikolatesla-lj/orca/issues/59)
+(`#32C` `node.move` and `responsibility.move`),
+[#60](https://github.com/Nikolatesla-lj/orca/issues/60) (`#32D`
+`node.descope`), and [#61](https://github.com/Nikolatesla-lj/orca/issues/61)
+(`#32E` release gate/final review).
+
+Accepted #32 decisions: all four remaining structural operations are planned
+state writes through catalog/pipeline/`executeOperation(...)`; operation files
+stay thin and call a shared `StructuralMutationPlanner`; batch requests are
+atomic; no-ops succeed with an info finding and no durable write; success
+payloads use explicit Zod schemas; CLI and IPC coverage must be real dispatch
+black-box tests; ownership/static tests must forbid MCP, renderer, CLI, IPC,
+legacy C4/model-store, and direct `.scryer/*` bypasses from engine modules.
+
+`scryer.node.set-subtree` replaces descendants under an existing root only. It
+does not create or replace the root. Its payload is `{ nodes, links? }`; new
+`sourceMap` and `boundaries` writes go through `scryer.source.update`. Orca is
+stricter than upstream: root ids in the payload, unknown link endpoints,
+external-only payload links, duplicate ids, global identity collisions, and
+illegal link topology are hard errors. `nodes: []` clears descendants.
+
+`scryer.node.move` validates the final candidate model for the whole batch,
+preserves subtree identity, rejects illegal parentage, external parents, cycles,
+and duplicate move conflicts, cleans old invalid group membership, deletes
+groups made illegal by cleanup, and never guesses target group membership.
+Explicit group membership must be set by a group operation or by an adapter
+sequence with an explicit group target. `scryer.responsibility.move` is
+node-owned responsibility relocation only; it moves node to node, preserves the
+responsibility id and id-keyed source anchors, and rejects vagrant moves.
+
+`scryer.node.descope` is a planned-only model correction even though upstream
+writes planned and committed together. It removes target nodes and descendants
+from planned state, relocates each target node's own non-vagrant
+responsibilities to its parent, drops vagrant and descendant responsibilities,
+cleans links, groups, sourceMap, and boundaries, and reports model-correction
+pending state without implying code deletion work.
+
+Out of scope: no new Architecture UI, rules browser UI, codebase tree UI,
+Electron live workflow, Codex-specific path, #33 intent add, #34 source/group
+operation implementation beyond cleanup over existing data, #35 full parity
+adapter/coverage gate, or MCP/model-store/legacy C4 bypass revival.
+
 ## #33: How Should Health And Drift Record Completion Land?
 
 Blocked by: #20, #30

@@ -100,9 +100,9 @@ an explicit import command outside normal runtime behavior.
 | Node write | `update_nodes` | `scryer.node.update` | `orca scryer node update` | Patches existing nodes in planned layer only; whole-array replacement for responsibilities/properties; restores read-only directives. |
 | Commit | `mark_implemented` | `scryer.plan.fold` | `orca scryer plan fold` | Folds planned node/responsibilities/deletions into committed model; updates baseline and history. |
 | Structure write | `move_nodes` | `scryer.node.move` | `orca scryer node move` | Reparents subtrees in plan; validates hierarchy/external/cycles; removes moved node from groups; records move history. |
-| Subtree write | `set_node` | `scryer.node.set-subtree` | `orca scryer node set-subtree` | Generation primitive; replaces descendants under one node in plan; accepts nodes and links; prunes code maps. |
+| Subtree write | `set_node` | `scryer.node.set-subtree` | `orca scryer node set-subtree` | Generation primitive; replaces descendants under one existing root in plan; accepts nodes and links only; strict link/id validation; prunes code maps for removed descendants. |
 | Node delete | `delete_nodes` | `scryer.node.delete` | `orca scryer node delete` | Plan-only deletion because modeled code should go away; pending until folded. |
-| Model correction | `descope` | `scryer.node.descope` | `orca scryer node descope` | Model-only correction; code stays; relocates own responsibilities to parent; writes plan and committed together. |
+| Model correction | `descope` | `scryer.node.descope` | `orca scryer node descope` | Planned-only model correction in Orca #32; code stays; relocates own non-vagrant responsibilities to parent; pending until explicitly accepted/folded. |
 | Responsibility write | `move_responsibilities` | `scryer.responsibility.move` | `orca scryer responsibility move` | Moves responsibility ids between nodes in plan; preserves anchors; blocks vagrant moves. |
 | Links | `add_links` | `scryer.link.add` | `orca scryer link add` | Adds links to plan; validates endpoints, same-level/reference rule, self/ancestor constraints; rejects illegal batches. |
 | Links | `update_links` | `scryer.link.update` | `orca scryer link update` | Patches link label/method in plan. |
@@ -149,7 +149,9 @@ Executable in the current Architecture product and read-surface slices:
 Catalog-only operations still needing executors:
 
 - #32 structural mutation: `scryer.node.set-subtree`, `scryer.node.move`,
-  `scryer.responsibility.move`, `scryer.node.descope`
+  `scryer.responsibility.move`, `scryer.node.descope`; tracked by umbrella
+  [#56](https://github.com/Nikolatesla-lj/orca/issues/56) and child issues
+  [#57](https://github.com/Nikolatesla-lj/orca/issues/57)-[#61](https://github.com/Nikolatesla-lj/orca/issues/61)
 - #33 health/drift record: `scryer.model.health`, `scryer.drift.flag`
 - #34 generation: `scryer.container.fill`
 - #35 adapter/coverage gate for every remaining exposed product path
