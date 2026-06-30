@@ -336,7 +336,10 @@ describe('registerFilesystemHandlers', () => {
     registerFilesystemHandlers(store as never)
     const wslPath = '\\\\wsl.localhost\\Ubuntu\\home\\user\\repo'
     // resolveAuthorizedPath authorizes the path, then readdir fails (distro stopped).
-    realpathMock.mockResolvedValue(wslPath)
+    // The test runs on POSIX CI, where node:path treats UNC strings as relative.
+    // Keep the authorized/canonical target in POSIX form while preserving the
+    // original UNC string in the handler args for the redacted breadcrumb shape.
+    realpathMock.mockResolvedValue(path.resolve(wslPath))
     registerWorktreeRootsForRepo(store as never, 'repo-1', [wslPath])
     readdirMock.mockRejectedValue(Object.assign(new Error('EIO: i/o error'), { code: 'EIO' }))
 

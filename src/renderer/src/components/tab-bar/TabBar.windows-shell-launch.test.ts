@@ -118,7 +118,9 @@ vi.mock('react', async () => {
     useRef: <T>(current: T) => ({ current }),
     useState: <T>(initial: T | (() => T)) => {
       const value = typeof initial === 'function' ? (initial as () => T)() : initial
-      return [value, vi.fn()] as const
+      // Why: this shallow harness does not click the Radix trigger; open the
+      // menu branch directly so these tests can inspect shell menu wiring.
+      return [value === false ? true : value, vi.fn()] as const
     }
   }
 })

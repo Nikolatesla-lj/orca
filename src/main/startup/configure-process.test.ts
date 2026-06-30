@@ -263,12 +263,21 @@ describe('configureElectronNetworkCompatibility', () => {
 describe('enableMainProcessGpuFeatures', () => {
   const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
   const originalE2EUserDataDir = process.env.ORCA_E2E_USER_DATA_DIR
+  const originalWaylandDisplay = process.env.WAYLAND_DISPLAY
+  const originalSessionType = process.env.XDG_SESSION_TYPE
+  const originalOzoneHint = process.env.ELECTRON_OZONE_PLATFORM_HINT
 
   function setPlatform(platform: NodeJS.Platform): void {
     Object.defineProperty(process, 'platform', {
       configurable: true,
       value: platform
     })
+  }
+
+  function clearLinuxWaylandEnvironment(): void {
+    delete process.env.WAYLAND_DISPLAY
+    delete process.env.XDG_SESSION_TYPE
+    delete process.env.ELECTRON_OZONE_PLATFORM_HINT
   }
 
   afterEach(() => {
@@ -280,6 +289,21 @@ describe('enableMainProcessGpuFeatures', () => {
     } else {
       process.env.ORCA_E2E_USER_DATA_DIR = originalE2EUserDataDir
     }
+    if (originalWaylandDisplay === undefined) {
+      delete process.env.WAYLAND_DISPLAY
+    } else {
+      process.env.WAYLAND_DISPLAY = originalWaylandDisplay
+    }
+    if (originalSessionType === undefined) {
+      delete process.env.XDG_SESSION_TYPE
+    } else {
+      process.env.XDG_SESSION_TYPE = originalSessionType
+    }
+    if (originalOzoneHint === undefined) {
+      delete process.env.ELECTRON_OZONE_PLATFORM_HINT
+    } else {
+      process.env.ELECTRON_OZONE_PLATFORM_HINT = originalOzoneHint
+    }
   })
 
   it('appends VS Code-style GPU channel flags without unsafe WebGPU/Vulkan opt-ins', async () => {
@@ -287,6 +311,7 @@ describe('enableMainProcessGpuFeatures', () => {
     const { enableMainProcessGpuFeatures } = await import('./configure-process')
 
     delete process.env.ORCA_E2E_USER_DATA_DIR
+    clearLinuxWaylandEnvironment()
     vi.mocked(app.commandLine.appendSwitch).mockClear()
     enableMainProcessGpuFeatures()
 
@@ -454,6 +479,7 @@ describe('enableMainProcessGpuFeatures', () => {
     const { enableMainProcessGpuFeatures } = await import('./configure-process')
 
     delete process.env.ORCA_E2E_USER_DATA_DIR
+    clearLinuxWaylandEnvironment()
     vi.mocked(app.commandLine.appendSwitch).mockClear()
     vi.mocked(app.commandLine.getSwitchValue).mockReturnValue('ExistingFeature')
     enableMainProcessGpuFeatures()
