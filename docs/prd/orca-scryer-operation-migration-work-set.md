@@ -99,8 +99,9 @@ behavior.
    adapter/coverage gate continues in #35.
 5. Drift and health:
    `scryer.drift.get`, `scryer.drift.flag`, `scryer.drift.reconcile`, and
-   `scryer.model.health`. Current status: `drift.get` and `drift.reconcile`
-   are executable; `drift.flag` and `model.health` remain open for #33.
+   `scryer.model.health`. Current status: `drift.get`, `drift.flag`,
+   `drift.reconcile`, and `model.health` are engine-executable; #35 retains
+   adapter/UI/live parity coverage.
 6. Atomic generation:
    `scryer.container.fill`. Current status: open for #34.
 7. Adapter retirement:

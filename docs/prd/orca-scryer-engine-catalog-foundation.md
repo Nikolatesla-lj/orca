@@ -1815,7 +1815,7 @@ Notation:
 | `scryer.container.fill` | `model_generate` | `high` | `exclusive` | `none` | `TProduct` | `committed`, `planned`, `build_edges` | `committed`, `planned` | `history:best_effort` | `build_edges_read`, `history_append` |
 | `scryer.node.descope` | `model_correct` | `high` | `exclusive` | `write_if_active` | `TProduct` | `committed`, `planned` | `committed`, `planned` | `baseline:best_effort` | `baseline_refresh` |
 | `scryer.drift.get` | `drift_detect` | `normal` | `commit_if_writing` | `none` | `TProduct` | `committed`, `sync`, `anchors`, `project_tree` | - | `sync:best_effort`, `anchor_baseline:best_effort` | `seed_sync_if_absent`, `write_anchor_baseline_if_absent` |
-| `scryer.drift.flag` | `drift_record` | `high` | `exclusive` | `write_if_active` | `TProduct` | `planned` | `planned` | `history:best_effort` | `history_append` |
+| `scryer.drift.flag` | `drift_record` | `high` | `exclusive` | `write_if_active` | `TProduct` | `committed_if_available`, `planned` | `planned` | `history:best_effort` | `history_append` |
 | `scryer.drift.reconcile` | `drift_reconcile` | `high` | `exclusive` | `none` | `TProduct` | `committed`, `sync`, `anchors`, `project_tree` | - | `sync:required`, `anchor_baseline:required` | `sync_state_write`, `anchor_baseline_refresh` |
 
 ### Schema, Error, And Upstream Anchor Matrix
@@ -1959,7 +1959,7 @@ Shared helper input types:
 | `scryer.container.fill` | `project?`, `container_id`, `components`, `links?`, `groups?` | `components` is non-empty `ProposedComponent[]`; `links` and `groups` default empty; validates unique local keys, non-empty symbols for code-bearing components, and group member keys. | `ScryerGenerationResult`. |
 | `scryer.node.descope` | `project?`, `node_ids` | `node_ids` is non-empty string array; each node must exist; code remains untouched; writes committed and planned together. | `{ removed; relocatedResponsibilities; droppedResponsibilities }`. |
 | `scryer.drift.get` | `project?` | Reads deterministic drift scope from sync/anchors/project files; may seed sync/anchor state as declared maintenance. | `ScryerDriftScopeResult`. |
-| `scryer.drift.flag` | `project?`, `node_id`, `undescribed?`, `new_nodes?`, `undescribed_properties?`, `stale?`, `stale_properties?`, `stale_nodes?` | Drift arrays default empty; `new_nodes` keys are request-local and must be unique; `parent_id` and `parent_key` are mutually exclusive. Upstream camelCase aliases are accepted only at the input boundary and normalized before execution. | `{ flagged; mintedNodes; vagrantResponsibilities; staleResponsibilities; staleProperties; staleNodes }`. |
+| `scryer.drift.flag` | `project?`, `node_id`, `undescribed?`, `new_nodes?`, `undescribed_properties?`, `stale?`, `stale_properties?`, `stale_nodes?` | Drift arrays default empty; `new_nodes` keys are request-local and must be unique; `parent_id` and `parent_key` are mutually exclusive. Upstream camelCase aliases are accepted only at the input boundary and normalized before execution. | `{ flagged; mintedNodes; vagrantResponsibilities; vagrantProperties; staleResponsibilities; staleProperties; staleNodes; skippedExistingProperties? }`. |
 | `scryer.drift.reconcile` | `project?` | Advances sync and anchor fingerprint baseline as required maintenance writes. | `{ reconciledAt; commit? }`. |
 
 ## Diff And Fold Semantics

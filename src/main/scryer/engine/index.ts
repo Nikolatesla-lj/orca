@@ -72,11 +72,7 @@ export function createScryerEngine(options: CreateScryerEngineOptions = {}): Scr
       }) as Promise<ScryerOperationResult<T>>
     },
     readView(input, context) {
-      return this.executeOperation<ScryerReadView>(
-        'scryer.model.read',
-        input,
-        context
-      )
+      return this.executeOperation<ScryerReadView>('scryer.model.read', input, context)
     }
   }
 }
@@ -109,6 +105,7 @@ export type {
   ScryerClock,
   ScryerExecutorResult,
   ScryerLayer,
+  ScryerModelHealthResult,
   ScryerModelReadResult,
   ScryerModelValidateResult,
   ScryerOperationCatalog,
@@ -122,6 +119,7 @@ export type {
   ScryerPlanFoldResult,
   ScryerPlanPendingResult,
   ScryerProjectRef,
+  ScryerDriftFlagResult,
   ScryerReadView,
   ScryerReadViewInput,
   ScryerRequestIdFactory,

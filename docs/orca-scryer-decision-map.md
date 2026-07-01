@@ -835,6 +835,107 @@ advancing reconcile anchors. Acceptance requires clear separation between
 changed-scope detection, human/agent semantic verdict recording, and reconcile
 anchor advancement.
 
+Track this work with umbrella issue
+[#62](https://github.com/Nikolatesla-lj/orca/issues/62) and child issues:
+[#63](https://github.com/Nikolatesla-lj/orca/issues/63) (`#33A`
+`model.health` executable report path),
+[#64](https://github.com/Nikolatesla-lj/orca/issues/64) (`#33B`
+`drift.flag` vagrant verdict path),
+[#65](https://github.com/Nikolatesla-lj/orca/issues/65) (`#33C`
+`drift.flag` stale verdict path), and
+[#66](https://github.com/Nikolatesla-lj/orca/issues/66) (`#33D`
+release gate/final review).
+
+#33 is an engine-focused slice. It should implement the two executors, strict
+input/success schemas, state-store side effects, operation-level golden tests,
+maintenance/no-write tests, and generic `executeOperation(...)` coverage. CLI,
+IPC, agent guidance, renderer surfaces, and live UI coverage remain in #35
+unless a tiny adapter smoke test is required to prove the catalog no longer
+returns `unimplemented`.
+
+`scryer.model.health` should use the upstream `health.rs::compute_health` shape
+as the engine contract: `{ nodes: Record<nodeId, { own; subtree; boundary? }>,
+totals }`. Health counts include responsibilities, properties, vagrant, stale,
+anchorable, anchored, unmapped, and optional `lastTouchedAt`; boundary coverage
+includes total files, anchored files, and dark files. UI-shaped roots/children,
+review summaries, and other presentation aggregates may be derived later by
+adapters, not encoded as the engine payload. `node_id` scopes the report to an
+existing node; missing nodes return standard `not_found` with `{ entity:
+"node", id }`. Link audit/build-edge evidence is optional in #33: include it
+only when an existing build-edge cache reader can provide upstream-compatible
+evidence; otherwise omit it without guessing or failing.
+
+`model.health` may perform only declared best-effort maintenance writes:
+sync-state seeding, anchor-baseline refresh, and committed source-map reanchor.
+It must never write `.scryer/model.scry`, `.scryer/planned.scry`, or semantic
+drift verdicts. Maintenance write failure keeps `ok: true` and surfaces a
+structured warning. Pure report paths need no write lock; paths that perform
+maintenance use the catalog's `commit_if_writing` policy.
+
+`scryer.drift.flag` must support the full upstream verdict surface in the first
+executable version: `undescribed`, `new_nodes`, `undescribed_properties`,
+`stale`, `stale_properties`, and `stale_nodes`. Verdicts write planned state
+only; committed state remains unchanged. History append is a best-effort
+sidecar warning on failure. `drift.flag` must not detect changed files, compute
+health rollups, refresh sync state, or advance the reconcile anchor. Empty
+verdict arrays are a no-op success with an empty structured result and no
+history write.
+
+Undescribed behavior and properties may target either an existing `node_id` or
+a request-local `node_key` minted in the same `new_nodes` batch, but not both.
+`new_nodes` accepts request-local keys only; real model ids are minted by the
+shared `ScryerIDMinter` against committed state, planned state, and current
+batch reservations. `parent_key` may reference only earlier `new_nodes` entries;
+duplicate keys, forward references, unknown `node_id`s, and invalid parent
+chains fail the whole request atomically. The success payload returns
+`mintedNodes` mapping request keys to real ids.
+
+`stale` responsibilities mark the planned responsibility `stale: true`. A
+non-blank `proposedStatement` is stored as `staleProposal`; the current
+`statement` is not modified. `undescribed_properties` create vagrant planned
+properties keyed by `node_id`/`node_key` plus label; an already-existing label
+is skipped and reported. `stale_properties` locate an existing property by
+`node_id + label` and fail atomically if the node or label is missing.
+`stale_nodes` writes a single node-level `stale: true` marker on the target
+node; it represents subtree-level backing-code loss but does not recursively
+mark descendants.
+
+`drift.flag` source anchors must pass through the shared `ScryerSourceRouter`.
+The drift recorder produces source-update intent for newly minted vagrant
+responsibilities/properties; the router owns single-home planned/committed
+routing and whole-symbol normalization. Because #33 verdict-created elements
+are planned-only, their anchors normally land in planned `sourceMap`.
+
+`drift.flag` success must be a structured payload, not a generic count:
+`{ flagged, mintedNodes, vagrantResponsibilities, vagrantProperties,
+staleResponsibilities, staleProperties, staleNodes,
+skippedExistingProperties? }`. This lets agents and review/fold flows identify
+exactly what was recorded without parsing prose.
+
+Implementation should keep operation files thin by adding deep modules such as
+`ScryerHealthReporter` and `ScryerDriftVerdictRecorder`. The health reporter
+owns health calculation, scoped reporting, boundary darkness, and maintenance
+write planning. The verdict recorder owns drift verdict validation, id minting,
+planned-state mutation plans, source-router handoff, atomicity, structured
+results, and history events. Operation files should only receive catalog-
+validated input, call these modules, and return the standard envelope.
+
+Acceptance gate: whole-model and scoped-node health golden tests; health
+missing-node `not_found`; health no-write fingerprints for model/planned files;
+health maintenance-write allow-list tests; drift flag golden tests for vagrant
+responsibilities, minted node chains, vagrant/stale properties, stale
+responsibility `staleProposal`, and stale node markers; invalid reference tests
+that prove atomic no-partial-write behavior; schema tests proving neither
+operation still uses `countResultSchema` placeholders; and generic
+`executeOperation(...)` tests proving both operations are executable through the
+catalog/pipeline.
+
+Status update, 2026-07-01: #33 is implemented for the engine-focused slice.
+`scryer.model.health` and `scryer.drift.flag` are executable through the
+catalog/pipeline with strict schemas, deep engine modules, planned-only drift
+recording, health maintenance-write guards, and focused release-gate tests. CLI,
+IPC, renderer, and live adapter parity remain explicitly scoped to #35.
+
 ## #34: How Should Container Generation Completion Land?
 
 Blocked by: #21, #30, #32

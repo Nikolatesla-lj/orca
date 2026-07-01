@@ -2,6 +2,7 @@
 import { errorDetailSchemas, operationSchemas } from './schemas'
 import { codebaseReadOperation } from './operations/codebase-read'
 import { modelReadOperation } from './operations/model-read'
+import { modelHealthOperation } from './operations/model-health'
 import { modelSearchOperation } from './operations/model-search'
 import { modelQueryOperation } from './operations/model-query'
 import { modelValidateOperation } from './operations/model-validate'
@@ -13,6 +14,7 @@ import { linkDeleteOperation } from './operations/link-delete'
 import { linkUpdateOperation } from './operations/link-update'
 import { planPendingOperation } from './operations/plan-pending'
 import { planFoldOperation } from './operations/plan-fold'
+import { driftFlagOperation } from './operations/drift-flag'
 import {
   componentAddOperation,
   containerAddOperation,
@@ -324,7 +326,8 @@ const ROWS: Row[] = [
       { symbol: 'read.rs::get_health' },
       { symbol: 'health.rs' },
       { symbol: 'build_edges.rs' }
-    ]
+    ],
+    execute: modelHealthOperation as ScryerOperationExecutor<unknown, unknown>
   },
   {
     id: 'scryer.plan.pending',
@@ -642,7 +645,7 @@ const ROWS: Row[] = [
     policy: flatPolicy({
       lock: 'exclusive',
       lease: 'write_if_active',
-      reads: ['planned'],
+      reads: ['committed_if_available', 'planned'],
       semanticWrites: ['planned'],
       maintenanceWrites: [{ target: 'history', mode: 'best_effort' }],
       validation: ['hierarchy_integrity', 'source_mapping_integrity', 'write_guards'],
@@ -653,7 +656,8 @@ const ROWS: Row[] = [
       { symbol: 'intent.rs::flag_drift' },
       { symbol: 'FlagDriftRequest' },
       { symbol: 'drift.rs' }
-    ]
+    ],
+    execute: driftFlagOperation as ScryerOperationExecutor<unknown, unknown>
   },
   {
     id: 'scryer.drift.reconcile',

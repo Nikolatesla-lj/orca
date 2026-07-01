@@ -127,8 +127,10 @@ an explicit import command outside normal runtime behavior.
 This parity map is the target behavior map, not a claim that every row is
 executable today. Current code registers the 33-operation catalog contract, #31
 has completed the read surface, and #32 has completed structural mutations.
-Remaining full executable parity continues through decision map #33-#35. The
-current Architecture product slice release gate was closed by #36 and is documented in
+Remaining full executable parity continues through decision map #34-#35. #33 is
+engine-executable as of 2026-07-01; CLI, IPC, renderer, and live adapter parity
+for those operations remains in #35. The current Architecture product slice
+release gate was closed by #36 and is documented in
 `docs/orca-scryer-architecture-slice-audit.md`.
 
 Executable in the current Architecture product and read-surface slices:
@@ -146,11 +148,11 @@ Executable in the current Architecture product and read-surface slices:
   `scryer.group.delete`
 - `scryer.person.add`, `scryer.system.add`, `scryer.container.add`,
   `scryer.component.add`, `scryer.symbol.add`
-- `scryer.drift.get`, `scryer.drift.reconcile`
+- `scryer.model.health`
+- `scryer.drift.get`, `scryer.drift.flag`, `scryer.drift.reconcile`
 
 Catalog-only operations still needing executors:
 
-- #33 health/drift record: `scryer.model.health`, `scryer.drift.flag`
 - #34 generation: `scryer.container.fill`
 - #35 adapter/coverage gate for every remaining exposed product path
 

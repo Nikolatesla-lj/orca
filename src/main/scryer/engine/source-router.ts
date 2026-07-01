@@ -44,7 +44,18 @@ function routeForTarget(args: {
   entry?: ScryModel['sourceMap'][string] | ScryModel['boundaries'][string]
   committed: ScryModel
   planned: ScryModel
+  targetLayer?: 'auto' | 'committed' | 'planned'
 }): ScryerSourceRouteDecision {
+  if (args.targetLayer && args.targetLayer !== 'auto') {
+    return {
+      targetKind: args.targetKind,
+      key: args.key,
+      targetLayer: args.targetLayer,
+      clearOtherLayer: true,
+      reason: args.targetLayer === 'committed' ? 'target_in_committed' : 'target_only_in_planned',
+      ...(args.entry ? { entry: args.entry } : {})
+    }
+  }
   if (!args.entry) {
     return {
       targetKind: args.targetKind,
@@ -83,7 +94,8 @@ export function createScryerSourceRouter(): ScryerSourceRouter {
         target: args.target,
         entry: args.entry,
         committed: args.committed,
-        planned: args.planned
+        planned: args.planned,
+        targetLayer: args.targetLayer
       })
     },
     routeBoundaryEntry(args) {
