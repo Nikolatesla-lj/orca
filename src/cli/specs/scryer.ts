@@ -63,6 +63,47 @@ export const SCRYER_COMMAND_SPECS: CommandSpec[] = [
     ]
   },
   {
+    path: ['scryer', 'node', 'set-subtree'],
+    summary: 'Replace descendants under an existing planned Scryer node',
+    usage: 'orca scryer node set-subtree --node-id <id> --json-input - [--project <path>] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'json-input', 'node-id'],
+    notes: ['The JSON input must contain `data` or top-level `nodes` and optional `links`.'],
+    examples: [
+      'echo \'{"data":{"nodes":[]}}\' | orca scryer node set-subtree --node-id api --json-input - --json'
+    ]
+  },
+  {
+    path: ['scryer', 'node', 'move'],
+    summary: 'Move planned Scryer node subtrees without changing identity',
+    usage:
+      'orca scryer node move (--json-input - | --node-id <id> [--new-parent-id <id>]) [--project <path>] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'json-input', 'node-id', 'new-parent-id'],
+    examples: ['orca scryer node move --node-id api --new-parent-id platform --json']
+  },
+  {
+    path: ['scryer', 'responsibility', 'move'],
+    summary: 'Move planned node-owned Scryer responsibilities between nodes',
+    usage:
+      'orca scryer responsibility move (--json-input - | --responsibility-id <id> --from-node-id <id> --to-node-id <id>) [--project <path>] [--json]',
+    allowedFlags: [
+      ...SCRYER_FLAGS,
+      'json-input',
+      'responsibility-id',
+      'from-node-id',
+      'to-node-id'
+    ],
+    examples: [
+      'orca scryer responsibility move --responsibility-id resp-api --from-node-id api --to-node-id web --json'
+    ]
+  },
+  {
+    path: ['scryer', 'node', 'descope'],
+    summary: 'Remove planned model scope while leaving code semantically unchanged',
+    usage: 'orca scryer node descope --node-ids <id,id> [--project <path>] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'json-input', 'node-ids'],
+    examples: ['orca scryer node descope --node-ids api --json']
+  },
+  {
     path: ['scryer', 'link', 'add'],
     summary: 'Add planned Scryer links',
     usage:

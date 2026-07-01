@@ -143,6 +143,51 @@ export const SCRYER_HANDLERS: Record<string, CommandHandler> = {
   'scryer node update': async (ctx) => {
     await execute(ctx, 'scryer.node.update', await complexInput(ctx))
   },
+  'scryer node set-subtree': async (ctx) => {
+    const input = await complexInput(ctx)
+    input.node_id = input.node_id ?? getRequiredStringFlag(ctx.flags, 'node-id')
+    if (!input.data) {
+      input.data = {
+        nodes: Array.isArray(input.nodes) ? input.nodes : [],
+        ...(Array.isArray(input.links) ? { links: input.links } : {})
+      }
+      delete input.nodes
+      delete input.links
+    }
+    await execute(ctx, 'scryer.node.set-subtree', input)
+  },
+  'scryer node move': async (ctx) => {
+    const input = await complexInput(ctx)
+    if (!input.moves && getOptionalStringFlag(ctx.flags, 'node-id')) {
+      input.moves = [
+        {
+          node_id: getRequiredStringFlag(ctx.flags, 'node-id'),
+          new_parent_id: getOptionalStringFlag(ctx.flags, 'new-parent-id') ?? null
+        }
+      ]
+    }
+    await execute(ctx, 'scryer.node.move', input)
+  },
+  'scryer responsibility move': async (ctx) => {
+    const input = await complexInput(ctx)
+    if (!input.moves && getOptionalStringFlag(ctx.flags, 'responsibility-id')) {
+      input.moves = [
+        {
+          responsibility_id: getRequiredStringFlag(ctx.flags, 'responsibility-id'),
+          from_node_id: getRequiredStringFlag(ctx.flags, 'from-node-id'),
+          to_node_id: getRequiredStringFlag(ctx.flags, 'to-node-id')
+        }
+      ]
+    }
+    await execute(ctx, 'scryer.responsibility.move', input)
+  },
+  'scryer node descope': async (ctx) => {
+    const input = await complexInput(ctx)
+    if (!input.node_ids) {
+      input.node_ids = commaList(getOptionalStringFlag(ctx.flags, 'node-ids')) ?? []
+    }
+    await execute(ctx, 'scryer.node.descope', input)
+  },
   'scryer link add': async (ctx) => {
     const input = await complexInput(ctx)
     if (!input.links && getOptionalStringFlag(ctx.flags, 'src')) {

@@ -578,4 +578,77 @@ describe('registerArchitectureHandlers native engine migration', () => {
     })
     expect(readView).not.toHaveBeenCalled()
   })
+
+  it('forwards #32 structural mutation operations through generic engine dispatch', async () => {
+    handlers.clear()
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-structural-dispatch-'))
+    const executeOperation = vi.fn(
+      async (operationId: string, _input: unknown, context: { requestId: string }) => ({
+        ok: true,
+        operationId,
+        requestId: context.requestId,
+        result: { forwarded: true }
+      })
+    )
+    const readView = vi.fn()
+    const registrar: ArchitectureIpcRegistrar = {
+      handle: (channel, handler) => {
+        handlers.set(channel, handler as (_event: unknown, args: unknown) => Promise<unknown>)
+      }
+    }
+    registerArchitectureHandlers(registrar, {
+      ...defaultArchitectureDeps,
+      scryerEngine: {
+        executeOperation: executeOperation as unknown as ScryerEngine['executeOperation'],
+        readView: readView as unknown as ScryerEngine['readView']
+      }
+    })
+    const send = vi.fn()
+    const calls = [
+      {
+        operationId: 'scryer.node.set-subtree',
+        input: { node_id: 'api', data: { nodes: [] } }
+      },
+      {
+        operationId: 'scryer.node.move',
+        input: { moves: [{ node_id: 'api', new_parent_id: 'platform' }] }
+      },
+      {
+        operationId: 'scryer.responsibility.move',
+        input: {
+          moves: [{ responsibility_id: 'resp-api', from_node_id: 'api', to_node_id: 'platform' }]
+        }
+      },
+      {
+        operationId: 'scryer.node.descope',
+        input: { node_ids: ['api'] }
+      }
+    ] as const
+
+    for (const call of calls) {
+      await handlers.get('architecture:executeScryerOperation')!(
+        { sender: { send } },
+        { projectPath, ...call, requestId: `req-${call.operationId}` }
+      )
+    }
+
+    for (const [index, call] of calls.entries()) {
+      expect(executeOperation).toHaveBeenNthCalledWith(
+        index + 1,
+        call.operationId,
+        call.input,
+        expect.objectContaining({
+          requestId: `req-${call.operationId}`,
+          transport: 'ipc',
+          projectRoot: projectPath
+        })
+      )
+    }
+    expect(send).toHaveBeenCalledTimes(calls.length)
+    expect(send).toHaveBeenCalledWith('architecture:modelChanged', {
+      projectPath,
+      fileName: 'planned.scry'
+    })
+    expect(readView).not.toHaveBeenCalled()
+  })
 })
