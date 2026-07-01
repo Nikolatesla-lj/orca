@@ -30,7 +30,7 @@ is executable today. The current catalog still contains operation rows that fall
 through to `unimplemented(...)`. Follow-up product-integration hardening through
 #29, #31, and #36 have completed for the default-model and read-surface
 release-critical paths; full operation parity continues through decision map
-#32-#35.
+#33-#35 after the #32 structural mutation release gate.
 
 - #25: reconcile linked docs with completed operation migration.
 - #26: main-process legacy Scryer semantic fallback retired or reduced to shims.
@@ -40,7 +40,7 @@ release-critical paths; full operation parity continues through decision map
 - #30: audit current executable slice and document catalog reality.
 - #36: strict Architecture slice release gate gaps from the #30 audit closed.
 - #31: read/query/rules/codebase executors and read-surface gate completed.
-- #32: finish structural mutation executors.
+- #32: structural mutation executors and release gate completed.
 - #33: finish health and drift-record executors.
 - #34: finish atomic container generation.
 - #35: prove remaining adapter and coverage gates.
@@ -62,7 +62,8 @@ map tickets #16-#24. In the planning context, "complete" meant the remaining
 operation families were specified and issue-ready together. In current code,
 "complete" should only be used with a qualifier such as "default-model
 Architecture main path" or "#31 read surface"; the stricter current-slice release
-gate remains #36, and the remaining operation-family parity target is #32-#35.
+gate remains #36, and the remaining operation-family parity target is #33-#35
+after the #32 structural mutation release gate.
 
 The implementation rule remains relevant for future maintenance: changes should
 proceed as vertical operation-family slices. Each task slice should carry real
@@ -83,9 +84,10 @@ behavior.
 2. Core structural writes:
    `scryer.model.set`, `scryer.node.set-subtree`, `scryer.node.delete`,
    `scryer.node.move`, `scryer.node.descope`, `scryer.responsibility.move`,
-   and `scryer.link.update`. Current status: `model.set`, `node.delete`, and
-   `link.update` are executable; `set-subtree`, `node.move`, `node.descope`,
-   and `responsibility.move` remain open for #32.
+   and `scryer.link.update`. Current status: executable for #32 with a shared
+   structural mutation planner, explicit schemas, planned-only #32 writes,
+   no-write fingerprints, CLI black-box coverage, and generic IPC forwarding
+   coverage.
 3. Source and group ownership:
    `scryer.source.update`, `scryer.group.set`, `scryer.group.update`, and
    `scryer.group.delete`. Current status: executable for the Architecture
@@ -319,8 +321,8 @@ stress fixtures; strict schemas; `model.read/search/query`, `rules.read`, and
 `codebase.read` executors; CLI specs and handlers; selector, operation,
 no-write, ownership, black-box CLI, and focused generic IPC tests; then
 docs/status cleanup. Engine-only work, CLI-only work, or tests missing
-no-write/ownership coverage remain partial. After #31 closes, full Scryer
-operation parity is still open until #32-#35 close.
+no-write/ownership coverage remain partial. After #32 closes, full Scryer
+operation parity is still open until #33-#35 close.
 
 Organize the #31 PR as one vertical slice with logical commits: first
 `docs: tighten #31 read parity gate`, then `feat: implement #31 read surface

@@ -415,9 +415,9 @@ Scope this ticket to repository docs only. The detailed status table belongs in
 `docs/orca-scryer-migration.md`; this decision map should stay compact.
 Acceptance means linked status docs no longer equate Architecture slice
 completion with full Scryer operation parity, and every remaining executable
-operation gap is assigned to tracked decision-map issues. As of the #31
-implementation, the read surface gap is closed and the remaining operation gaps
-are #32-#35.
+operation gap is assigned to tracked decision-map issues. As of the #32
+implementation, the read surface and structural mutation gaps are closed, and
+the remaining operation gaps are #33-#35.
 Verification is documentation-level:
 `git diff --check` plus targeted stale-phrase searches.
 
@@ -535,9 +535,7 @@ After #31, the read surface is also executable:
 `scryer.model.search`, `scryer.model.query`, `scryer.rules.read`, and
 `scryer.codebase.read` have engine executors and read-surface release gates.
 The catalog-only operations still needing executors are:
-`scryer.model.health`, `scryer.node.set-subtree`, `scryer.node.move`,
-`scryer.responsibility.move`, `scryer.container.fill`, `scryer.node.descope`,
-and `scryer.drift.flag`.
+`scryer.model.health`, `scryer.container.fill`, and `scryer.drift.flag`.
 
 Before claiming the Architecture slice complete, audit the already-executable
 product path as an end-to-end chain: visible renderer control -> renderer intent
@@ -559,8 +557,8 @@ coverage, MCP compatibility has a supported/rejected alias matrix, visible
 `scryer.group.delete` removes planned groups, and `scryer.person.add` has
 focused IPC/API coverage. Non-default model manager save-as/delete remains
 explicitly outside the current Architecture 0.3 release-critical path. Full
-Scryer operation parity still has separate #32-#35 work after the #31 read
-surface closure.
+Scryer operation parity still has separate #33-#35 work after the #31 read
+surface and #32 structural mutation closures.
 
 ## #31: How Should Read Surface Completion Land?
 
@@ -738,8 +736,9 @@ fixtures; then strict schemas; then executors; then CLI specs/handlers; then
 selector, operation, no-write, ownership, CLI black-box, and focused generic IPC
 tests; then docs/status cleanup. #31 is not complete until the whole gate is
 green. Engine-only completion, CLI-only completion, or tests without
-no-write/ownership coverage must remain partial. Closing #31 still does not
-claim full Scryer operation parity because #32-#35 remain open.
+no-write/ownership coverage must remain partial. Closing #31 still did not
+claim full Scryer operation parity because #32-#35 remained open; after #32,
+the remaining parity gaps are #33-#35.
 
 Prepare #31 as one PR with logical commits: `docs: tighten #31 read parity
 gate`; `feat: implement #31 read surface executors`; and `feat: expose #31 read
@@ -811,6 +810,11 @@ Out of scope: no new Architecture UI, rules browser UI, codebase tree UI,
 Electron live workflow, Codex-specific path, #33 intent add, #34 source/group
 operation implementation beyond cleanup over existing data, #35 full parity
 adapter/coverage gate, or MCP/model-store/legacy C4 bypass revival.
+
+Implementation status: completed as the #32A-#32E release slice. The four
+operations are executable through catalog/pipeline `executeOperation(...)` with
+explicit success schemas, shared planner cleanup, no-write fingerprints, CLI
+black-box coverage, and generic IPC forwarding coverage.
 
 ## #33: How Should Health And Drift Record Completion Land?
 
