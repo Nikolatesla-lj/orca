@@ -94,7 +94,8 @@ function moveModel(withCrossLink = false): ScryModel {
       { id: 'stripe', kind: 'system', name: 'Stripe', external: true },
       { id: 'api', kind: 'container', name: 'API', parentId: 'shop' },
       { id: 'web', kind: 'container', name: 'Web', parentId: 'shop' },
-      { id: 'worker', kind: 'container', name: 'Worker', parentId: 'crm' }
+      { id: 'worker', kind: 'container', name: 'Worker', parentId: 'crm' },
+      { id: 'analyst', kind: 'container', name: 'Analyst', parentId: 'crm' }
     ],
     links: withCrossLink ? [{ id: 'link-web-api', src: 'web', dst: 'api', label: 'calls' }] : [],
     groups: [
@@ -104,7 +105,12 @@ function moveModel(withCrossLink = false): ScryModel {
         memberIds: ['api', 'web'],
         parentNodeId: 'shop'
       },
-      { id: 'group-crm', name: 'CRM containers', memberIds: ['worker'], parentNodeId: 'crm' }
+      {
+        id: 'group-crm',
+        name: 'CRM containers',
+        memberIds: ['worker', 'analyst'],
+        parentNodeId: 'crm'
+      }
     ],
     sourceMap: {},
     boundaries: {}
@@ -343,7 +349,7 @@ describe('#32 structural mutation operations', () => {
       operationId: 'scryer.node.move',
       result: {
         moved: [{ nodeId: 'api', fromParentId: 'shop', toParentId: 'crm' }],
-        groupCleanup: { updatedGroupCount: 1, removedMembershipCount: 1 }
+        groupCleanup: { removedGroupCount: 1, removedMembershipCount: 1 }
       }
     })
     const committed = await readModelFile(projectPath, 'model.scry')
@@ -351,8 +357,12 @@ describe('#32 structural mutation operations', () => {
     expect(committed.nodes.find((node) => node.id === 'api')?.parentId).toBe('shop')
     expect(planned.nodes.find((node) => node.id === 'api')?.parentId).toBe('crm')
     expect(planned.groups).toEqual([
-      { id: 'group-shop', name: 'Shop containers', memberIds: ['web'], parentNodeId: 'shop' },
-      { id: 'group-crm', name: 'CRM containers', memberIds: ['worker'], parentNodeId: 'crm' }
+      {
+        id: 'group-crm',
+        name: 'CRM containers',
+        memberIds: ['worker', 'analyst'],
+        parentNodeId: 'crm'
+      }
     ])
   })
 
@@ -525,9 +535,7 @@ describe('#32 structural mutation operations', () => {
       { id: 'resp-api', statement: 'Serves API traffic' }
     ])
     expect(planned.links).toEqual([])
-    expect(planned.groups).toEqual([
-      { id: 'group-shop', name: 'Shop containers', memberIds: ['web'], parentNodeId: 'shop' }
-    ])
+    expect(planned.groups).toEqual([])
     expect(planned.sourceMap).toEqual({ 'resp-api': [{ pattern: 'src/api.ts', line: 1 }] })
     expect(planned.boundaries).toEqual({})
   })

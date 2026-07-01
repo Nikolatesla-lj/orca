@@ -292,7 +292,7 @@ function cleanupGroups(model: ScryModel): GroupCleanupResult {
       const memberKinds = new Set(
         memberIds.map((memberId) => nodeIndex.get(memberId)?.kind).filter(Boolean)
       )
-      if (memberIds.length === 0 || memberKinds.size > 1) {
+      if (memberIds.length < 2 || memberKinds.size > 1) {
         removedGroupIds.add(group.id)
         changed = true
         continue

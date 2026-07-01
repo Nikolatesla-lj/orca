@@ -39,6 +39,7 @@ import type {
   ScryerFlatOperationPolicy,
   ScryerMaintenanceWriteTarget,
   ScryerOperationCapability,
+  ScryerOperationClass,
   ScryerOperationCatalog,
   ScryerOperationContract,
   ScryerOperationErrorCode,
@@ -46,6 +47,7 @@ import type {
   ScryerOperationId,
   ScryerOperationPolicy,
   ScryerOperationRisk,
+  ScryerOperationWriteScope,
   ScryerSideEffect,
   ScryerStateRead,
   ScryerTransport,
@@ -113,6 +115,8 @@ type Row = {
   id: ScryerOperationId
   capability: ScryerOperationCapability
   risk: ScryerOperationRisk
+  operationClass?: ScryerOperationClass
+  writeScope?: ScryerOperationWriteScope
   policy: ScryerOperationPolicy
   errors?: ScryerOperationErrorCode[]
   upstream: ScryerUpstreamAnchor[]
@@ -393,6 +397,8 @@ const ROWS: Row[] = [
     id: 'scryer.node.set-subtree',
     capability: 'plan_author',
     risk: 'high',
+    operationClass: 'structural_replacement',
+    writeScope: 'subtree',
     policy: flatPolicy({
       lock: 'exclusive',
       lease: 'write_if_active',
@@ -423,6 +429,8 @@ const ROWS: Row[] = [
     id: 'scryer.node.move',
     capability: 'plan_author',
     risk: 'normal',
+    operationClass: 'structural_move',
+    writeScope: 'node',
     policy: flatPolicy({
       lock: 'exclusive',
       lease: 'write_if_active',
@@ -438,6 +446,8 @@ const ROWS: Row[] = [
     id: 'scryer.responsibility.move',
     capability: 'plan_author',
     risk: 'normal',
+    operationClass: 'structural_move',
+    writeScope: 'responsibility',
     policy: flatPolicy({
       lock: 'exclusive',
       lease: 'write_if_active',
@@ -550,6 +560,8 @@ const ROWS: Row[] = [
     id: 'scryer.model.set',
     capability: 'model_generate',
     risk: 'high',
+    operationClass: 'structural_replacement',
+    writeScope: 'whole_model',
     policy: flatPolicy({
       lock: 'exclusive',
       lease: 'none',
@@ -592,6 +604,8 @@ const ROWS: Row[] = [
     id: 'scryer.node.descope',
     capability: 'model_correct',
     risk: 'high',
+    operationClass: 'model_correction',
+    writeScope: 'subtree',
     policy: flatPolicy({
       lock: 'exclusive',
       lease: 'write_if_active',
@@ -841,6 +855,8 @@ export function createDefaultScryerOperationCatalog(): ScryerOperationCatalog {
       id: row.id,
       capability: row.capability,
       risk: row.risk,
+      ...(row.operationClass ? { operationClass: row.operationClass } : {}),
+      ...(row.writeScope ? { writeScope: row.writeScope } : {}),
       inputSchema: schemas.input,
       successSchema: schemas.success,
       errors: Object.fromEntries(

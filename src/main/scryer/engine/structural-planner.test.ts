@@ -76,17 +76,10 @@ describe('StructuralMutationPlanner', () => {
       outcome: {
         result: {
           moved: [{ nodeId: 'api', fromParentId: 'shop', toParentId: 'crm' }],
-          groupCleanup: { updatedGroupCount: 1, removedMembershipCount: 1 }
+          groupCleanup: { removedGroupCount: 1, removedMembershipCount: 1 }
         },
         changes: {
-          planned: {
-            groups: [
-              {
-                id: 'group-shop',
-                memberIds: ['web']
-              }
-            ]
-          }
+          planned: { groups: [] }
         }
       }
     })

@@ -14,6 +14,13 @@ const DECISION_31_READ_OPERATION_IDS = [
   'scryer.codebase.read'
 ] as const
 
+const DECISION_32_STRUCTURAL_OPERATION_IDS = [
+  'scryer.node.set-subtree',
+  'scryer.node.move',
+  'scryer.responsibility.move',
+  'scryer.node.descope'
+] as const
+
 const DECISION_31_EXPECTED_ERRORS = {
   'scryer.model.read': [
     'invalid_input',
@@ -121,5 +128,38 @@ describe('Scryer operation catalog', () => {
         false
       )
     }
+  })
+
+  it('gates #32 structural operations on executable contracts and explicit metadata', () => {
+    const catalog = createDefaultScryerOperationCatalog()
+
+    for (const operationId of DECISION_32_STRUCTURAL_OPERATION_IDS) {
+      const contract = catalog.getOperationContract(operationId)
+      expect(contract, `${operationId} must be registered`).toBeTruthy()
+      expect(String(contract!.execute)).not.toContain('registered but not implemented')
+      expect(contract!.policy).toMatchObject({ semanticWrites: ['planned'] })
+      expect(contract!.successSchema).toBe(operationSchemas[operationId].success)
+      expect(contract!.successSchema.safeParse({ arbitrary: 'generic-record' }).success).toBe(
+        false
+      )
+    }
+
+    expect(catalog.getOperationContract('scryer.node.set-subtree')).toMatchObject({
+      risk: 'high',
+      operationClass: 'structural_replacement',
+      writeScope: 'subtree'
+    })
+    expect(catalog.getOperationContract('scryer.node.move')).toMatchObject({
+      operationClass: 'structural_move',
+      writeScope: 'node'
+    })
+    expect(catalog.getOperationContract('scryer.responsibility.move')).toMatchObject({
+      operationClass: 'structural_move',
+      writeScope: 'responsibility'
+    })
+    expect(catalog.getOperationContract('scryer.node.descope')).toMatchObject({
+      operationClass: 'model_correction',
+      writeScope: 'subtree'
+    })
   })
 })

@@ -41,6 +41,12 @@ export type ScryerLayer = 'plan' | 'committed'
 export type ScryerTransport = 'cli' | 'ipc' | 'ui' | 'agent' | 'system' | 'test'
 export type ScryerCaller = 'human' | 'agent' | 'system' | 'test'
 export type ScryerOperationRisk = 'normal' | 'destructive' | 'high'
+export type ScryerOperationClass =
+  | 'structural_replacement'
+  | 'structural_move'
+  | 'model_correction'
+  | 'ordinary_edit'
+export type ScryerOperationWriteScope = 'whole_model' | 'subtree' | 'node' | 'responsibility'
 export type ScryerOperationLockPolicy = 'none' | 'exclusive' | 'commit_if_writing'
 
 export type ScryerOperationCapability =
@@ -457,6 +463,8 @@ export type ScryerOperationContract<TInput = unknown, TResult = unknown> = {
   id: ScryerOperationId
   capability: ScryerOperationCapability
   risk: ScryerOperationRisk
+  operationClass?: ScryerOperationClass
+  writeScope?: ScryerOperationWriteScope
   inputSchema: {
     safeParse(value: unknown): { success: true; data: TInput } | { success: false; error: unknown }
   }
