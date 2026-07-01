@@ -10,3 +10,9 @@ export {
 export { groupDeleteOperation, groupSetOperation, groupUpdateOperation } from './group-operations'
 export { sourceUpdateOperation } from './source-update'
 export { driftGetOperation, driftReconcileOperation } from './drift-operations'
+export {
+  nodeDescopeOperation,
+  nodeMoveOperation,
+  nodeSetSubtreeOperation,
+  responsibilityMoveOperation
+} from './structural-mutations'

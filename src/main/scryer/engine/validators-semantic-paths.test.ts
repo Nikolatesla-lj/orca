@@ -65,7 +65,9 @@ describe('Scryer validators and semantic paths', () => {
     )
     const codes = new Set(findings.map((finding) => finding.code))
 
-    expect([...codes].sort()).toEqual([...validationFindingCodeSchema.options].sort())
+    expect([...codes].sort()).toEqual(
+      validationFindingCodeSchema.options.filter((code) => code !== 'no_op').sort()
+    )
     expect([...codes]).toEqual(
       expect.arrayContaining([
         'duplicate_id',

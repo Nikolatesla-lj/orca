@@ -332,10 +332,11 @@ export type ScryerValidationFindingCode =
   | 'coverage_overlap'
   | 'anchor_range_warning'
   | 'invalid_drift_marker_transition'
+  | 'no_op'
 
 export type ScryerValidationFinding = {
   code: ScryerValidationFindingCode
-  severity: 'warning' | 'error'
+  severity: 'info' | 'warning' | 'error'
   message: string
   path?: string
   jsonPointer?: string
@@ -898,6 +899,77 @@ export type ScryerLinkDeleteResult = {
   deletedCount: number
   missingIds?: string[]
   pendingSummary?: PendingSummary
+}
+
+export type ScryerStructuralGroupCleanupSummary = {
+  removedGroupCount: number
+  updatedGroupCount: number
+  removedMembershipCount: number
+}
+
+export type ScryerNodeSetSubtreeInput = {
+  project?: string
+  node_id: string
+  data: {
+    nodes: ScryModel['nodes']
+    links?: ScryModel['links']
+  }
+}
+
+export type ScryerNodeSetSubtreeResult = {
+  rootId: string
+  addedNodeCount: number
+  removedNodeCount: number
+  addedLinkCount: number
+  removedLinkCount: number
+  groupCleanup: ScryerStructuralGroupCleanupSummary
+  findings: ScryerValidationFinding[]
+  pendingSummary: PendingSummary
+  recommendedNextReads: ScryerRecommendedRead[]
+}
+
+export type ScryerNodeMoveInput = {
+  project?: string
+  moves: Array<{ node_id: string; new_parent_id?: string | null }>
+}
+
+export type ScryerNodeMoveResult = {
+  moved: Array<{ nodeId: string; fromParentId?: string; toParentId?: string }>
+  groupCleanup: ScryerStructuralGroupCleanupSummary
+  findings: ScryerValidationFinding[]
+  pendingSummary: PendingSummary
+  recommendedNextReads: ScryerRecommendedRead[]
+}
+
+export type ScryerResponsibilityMoveInput = {
+  project?: string
+  moves: Array<{ responsibility_id: string; from_node_id: string; to_node_id: string }>
+}
+
+export type ScryerResponsibilityMoveResult = {
+  moved: Array<{ responsibilityId: string; fromNodeId: string; toNodeId: string }>
+  findings: ScryerValidationFinding[]
+  pendingSummary: PendingSummary
+  recommendedNextReads: ScryerRecommendedRead[]
+}
+
+export type ScryerNodeDescopeInput = {
+  project?: string
+  node_ids: string[]
+}
+
+export type ScryerNodeDescopeResult = {
+  descopedCount: number
+  relocatedResponsibilityCount: number
+  droppedResponsibilityCount: number
+  removedLinkCount: number
+  groupCleanup: ScryerStructuralGroupCleanupSummary
+  modelCorrection: true
+  codeAction: 'code_unchanged'
+  pendingReason: 'model_correction_code_unchanged'
+  findings: ScryerValidationFinding[]
+  pendingSummary: PendingSummary
+  recommendedNextReads: ScryerRecommendedRead[]
 }
 
 export type ScryerPlanPendingInput = {

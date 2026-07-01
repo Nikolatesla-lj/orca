@@ -23,7 +23,11 @@ import {
   groupSetOperation,
   groupUpdateOperation,
   modelSetOperation,
+  nodeDescopeOperation,
+  nodeMoveOperation,
+  nodeSetSubtreeOperation,
   personAddOperation,
+  responsibilityMoveOperation,
   sourceUpdateOperation,
   symbolAddOperation,
   systemAddOperation
@@ -392,12 +396,13 @@ const ROWS: Row[] = [
     policy: flatPolicy({
       lock: 'exclusive',
       lease: 'write_if_active',
-      reads: ['planned'],
+      reads: ['committed_if_available', 'planned'],
       semanticWrites: ['planned'],
       validation: ['write_guards', 'hierarchy_integrity']
     }),
     errors: ['not_found', 'validation_failed'],
-    upstream: [{ symbol: 'nodes.rs::set_node' }, { symbol: 'SetNodeRequest' }]
+    upstream: [{ symbol: 'nodes.rs::set_node' }, { symbol: 'SetNodeRequest' }],
+    execute: nodeSetSubtreeOperation as ScryerOperationExecutor<unknown, unknown>
   },
   {
     id: 'scryer.node.delete',
@@ -421,14 +426,13 @@ const ROWS: Row[] = [
     policy: flatPolicy({
       lock: 'exclusive',
       lease: 'write_if_active',
-      reads: ['planned'],
+      reads: ['committed_if_available', 'planned'],
       semanticWrites: ['planned'],
-      maintenanceWrites: [{ target: 'history', mode: 'best_effort' }],
-      validation: ['hierarchy_integrity', 'write_guards'],
-      sideEffects: ['history_append']
+      validation: ['hierarchy_integrity', 'write_guards']
     }),
     errors: ['not_found', 'validation_failed'],
-    upstream: [{ symbol: 'nodes.rs::move_nodes' }, { symbol: 'MoveNodesRequest' }]
+    upstream: [{ symbol: 'nodes.rs::move_nodes' }, { symbol: 'MoveNodesRequest' }],
+    execute: nodeMoveOperation as ScryerOperationExecutor<unknown, unknown>
   },
   {
     id: 'scryer.responsibility.move',
@@ -437,17 +441,16 @@ const ROWS: Row[] = [
     policy: flatPolicy({
       lock: 'exclusive',
       lease: 'write_if_active',
-      reads: ['planned'],
+      reads: ['committed_if_available', 'planned'],
       semanticWrites: ['planned'],
-      maintenanceWrites: [{ target: 'history', mode: 'best_effort' }],
-      validation: ['write_guards'],
-      sideEffects: ['history_append']
+      validation: ['write_guards']
     }),
     errors: ['not_found', 'validation_failed'],
     upstream: [
       { symbol: 'nodes.rs::move_responsibilities' },
       { symbol: 'MoveResponsibilitiesRequest' }
-    ]
+    ],
+    execute: responsibilityMoveOperation as ScryerOperationExecutor<unknown, unknown>
   },
   {
     id: 'scryer.group.set',
@@ -592,14 +595,14 @@ const ROWS: Row[] = [
     policy: flatPolicy({
       lock: 'exclusive',
       lease: 'write_if_active',
-      reads: ['committed', 'planned'],
-      semanticWrites: ['committed', 'planned'],
-      maintenanceWrites: [{ target: 'baseline', mode: 'best_effort' }],
+      reads: ['committed_if_available', 'planned'],
+      semanticWrites: ['planned'],
       validation: ['hierarchy_integrity', 'write_guards'],
-      sideEffects: ['baseline_refresh']
+      sideEffects: []
     }),
     errors: ['not_found', 'validation_failed'],
-    upstream: [{ symbol: 'nodes.rs::descope' }, { symbol: 'DescopeRequest' }]
+    upstream: [{ symbol: 'nodes.rs::descope' }, { symbol: 'DescopeRequest' }],
+    execute: nodeDescopeOperation as ScryerOperationExecutor<unknown, unknown>
   },
   {
     id: 'scryer.drift.get',

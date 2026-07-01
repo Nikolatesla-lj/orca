@@ -134,13 +134,14 @@ export const validationFindingCodeSchema = z.enum([
   'coverage_gap',
   'coverage_overlap',
   'anchor_range_warning',
-  'invalid_drift_marker_transition'
+  'invalid_drift_marker_transition',
+  'no_op'
 ] satisfies ScryerValidationFindingCode[])
 
 export const validationFindingSchema = z
   .object({
     code: validationFindingCodeSchema,
-    severity: z.union([z.literal('warning'), z.literal('error')]),
+    severity: z.union([z.literal('info'), z.literal('warning'), z.literal('error')]),
     message: z.string(),
     path: z.string().optional(),
     jsonPointer: z.string().optional(),
@@ -771,6 +772,134 @@ export const linkDeleteSuccessSchema = z
   })
   .strict()
 
+export const setSubtreeDataSchema = z
+  .object({
+    nodes: z.array(nodeSchema),
+    links: z.array(linkSchema).optional()
+  })
+  .strict()
+
+export const nodeSetSubtreeInputSchema = z
+  .object({
+    project: z.string().optional(),
+    node_id: z.string().min(1),
+    data: setSubtreeDataSchema
+  })
+  .strict()
+
+const groupCleanupSummarySchema = z
+  .object({
+    removedGroupCount: z.number().int().nonnegative(),
+    updatedGroupCount: z.number().int().nonnegative(),
+    removedMembershipCount: z.number().int().nonnegative()
+  })
+  .strict()
+
+export const nodeSetSubtreeSuccessSchema = z
+  .object({
+    rootId: z.string(),
+    addedNodeCount: z.number().int().nonnegative(),
+    removedNodeCount: z.number().int().nonnegative(),
+    addedLinkCount: z.number().int().nonnegative(),
+    removedLinkCount: z.number().int().nonnegative(),
+    groupCleanup: groupCleanupSummarySchema,
+    findings: z.array(validationFindingSchema),
+    pendingSummary: pendingSummarySchema,
+    recommendedNextReads: z.array(recommendedReadSchema)
+  })
+  .strict()
+
+export const nodeMoveInputSchema = z
+  .object({
+    project: z.string().optional(),
+    moves: z
+      .array(
+        z
+          .object({
+            node_id: z.string().min(1),
+            new_parent_id: z.string().min(1).nullable().optional()
+          })
+          .strict()
+      )
+      .min(1)
+  })
+  .strict()
+
+export const nodeMoveSuccessSchema = z
+  .object({
+    moved: z.array(
+      z
+        .object({
+          nodeId: z.string(),
+          fromParentId: z.string().optional(),
+          toParentId: z.string().optional()
+        })
+        .strict()
+    ),
+    groupCleanup: groupCleanupSummarySchema,
+    findings: z.array(validationFindingSchema),
+    pendingSummary: pendingSummarySchema,
+    recommendedNextReads: z.array(recommendedReadSchema)
+  })
+  .strict()
+
+export const responsibilityMoveInputSchema = z
+  .object({
+    project: z.string().optional(),
+    moves: z
+      .array(
+        z
+          .object({
+            responsibility_id: z.string().min(1),
+            from_node_id: z.string().min(1),
+            to_node_id: z.string().min(1)
+          })
+          .strict()
+      )
+      .min(1)
+  })
+  .strict()
+
+export const responsibilityMoveSuccessSchema = z
+  .object({
+    moved: z.array(
+      z
+        .object({
+          responsibilityId: z.string(),
+          fromNodeId: z.string(),
+          toNodeId: z.string()
+        })
+        .strict()
+    ),
+    findings: z.array(validationFindingSchema),
+    pendingSummary: pendingSummarySchema,
+    recommendedNextReads: z.array(recommendedReadSchema)
+  })
+  .strict()
+
+export const nodeDescopeInputSchema = z
+  .object({
+    project: z.string().optional(),
+    node_ids: z.array(z.string().min(1)).min(1)
+  })
+  .strict()
+
+export const nodeDescopeSuccessSchema = z
+  .object({
+    descopedCount: z.number().int().nonnegative(),
+    relocatedResponsibilityCount: z.number().int().nonnegative(),
+    droppedResponsibilityCount: z.number().int().nonnegative(),
+    removedLinkCount: z.number().int().nonnegative(),
+    groupCleanup: groupCleanupSummarySchema,
+    modelCorrection: z.literal(true),
+    codeAction: z.literal('code_unchanged'),
+    pendingReason: z.literal('model_correction_code_unchanged'),
+    findings: z.array(validationFindingSchema),
+    pendingSummary: pendingSummarySchema,
+    recommendedNextReads: z.array(recommendedReadSchema)
+  })
+  .strict()
+
 export const planPendingInputSchema = z
   .object({
     project: z.string().optional()
@@ -899,10 +1028,8 @@ export const operationSchemas: Record<
   },
   'scryer.link.delete': { input: linkDeleteInputSchema, success: linkDeleteSuccessSchema },
   'scryer.node.set-subtree': {
-    input: z
-      .object({ project: z.string().optional(), node_id: z.string(), data: z.unknown() })
-      .strict(),
-    success: countResultSchema
+    input: nodeSetSubtreeInputSchema,
+    success: nodeSetSubtreeSuccessSchema
   },
   'scryer.node.delete': {
     input: z
@@ -911,38 +1038,12 @@ export const operationSchemas: Record<
     success: countResultSchema
   },
   'scryer.node.move': {
-    input: z
-      .object({
-        project: z.string().optional(),
-        moves: z
-          .array(
-            z
-              .object({ node_id: z.string(), new_parent_id: z.string().nullable().optional() })
-              .strict()
-          )
-          .min(1)
-      })
-      .strict(),
-    success: countResultSchema
+    input: nodeMoveInputSchema,
+    success: nodeMoveSuccessSchema
   },
   'scryer.responsibility.move': {
-    input: z
-      .object({
-        project: z.string().optional(),
-        moves: z
-          .array(
-            z
-              .object({
-                responsibility_id: z.string(),
-                from_node_id: z.string(),
-                to_node_id: z.string()
-              })
-              .strict()
-          )
-          .min(1)
-      })
-      .strict(),
-    success: countResultSchema
+    input: responsibilityMoveInputSchema,
+    success: responsibilityMoveSuccessSchema
   },
   'scryer.group.set': {
     input: z.object({ project: z.string().optional(), data: z.unknown() }).strict(),
@@ -1044,10 +1145,8 @@ export const operationSchemas: Record<
     success: countResultSchema
   },
   'scryer.node.descope': {
-    input: z
-      .object({ project: z.string().optional(), node_ids: z.array(z.string()).min(1) })
-      .strict(),
-    success: countResultSchema
+    input: nodeDescopeInputSchema,
+    success: nodeDescopeSuccessSchema
   },
   'scryer.drift.get': { input: stringProjectSchema, success: countResultSchema },
   'scryer.drift.flag': {
