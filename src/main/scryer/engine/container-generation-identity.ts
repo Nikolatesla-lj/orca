@@ -25,8 +25,11 @@ export type GeneratedSubtreeIdentity = {
   thinSymbolCount: number
 }
 
+// Preserve the historical runtime delimiter without embedding a literal NUL byte in source.
+const NUL_SEPARATOR = String.fromCharCode(0)
+
 export function containerGenerationSourceKey(sourceFile: string, name: string): string {
-  return JSON.stringify([sourceFile, name])
+  return `${sourceFile}${NUL_SEPARATOR}${name}`
 }
 
 function mintResponsibilities(statements: string[], ids: ScryerIdMinter): ScryResponsibility[] {

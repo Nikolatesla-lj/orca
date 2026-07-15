@@ -1,6 +1,5 @@
 import type { ScryModel } from './model'
-import type { ScryerRecommendedRead } from './model-read-contracts'
-import type { ScryerValidationFinding } from './operation-results'
+import type { ScryerRecommendedRead, ScryerValidationFinding } from './operation-results'
 import type { PendingSummary } from './pending-contracts'
 
 export type UpdateNodeItem = {

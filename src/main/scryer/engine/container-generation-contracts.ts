@@ -1,5 +1,4 @@
-import type { ScryerRecommendedRead } from './model-read-contracts'
-import type { ScryerValidationFinding } from './operation-results'
+import type { ScryerRecommendedRead, ScryerValidationFinding } from './operation-results'
 
 // Container generation (#21 / #34): the atomic `scryer.container.fill` primitive.
 // A proposal uses request-local `key`s to reference its own elements; it must

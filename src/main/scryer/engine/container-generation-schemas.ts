@@ -1,6 +1,6 @@
 import { z } from 'zod'
-import { recommendedReadSchema } from './model-read-schemas'
 import { validationFindingSchema } from './operation-error-schemas'
+import { recommendedReadSchema } from './operation-result-schemas'
 
 const proposedResponsibilitySchema = z.union([
   z.string(),

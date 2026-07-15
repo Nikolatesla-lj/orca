@@ -7,6 +7,12 @@ import type {
 } from './operation-identifiers'
 import type { ScryerStateChanges } from './operation-state-contracts'
 
+export type ScryerRecommendedRead = {
+  operationId: ScryerOperationId
+  input: Record<string, unknown>
+  reason: string
+}
+
 export type ScryerFieldError = {
   path: string
   message: string

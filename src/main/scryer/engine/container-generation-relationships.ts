@@ -33,8 +33,11 @@ export type GeneratedRelationships = {
   edgeGraphStatus: ScryerEdgeGraphStatus
 }
 
-function relationshipKey(src: string, dst: string): string {
-  return JSON.stringify([src, dst])
+// Preserve the historical runtime delimiter without embedding a literal NUL byte in source.
+const NUL_SEPARATOR = String.fromCharCode(0)
+
+export function containerGenerationRelationshipKey(src: string, dst: string): string {
+  return `${src}${NUL_SEPARATOR}${dst}`
 }
 
 function violationReason(reason: string, src: string, dst: string): string {
@@ -132,7 +135,9 @@ export function planGeneratedRelationships(args: {
 }): GeneratedRelationships {
   const dropped: ScryerDroppedLink[] = []
   const links: ScryLink[] = []
-  const seenPairs = new Set(args.existingLinks.map((link) => relationshipKey(link.src, link.dst)))
+  const seenPairs = new Set(
+    args.existingLinks.map((link) => containerGenerationRelationshipKey(link.src, link.dst))
+  )
   const existingIds = new Set(args.committed.nodes.map((node) => node.id))
 
   const agentKept: ScryLink[] = []
@@ -153,7 +158,7 @@ export function planGeneratedRelationships(args: {
       dropped.push({ ...proposal, reason: `self-link ${src}` })
       continue
     }
-    if (seenPairs.has(relationshipKey(src, dst))) {
+    if (seenPairs.has(containerGenerationRelationshipKey(src, dst))) {
       dropped.push({ ...proposal, reason: `duplicate ${src} -> ${dst}` })
       continue
     }
@@ -162,7 +167,7 @@ export function planGeneratedRelationships(args: {
       dropped.push({ ...proposal, reason: violationReason(violation.reason, src, dst) })
       continue
     }
-    seenPairs.add(relationshipKey(src, dst))
+    seenPairs.add(containerGenerationRelationshipKey(src, dst))
     agentKept.push({
       id: args.ids.link(src, dst),
       src,
@@ -192,10 +197,10 @@ export function planGeneratedRelationships(args: {
     }
     const src = srcComponent === dstComponent ? srcSymbol : srcComponent
     const dst = srcComponent === dstComponent ? dstSymbol : dstComponent
-    if (src === dst || seenPairs.has(relationshipKey(src, dst))) {
+    if (src === dst || seenPairs.has(containerGenerationRelationshipKey(src, dst))) {
       continue
     }
-    seenPairs.add(relationshipKey(src, dst))
+    seenPairs.add(containerGenerationRelationshipKey(src, dst))
     links.push({ id: args.ids.link(src, dst), src, dst, label: '' })
     derivedCount += 1
   }
@@ -215,10 +220,10 @@ export function addGeneratedLinksToPlanned(args: {
   existingLinks: ScryLink[]
 }): void {
   const plannedPairs = new Set(
-    args.existingLinks.map((link) => relationshipKey(link.src, link.dst))
+    args.existingLinks.map((link) => containerGenerationRelationshipKey(link.src, link.dst))
   )
   for (const link of args.links) {
-    if (!plannedPairs.has(relationshipKey(link.src, link.dst))) {
+    if (!plannedPairs.has(containerGenerationRelationshipKey(link.src, link.dst))) {
       args.planned.links.push(JSON.parse(JSON.stringify(link)) as ScryLink)
     }
   }

@@ -1,17 +1,12 @@
 import type { ScryModel } from './model'
-import type { ScryerLayer, ScryerOperationId } from './operation-identifiers'
+import type { ScryerLayer } from './operation-identifiers'
+import type { ScryerRecommendedRead } from './operation-results'
 
 export type ScryerReadViewInput = {
   project?: string
   view?: 'overview' | 'subtree' | 'full'
   node?: string
   layer?: ScryerLayer
-}
-
-export type ScryerRecommendedRead = {
-  operationId: ScryerOperationId
-  input: Record<string, unknown>
-  reason: string
 }
 
 export type ScryerReadOverviewNode = {

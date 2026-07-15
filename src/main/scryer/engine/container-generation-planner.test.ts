@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { containerGenerationSourceKey } from './container-generation-identity'
 import { createScryerContainerGenerationPlanner } from './container-generation-planner'
+import { containerGenerationRelationshipKey } from './container-generation-relationships'
 import { diffModels } from './diff'
 import { createScryerFoldService } from './fold'
 import { createScryerIdMinter } from './id-minter'
@@ -89,6 +91,18 @@ const singleComponent: ScryerContainerFillInput = {
 }
 
 describe('ScryerContainerGenerationPlanner', () => {
+  it('preserves the historical NUL-delimited composite key semantics', () => {
+    const nul = String.fromCharCode(0)
+
+    // NUL-containing inputs intentionally retain the pre-extraction collision behavior.
+    expect(containerGenerationSourceKey(`a${nul}b`, 'c')).toBe(
+      containerGenerationSourceKey('a', `b${nul}c`)
+    )
+    expect(containerGenerationRelationshipKey(`a${nul}b`, 'c')).toBe(
+      containerGenerationRelationshipKey('a', `b${nul}c`)
+    )
+  })
+
   it('fills an empty container with a component/symbol subtree and source anchors', () => {
     const result = run(singleComponent)
     const value = expectOk(result)
@@ -160,7 +174,7 @@ describe('ScryerContainerGenerationPlanner', () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.failure.code).toBe('validation_failed')
-      const findings = result.failure.details?.findings as Array<{ details?: { reason?: string } }>
+      const findings = result.failure.details?.findings as { details?: { reason?: string } }[]
       expect(findings.some((f) => f.details?.reason === 'empty_generation_target_required')).toBe(
         true
       )
@@ -179,7 +193,7 @@ describe('ScryerContainerGenerationPlanner', () => {
     const result = run({ ...singleComponent, container_id: 'shop' })
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      const findings = result.failure.details?.findings as Array<{ details?: { reason?: string } }>
+      const findings = result.failure.details?.findings as { details?: { reason?: string } }[]
       expect(findings.some((f) => f.details?.reason === 'not_a_container')).toBe(true)
     }
   })
@@ -197,7 +211,7 @@ describe('ScryerContainerGenerationPlanner', () => {
     })
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      const findings = result.failure.details?.findings as Array<{ details?: { reason?: string } }>
+      const findings = result.failure.details?.findings as { details?: { reason?: string } }[]
       expect(findings.some((f) => f.details?.reason === 'duplicate_local_key')).toBe(true)
     }
   })
@@ -215,7 +229,7 @@ describe('ScryerContainerGenerationPlanner', () => {
     })
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      const findings = result.failure.details?.findings as Array<{ details?: { reason?: string } }>
+      const findings = result.failure.details?.findings as { details?: { reason?: string } }[]
       expect(findings.some((f) => f.details?.reason === 'local_key_conflicts_existing_id')).toBe(
         true
       )
@@ -241,7 +255,7 @@ describe('ScryerContainerGenerationPlanner', () => {
     })
     expect(bad.ok).toBe(false)
     if (!bad.ok) {
-      const findings = bad.failure.details?.findings as Array<{ details?: { reason?: string } }>
+      const findings = bad.failure.details?.findings as { details?: { reason?: string } }[]
       expect(findings.some((f) => f.details?.reason === 'unresolved_group_member')).toBe(true)
     }
   })

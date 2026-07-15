@@ -6,8 +6,8 @@ import {
   responsibilitySchema,
   scryKindSchema
 } from './model-schemas'
-import { recommendedReadSchema } from './model-read-schemas'
 import { validationFindingSchema } from './operation-error-schemas'
+import { recommendedReadSchema } from './operation-result-schemas'
 
 export const updateNodeItemSchema = z
   .object({

@@ -9,6 +9,7 @@ import {
   sourceLocationSchema,
   sourceSchema
 } from './model-schemas'
+import { recommendedReadSchema } from './operation-result-schemas'
 
 export const modelReadInputSchema = z
   .object({
@@ -16,14 +17,6 @@ export const modelReadInputSchema = z
     view: z.union([z.literal('overview'), z.literal('subtree'), z.literal('full')]).optional(),
     node: z.string().optional(),
     layer: scryLayerSchema.optional()
-  })
-  .strict()
-
-export const recommendedReadSchema = z
-  .object({
-    operationId: z.string().min(1),
-    input: z.record(z.string(), z.unknown()),
-    reason: z.string()
   })
   .strict()
 
