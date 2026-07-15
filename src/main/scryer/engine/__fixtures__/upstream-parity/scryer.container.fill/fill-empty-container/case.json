@@ -1,0 +1,30 @@
+{
+  "operationId": "scryer.container.fill",
+  "upstreamCommit": "0000000",
+  "upstreamAnchors": [
+    "generation.rs::fill_container",
+    "CommitContainerModelRequest",
+    "build_edges.rs"
+  ],
+  "input": {
+    "container_id": "api",
+    "components": [
+      {
+        "key": "orders",
+        "name": "Orders",
+        "symbols": [
+          {
+            "key": "handleOrder",
+            "name": "handleOrder",
+            "source_file": "src/orders.ts",
+            "line": 10,
+            "end_line": 40,
+            "responsibilities": ["Handles an order request"]
+          }
+        ]
+      }
+    ]
+  },
+  "expected": "success",
+  "orcaDifferenceReason": "committed+planned single transaction with a structured generation summary replaces upstream MCP text result"
+}

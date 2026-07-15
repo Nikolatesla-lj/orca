@@ -53,6 +53,39 @@ export const SCRYER_COMMAND_SPECS: CommandSpec[] = [
     examples: ['orca scryer model validate --project . --json']
   },
   {
+    path: ['scryer', 'model', 'health'],
+    summary: 'Report Scryer model health, anchor coverage, and drift observations',
+    usage: 'orca scryer model health [--node-id <id>] [--project <path>] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'node-id'],
+    examples: ['orca scryer model health --json', 'orca scryer model health --node-id api --json']
+  },
+  {
+    path: ['scryer', 'drift', 'get'],
+    summary: 'Detect Scryer code-to-model drift scopes since the last reconcile',
+    usage: 'orca scryer drift get [--project <path>] [--json]',
+    allowedFlags: SCRYER_FLAGS,
+    examples: ['orca scryer drift get --json']
+  },
+  {
+    path: ['scryer', 'drift', 'flag'],
+    summary: 'Record reviewed Scryer drift findings into planned state',
+    usage: 'orca scryer drift flag --json-input - [--project <path>] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'json-input', 'node-id'],
+    notes: [
+      'The JSON input must contain `node_id` and at least one finding array (e.g. `undescribed`, `new_nodes`, `stale`).'
+    ],
+    examples: [
+      'echo \'{"node_id":"api","undescribed":[{"node_id":"orders","statement":"Cancels stale orders","source_file":"src/orders.ts"}]}\' | orca scryer drift flag --json-input - --json'
+    ]
+  },
+  {
+    path: ['scryer', 'drift', 'reconcile'],
+    summary: 'Advance the Scryer drift reconcile baseline after review',
+    usage: 'orca scryer drift reconcile [--project <path>] [--json]',
+    allowedFlags: SCRYER_FLAGS,
+    examples: ['orca scryer drift reconcile --json']
+  },
+  {
     path: ['scryer', 'node', 'update'],
     summary: 'Patch planned Scryer nodes',
     usage: 'orca scryer node update --json-input - [--project <path>] [--json]',
@@ -117,6 +150,148 @@ export const SCRYER_COMMAND_SPECS: CommandSpec[] = [
     usage: 'orca scryer link delete --link-ids <id,id> [--project <path>] [--json]',
     allowedFlags: [...SCRYER_FLAGS, 'json-input', 'link-ids'],
     examples: ['orca scryer link delete --link-ids link-web-api --json']
+  },
+  {
+    path: ['scryer', 'container', 'fill'],
+    summary: 'Atomically generate an empty Scryer container subtree from code',
+    usage: 'orca scryer container fill --json-input - [--project <path>] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'json-input'],
+    notes: [
+      'The JSON input must contain `container_id` and a non-empty `components` array; optional `links` and `groups`.'
+    ],
+    examples: [
+      'echo \'{"container_id":"api","components":[{"key":"orders","name":"Orders","symbols":[{"key":"h","name":"handleOrder","source_file":"src/orders.ts"}]}]}\' | orca scryer container fill --json-input - --json'
+    ]
+  },
+  {
+    path: ['scryer', 'link', 'update'],
+    summary: 'Update planned Scryer link labels or methods',
+    usage: 'orca scryer link update --json-input - [--project <path>] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'json-input'],
+    notes: ['The JSON input must contain a non-empty `links` array of `{ link_id, ... }` patches.'],
+    examples: [
+      'echo \'{"links":[{"link_id":"link-web-api","label":"calls"}]}\' | orca scryer link update --json-input - --json'
+    ]
+  },
+  {
+    path: ['scryer', 'node', 'delete'],
+    summary: 'Delete planned Scryer nodes and their subtrees',
+    usage: 'orca scryer node delete --node-ids <id,id> [--project <path>] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'json-input', 'node-ids'],
+    examples: ['orca scryer node delete --node-ids orders --json']
+  },
+  {
+    path: ['scryer', 'person', 'add'],
+    summary: 'Author planned Scryer person nodes',
+    usage: 'orca scryer person add --json-input - [--project <path>] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'json-input'],
+    notes: ['The JSON input must contain a non-empty `items` array.'],
+    examples: [
+      'echo \'{"items":[{"name":"Customer"}]}\' | orca scryer person add --json-input - --json'
+    ]
+  },
+  {
+    path: ['scryer', 'system', 'add'],
+    summary: 'Author planned Scryer system nodes',
+    usage: 'orca scryer system add --json-input - [--project <path>] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'json-input'],
+    notes: ['The JSON input must contain a non-empty `items` array.'],
+    examples: [
+      'echo \'{"items":[{"name":"Shop"}]}\' | orca scryer system add --json-input - --json'
+    ]
+  },
+  {
+    path: ['scryer', 'container', 'add'],
+    summary: 'Author planned Scryer container nodes under a system',
+    usage: 'orca scryer container add --json-input - [--project <path>] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'json-input'],
+    notes: [
+      'The JSON input must contain a non-empty `items` array; each item needs a `parent_id`.'
+    ],
+    examples: [
+      'echo \'{"items":[{"name":"API","parent_id":"shop"}]}\' | orca scryer container add --json-input - --json'
+    ]
+  },
+  {
+    path: ['scryer', 'component', 'add'],
+    summary: 'Author planned Scryer component nodes under a container',
+    usage: 'orca scryer component add --json-input - [--project <path>] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'json-input'],
+    notes: [
+      'The JSON input must contain a non-empty `items` array; each item needs a `parent_id`.'
+    ],
+    examples: [
+      'echo \'{"items":[{"name":"Orders","parent_id":"api"}]}\' | orca scryer component add --json-input - --json'
+    ]
+  },
+  {
+    path: ['scryer', 'symbol', 'add'],
+    summary: 'Author planned Scryer symbol nodes under a component',
+    usage: 'orca scryer symbol add --json-input - [--project <path>] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'json-input'],
+    notes: [
+      'The JSON input must contain a non-empty `items` array; each item needs a `parent_id` and `source_file`.'
+    ],
+    examples: [
+      'echo \'{"items":[{"name":"handleOrder","parent_id":"orders","source_file":"src/orders.ts"}]}\' | orca scryer symbol add --json-input - --json'
+    ]
+  },
+  {
+    path: ['scryer', 'group', 'add'],
+    summary: 'Author a planned Scryer group over existing sibling nodes',
+    usage: 'orca scryer group add --json-input - [--project <path>] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'json-input'],
+    notes: ['The JSON input must contain a non-empty `items` array of group descriptors.'],
+    examples: [
+      'echo \'{"items":[{"name":"Core","parent_id":"api","member_ids":["orders","billing"]}]}\' | orca scryer group add --json-input - --json'
+    ]
+  },
+  {
+    path: ['scryer', 'group', 'set'],
+    summary: 'Replace the planned Scryer group set',
+    usage: 'orca scryer group set --json-input - [--project <path>] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'json-input'],
+    notes: ['The JSON input must contain a `data` array of full group objects.'],
+    examples: [
+      'echo \'{"data":[{"id":"group-core","name":"Core","memberIds":["orders","billing"]}]}\' | orca scryer group set --json-input - --json'
+    ]
+  },
+  {
+    path: ['scryer', 'group', 'update'],
+    summary: 'Patch planned Scryer groups',
+    usage: 'orca scryer group update --json-input - [--project <path>] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'json-input'],
+    notes: ['The JSON input must contain a non-empty `items` array of group patches.'],
+    examples: [
+      'echo \'{"items":[{"group_id":"group-core","name":"Core Services"}]}\' | orca scryer group update --json-input - --json'
+    ]
+  },
+  {
+    path: ['scryer', 'group', 'delete'],
+    summary: 'Delete a planned Scryer group',
+    usage: 'orca scryer group delete --group-id <id> [--project <path>] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'json-input', 'group-id'],
+    examples: ['orca scryer group delete --group-id group-core --json']
+  },
+  {
+    path: ['scryer', 'source', 'update'],
+    summary: 'Update Scryer source-map and boundary anchors',
+    usage: 'orca scryer source update --json-input - [--project <path>] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'json-input'],
+    notes: ['The JSON input carries `entries` and/or `boundaries` anchor updates.'],
+    examples: [
+      'echo \'{"entries":[{"target":"orders","locations":[{"pattern":"src/orders.ts"}]}]}\' | orca scryer source update --json-input - --json'
+    ]
+  },
+  {
+    path: ['scryer', 'model', 'set'],
+    summary: 'Replace the whole Scryer model (initial generation / import)',
+    usage: 'orca scryer model set --json-input - [--project <path>] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'json-input'],
+    notes: ['The JSON input must contain `data` with a full Scryer 0.3 model.'],
+    examples: [
+      'echo \'{"data":{"version":"0.3","nodes":[],"links":[],"groups":[],"sourceMap":{},"boundaries":{}}}\' | orca scryer model set --json-input - --json'
+    ]
   },
   {
     path: ['scryer', 'plan', 'pending'],

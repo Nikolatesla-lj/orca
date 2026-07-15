@@ -15,6 +15,7 @@ import { linkUpdateOperation } from './operations/link-update'
 import { planPendingOperation } from './operations/plan-pending'
 import { planFoldOperation } from './operations/plan-fold'
 import { driftFlagOperation } from './operations/drift-flag'
+import { containerFillOperation } from './operations/container-fill'
 import {
   componentAddOperation,
   containerAddOperation,
@@ -582,6 +583,8 @@ const ROWS: Row[] = [
     id: 'scryer.container.fill',
     capability: 'model_generate',
     risk: 'high',
+    operationClass: 'generation_primitive',
+    writeScope: 'subtree',
     policy: flatPolicy({
       lock: 'exclusive',
       lease: 'none',
@@ -601,7 +604,8 @@ const ROWS: Row[] = [
       { symbol: 'generation.rs::fill_container' },
       { symbol: 'CommitContainerModelRequest' },
       { symbol: 'build_edges.rs' }
-    ]
+    ],
+    execute: containerFillOperation as ScryerOperationExecutor<unknown, unknown>
   },
   {
     id: 'scryer.node.descope',

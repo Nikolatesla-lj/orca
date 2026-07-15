@@ -140,6 +140,27 @@ export const SCRYER_HANDLERS: Record<string, CommandHandler> = {
       layer: getOptionalStringFlag(ctx.flags, 'layer')
     })
   },
+  'scryer model health': async (ctx) => {
+    await execute(ctx, 'scryer.model.health', {
+      project: getOptionalStringFlag(ctx.flags, 'project'),
+      node_id: getOptionalStringFlag(ctx.flags, 'node-id')
+    })
+  },
+  'scryer drift get': async (ctx) => {
+    await execute(ctx, 'scryer.drift.get', {
+      project: getOptionalStringFlag(ctx.flags, 'project')
+    })
+  },
+  'scryer drift flag': async (ctx) => {
+    const input = await complexInput(ctx)
+    input.node_id = input.node_id ?? getOptionalStringFlag(ctx.flags, 'node-id')
+    await execute(ctx, 'scryer.drift.flag', input)
+  },
+  'scryer drift reconcile': async (ctx) => {
+    await execute(ctx, 'scryer.drift.reconcile', {
+      project: getOptionalStringFlag(ctx.flags, 'project')
+    })
+  },
   'scryer node update': async (ctx) => {
     await execute(ctx, 'scryer.node.update', await complexInput(ctx))
   },
@@ -188,6 +209,48 @@ export const SCRYER_HANDLERS: Record<string, CommandHandler> = {
     }
     await execute(ctx, 'scryer.node.descope', input)
   },
+  'scryer node delete': async (ctx) => {
+    const input = await complexInput(ctx)
+    if (!input.node_ids) {
+      input.node_ids = commaList(getOptionalStringFlag(ctx.flags, 'node-ids')) ?? []
+    }
+    await execute(ctx, 'scryer.node.delete', input)
+  },
+  'scryer person add': async (ctx) => {
+    await execute(ctx, 'scryer.person.add', await complexInput(ctx))
+  },
+  'scryer system add': async (ctx) => {
+    await execute(ctx, 'scryer.system.add', await complexInput(ctx))
+  },
+  'scryer container add': async (ctx) => {
+    await execute(ctx, 'scryer.container.add', await complexInput(ctx))
+  },
+  'scryer component add': async (ctx) => {
+    await execute(ctx, 'scryer.component.add', await complexInput(ctx))
+  },
+  'scryer symbol add': async (ctx) => {
+    await execute(ctx, 'scryer.symbol.add', await complexInput(ctx))
+  },
+  'scryer group add': async (ctx) => {
+    await execute(ctx, 'scryer.group.add', await complexInput(ctx))
+  },
+  'scryer group set': async (ctx) => {
+    await execute(ctx, 'scryer.group.set', await complexInput(ctx))
+  },
+  'scryer group update': async (ctx) => {
+    await execute(ctx, 'scryer.group.update', await complexInput(ctx))
+  },
+  'scryer group delete': async (ctx) => {
+    const input = await complexInput(ctx)
+    input.group_id = input.group_id ?? getRequiredStringFlag(ctx.flags, 'group-id')
+    await execute(ctx, 'scryer.group.delete', input)
+  },
+  'scryer source update': async (ctx) => {
+    await execute(ctx, 'scryer.source.update', await complexInput(ctx))
+  },
+  'scryer model set': async (ctx) => {
+    await execute(ctx, 'scryer.model.set', await complexInput(ctx))
+  },
   'scryer link add': async (ctx) => {
     const input = await complexInput(ctx)
     if (!input.links && getOptionalStringFlag(ctx.flags, 'src')) {
@@ -208,6 +271,12 @@ export const SCRYER_HANDLERS: Record<string, CommandHandler> = {
       input.link_ids = commaList(getOptionalStringFlag(ctx.flags, 'link-ids')) ?? []
     }
     await execute(ctx, 'scryer.link.delete', input)
+  },
+  'scryer link update': async (ctx) => {
+    await execute(ctx, 'scryer.link.update', await complexInput(ctx))
+  },
+  'scryer container fill': async (ctx) => {
+    await execute(ctx, 'scryer.container.fill', await complexInput(ctx))
   },
   'scryer plan pending': async (ctx) => {
     await execute(ctx, 'scryer.plan.pending', {

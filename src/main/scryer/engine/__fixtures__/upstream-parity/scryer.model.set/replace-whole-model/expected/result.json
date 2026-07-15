@@ -1,0 +1,5 @@
+{
+  "ok": true,
+  "operationId": "scryer.model.set",
+  "result": { "updatedCount": 1, "nodeCount": 1, "linkCount": 0, "groupCount": 0 }
+}

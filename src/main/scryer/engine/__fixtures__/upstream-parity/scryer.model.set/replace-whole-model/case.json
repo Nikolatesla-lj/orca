@@ -1,0 +1,17 @@
+{
+  "operationId": "scryer.model.set",
+  "upstreamCommit": "0000000",
+  "upstreamAnchors": ["nodes.rs::set_model", "SetModelRequest"],
+  "input": {
+    "data": {
+      "version": "0.3",
+      "nodes": [{ "id": "root", "kind": "system", "name": "Root" }],
+      "links": [],
+      "groups": [],
+      "sourceMap": {},
+      "boundaries": {}
+    }
+  },
+  "expected": "success",
+  "orcaDifferenceReason": "structured operation envelope replaces upstream MCP Content::text output"
+}

@@ -1,0 +1,11 @@
+{
+  "version": "0.3",
+  "nodes": [
+    { "id": "shop", "kind": "system", "name": "Shop" },
+    { "id": "api", "kind": "container", "name": "API", "parentId": "shop" }
+  ],
+  "links": [],
+  "groups": [],
+  "sourceMap": {},
+  "boundaries": {}
+}
