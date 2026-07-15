@@ -1,6 +1,8 @@
 /* eslint-disable max-lines -- Why: this file centralizes the public Native Scryer Engine contract so catalog, pipeline, state-store, and adapters share one typed seam. */
 import type { ScryModel } from './model'
-import type { PendingChange } from './diff'
+import type { PendingChange, PendingSummary } from './pending-contracts'
+
+export type { PendingChange, PendingChangeType, PendingSummary } from './pending-contracts'
 
 export type ScryerOperationId =
   | 'scryer.model.read'
@@ -637,14 +639,14 @@ export type ScryerModelSubtreeResult = {
   internalLinks: ScryModel['links']
   externalLinks: ScryModel['links']
   contextNodes: ScryerReadNodeSummary[]
-  referencesForChildren: Array<{
+  referencesForChildren: {
     id: string
     kind: ScryModel['nodes'][number]['kind']
     name: string
     path: string
     direction: 'incoming' | 'outgoing'
     label: string
-  }>
+  }[]
   sourceMap: ScryModel['sourceMap']
   boundaries: ScryModel['boundaries']
   degraded: boolean
@@ -913,12 +915,12 @@ export type ScryerDriftFlagInput = {
 export type ScryerDriftFlagResult = {
   flagged: number
   mintedNodes: Record<string, string>
-  vagrantResponsibilities: Array<{ nodeId: string; responsibilityId: string; statement: string }>
-  vagrantProperties: Array<{ nodeId: string; label: string }>
-  staleResponsibilities: Array<{ responsibilityId: string; staleProposal?: string }>
-  staleProperties: Array<{ nodeId: string; label: string }>
-  staleNodes: Array<{ nodeId: string }>
-  skippedExistingProperties?: Array<{ nodeId: string; label: string }>
+  vagrantResponsibilities: { nodeId: string; responsibilityId: string; statement: string }[]
+  vagrantProperties: { nodeId: string; label: string }[]
+  staleResponsibilities: { responsibilityId: string; staleProposal?: string }[]
+  staleProperties: { nodeId: string; label: string }[]
+  staleNodes: { nodeId: string }[]
+  skippedExistingProperties?: { nodeId: string; label: string }[]
 }
 
 export type UpdateNodeItem = {
@@ -939,17 +941,6 @@ export type UpdateNodeItem = {
 export type ScryerNodeUpdateInput = {
   project?: string
   nodes: UpdateNodeItem[]
-}
-
-export type PendingSummary = {
-  total: number
-  byKind: Partial<Record<PendingChange['kind'], number>>
-  byChange: Partial<Record<PendingChange['changes'][number]['type'], number>>
-  toImplement: number
-  toReimplement: number
-  toMove: number
-  toDelete: number
-  toRepoint: number
 }
 
 export type ScryerNodeUpdateResult = {
@@ -1045,11 +1036,11 @@ export type ScryerNodeSetSubtreeResult = {
 
 export type ScryerNodeMoveInput = {
   project?: string
-  moves: Array<{ node_id: string; new_parent_id?: string | null }>
+  moves: { node_id: string; new_parent_id?: string | null }[]
 }
 
 export type ScryerNodeMoveResult = {
-  moved: Array<{ nodeId: string; fromParentId?: string; toParentId?: string }>
+  moved: { nodeId: string; fromParentId?: string; toParentId?: string }[]
   groupCleanup: ScryerStructuralGroupCleanupSummary
   findings: ScryerValidationFinding[]
   pendingSummary: PendingSummary
@@ -1058,11 +1049,11 @@ export type ScryerNodeMoveResult = {
 
 export type ScryerResponsibilityMoveInput = {
   project?: string
-  moves: Array<{ responsibility_id: string; from_node_id: string; to_node_id: string }>
+  moves: { responsibility_id: string; from_node_id: string; to_node_id: string }[]
 }
 
 export type ScryerResponsibilityMoveResult = {
-  moved: Array<{ responsibilityId: string; fromNodeId: string; toNodeId: string }>
+  moved: { responsibilityId: string; fromNodeId: string; toNodeId: string }[]
   findings: ScryerValidationFinding[]
   pendingSummary: PendingSummary
   recommendedNextReads: ScryerRecommendedRead[]
