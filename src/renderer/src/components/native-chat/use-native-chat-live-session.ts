@@ -248,7 +248,7 @@ export function useNativeChatLiveSession(
     // Base axis: the read's message array reference changes on session swap and
     // loadEarlier; sessionId/agent identify the conversation. Any change forces a
     // full reset so a missed trigger can't leave the cache stale.
-    const baseSig = `${agent} ${sessionId ?? ''}`
+    const baseSig = JSON.stringify([agent, sessionId ?? ''])
     const baseChanged = baseSig !== baseSigRef.current || baseMessages !== baseMessagesRef.current
     const applied = appliedTranscriptRef.current
     const isSuffixExtension =
