@@ -1,0 +1,1142 @@
+{
+  "version": "0.3",
+  "nodes": [
+    {
+      "id": "orca-scryer",
+      "kind": "system",
+      "name": "Orca",
+      "description": "Agentic software development environment",
+      "responsibilities": [
+        {
+          "id": "resp-system-modeling",
+          "statement": "Enables developers to build software with coordinated agents",
+          "lastTouchedAt": 1784131932
+        },
+        {
+          "id": "resp-system-evidence",
+          "statement": "Keeps software architecture changes reviewable and observable",
+          "lastTouchedAt": 1784131932
+        }
+      ]
+    },
+    {
+      "id": "orca-desktop",
+      "kind": "container",
+      "name": "Desktop Architecture Runtime",
+      "parentId": "orca-scryer",
+      "technology": "TypeScript, Electron, React",
+      "description": "Electron desktop architecture runtime",
+      "responsibilities": [
+        {
+          "id": "resp-desktop-workflows",
+          "statement": "Presents interactive architecture modeling workflows",
+          "lastTouchedAt": 1784131432
+        },
+        {
+          "id": "resp-desktop-safety",
+          "statement": "Coordinates safe architecture reads, edits, and agent completion",
+          "lastTouchedAt": 1784131432
+        }
+      ]
+    },
+    {
+      "id": "orca-cli",
+      "kind": "container",
+      "name": "Scryer CLI",
+      "parentId": "orca-scryer",
+      "technology": "TypeScript, Node.js",
+      "description": "Terminal architecture command surface",
+      "responsibilities": [
+        {
+          "id": "resp-cli-operations",
+          "statement": "Exposes architecture operations to terminal users and agents",
+          "lastTouchedAt": 1784131432
+        }
+      ]
+    },
+    {
+      "id": "node-1",
+      "kind": "component",
+      "name": "Native Scryer Engine",
+      "parentId": "orca-desktop",
+      "description": "Architecture state and operation engine",
+      "responsibilities": [
+        {
+          "id": "resp-1",
+          "statement": "Executes architecture operations under consistent state rules",
+          "lastTouchedAt": 1784131519
+        },
+        {
+          "id": "resp-2",
+          "statement": "Provides architecture read views to product adapters",
+          "lastTouchedAt": 1784131519
+        }
+      ]
+    },
+    {
+      "id": "node-2",
+      "kind": "symbol",
+      "name": "createScryerEngine",
+      "parentId": "node-1",
+      "responsibilities": [
+        {
+          "id": "resp-3",
+          "statement": "Constructs the public architecture operation and read seams",
+          "lastTouchedAt": 1784131519
+        }
+      ]
+    },
+    {
+      "id": "node-3",
+      "kind": "symbol",
+      "name": "executeCatalogOperation",
+      "parentId": "node-34",
+      "responsibilities": [
+        {
+          "id": "resp-4",
+          "statement": "Applies catalog policy to one architecture operation",
+          "lastTouchedAt": 1784131519
+        }
+      ]
+    },
+    {
+      "id": "node-4",
+      "kind": "symbol",
+      "name": "createDefaultScryerOperationCatalog",
+      "parentId": "node-32",
+      "responsibilities": [
+        {
+          "id": "resp-5",
+          "statement": "Declares the executable architecture operation inventory",
+          "lastTouchedAt": 1784131519
+        }
+      ]
+    },
+    {
+      "id": "node-5",
+      "kind": "symbol",
+      "name": "createScryerStateStore",
+      "parentId": "node-35",
+      "responsibilities": [
+        {
+          "id": "resp-6",
+          "statement": "Commits architecture state changes through the primary transaction boundary",
+          "lastTouchedAt": 1784131519
+        }
+      ]
+    },
+    {
+      "id": "node-6",
+      "kind": "component",
+      "name": "Container Generation",
+      "parentId": "orca-desktop",
+      "description": "Atomic container modeling planner",
+      "responsibilities": [
+        {
+          "id": "resp-7",
+          "statement": "Builds an initial component and symbol subtree for an empty container",
+          "lastTouchedAt": 1784131519
+        }
+      ]
+    },
+    {
+      "id": "node-7",
+      "kind": "symbol",
+      "name": "ScryerContainerGenerationPlanner",
+      "parentId": "node-6",
+      "responsibilities": [
+        {
+          "id": "resp-8",
+          "statement": "Plans one complete container generation transaction",
+          "lastTouchedAt": 1784131519
+        }
+      ]
+    },
+    {
+      "id": "node-8",
+      "kind": "component",
+      "name": "Edit Session Safety",
+      "parentId": "orca-desktop",
+      "description": "Agent architecture edit-session coordinator",
+      "responsibilities": [
+        {
+          "id": "resp-9",
+          "statement": "Protects agent-authored architecture edits from conflicting writes",
+          "lastTouchedAt": 1784131519
+        },
+        {
+          "id": "resp-10",
+          "statement": "Determines whether an agent edit session may finish",
+          "lastTouchedAt": 1784131519
+        }
+      ]
+    },
+    {
+      "id": "node-9",
+      "kind": "symbol",
+      "name": "createScryerEditSessionController",
+      "parentId": "node-8",
+      "responsibilities": [
+        {
+          "id": "resp-11",
+          "statement": "Coordinates lease acquisition, completion evaluation, folding, and cleanup",
+          "lastTouchedAt": 1784131519
+        }
+      ]
+    },
+    {
+      "id": "node-10",
+      "kind": "symbol",
+      "name": "evaluateCompletionGate",
+      "parentId": "node-8",
+      "responsibilities": [
+        {
+          "id": "resp-12",
+          "statement": "Classifies pending work, validation findings, risks, and lease conflicts",
+          "lastTouchedAt": 1784131519
+        }
+      ]
+    },
+    {
+      "id": "node-11",
+      "kind": "symbol",
+      "name": "createScryerEditLeaseStore",
+      "parentId": "node-8",
+      "responsibilities": [
+        {
+          "id": "resp-13",
+          "statement": "Maintains exclusive ownership for an active architecture edit session",
+          "lastTouchedAt": 1784131519
+        }
+      ]
+    },
+    {
+      "id": "node-12",
+      "kind": "component",
+      "name": "Architecture Main Adapter",
+      "parentId": "orca-desktop",
+      "description": "Main-process architecture request adapter",
+      "responsibilities": [
+        {
+          "id": "resp-14",
+          "statement": "Translates desktop architecture requests into engine and session intents",
+          "lastTouchedAt": 1784131519
+        },
+        {
+          "id": "resp-15",
+          "statement": "Publishes architecture model-change notifications",
+          "lastTouchedAt": 1784131519
+        }
+      ]
+    },
+    {
+      "id": "node-13",
+      "kind": "symbol",
+      "name": "registerArchitectureHandlers",
+      "parentId": "node-12",
+      "responsibilities": [
+        {
+          "id": "resp-16",
+          "statement": "Registers architecture request, operation, edit-session, prompt, and watcher channels",
+          "lastTouchedAt": 1784131519
+        }
+      ]
+    },
+    {
+      "id": "node-14",
+      "kind": "component",
+      "name": "Architecture View Adapter",
+      "parentId": "orca-desktop",
+      "description": "Renderer-facing architecture view adapter",
+      "responsibilities": [
+        {
+          "id": "resp-17",
+          "statement": "Transforms architecture state into renderer-ready views",
+          "lastTouchedAt": 1784131519
+        }
+      ]
+    },
+    {
+      "id": "node-15",
+      "kind": "symbol",
+      "name": "createArchitectureViewAdapter",
+      "parentId": "node-14",
+      "responsibilities": [
+        {
+          "id": "resp-18",
+          "statement": "Reads architecture state through the engine and maps the renderer view",
+          "lastTouchedAt": 1784131519
+        }
+      ]
+    },
+    {
+      "id": "node-16",
+      "kind": "component",
+      "name": "Architecture Agent Prompting",
+      "parentId": "orca-desktop",
+      "description": "Architecture agent instruction builder",
+      "responsibilities": [
+        {
+          "id": "resp-19",
+          "statement": "Prepares agent instructions for architecture modeling workflows",
+          "lastTouchedAt": 1784131519
+        }
+      ]
+    },
+    {
+      "id": "node-17",
+      "kind": "symbol",
+      "name": "nodeFillPrompt",
+      "parentId": "node-16",
+      "responsibilities": [
+        {
+          "id": "resp-20",
+          "statement": "Prepares the agent instruction for filling one architecture node",
+          "lastTouchedAt": 1784131519
+        }
+      ]
+    },
+    {
+      "id": "node-18",
+      "kind": "component",
+      "name": "Architecture UI Controller",
+      "parentId": "orca-desktop",
+      "description": "Architecture renderer workflow controller",
+      "responsibilities": [
+        {
+          "id": "resp-21",
+          "statement": "Coordinates visible architecture reads, edits, and agent workflows",
+          "lastTouchedAt": 1784131519
+        }
+      ]
+    },
+    {
+      "id": "node-19",
+      "kind": "symbol",
+      "name": "useArchitectureModelController",
+      "parentId": "node-18",
+      "responsibilities": [
+        {
+          "id": "resp-22",
+          "statement": "Coordinates renderer architecture state and user intents",
+          "lastTouchedAt": 1784131519
+        }
+      ]
+    },
+    {
+      "id": "node-20",
+      "kind": "component",
+      "name": "Architecture Canvas",
+      "parentId": "orca-desktop",
+      "description": "Interactive architecture canvas",
+      "responsibilities": [
+        {
+          "id": "resp-23",
+          "statement": "Presents interactive architecture nodes, links, groups, and actions",
+          "lastTouchedAt": 1784131519
+        }
+      ]
+    },
+    {
+      "id": "node-21",
+      "kind": "symbol",
+      "name": "ArchitectureCanvas",
+      "parentId": "node-20",
+      "responsibilities": [
+        {
+          "id": "resp-24",
+          "statement": "Renders the interactive architecture canvas and its visible actions",
+          "lastTouchedAt": 1784131519
+        }
+      ],
+      "visual": true
+    },
+    {
+      "id": "node-22",
+      "kind": "component",
+      "name": "Architecture Preload Bridge",
+      "parentId": "orca-desktop",
+      "description": "Renderer trust-boundary adapter",
+      "responsibilities": [
+        {
+          "id": "resp-25",
+          "statement": "Carries architecture intents and results across the renderer trust boundary",
+          "lastTouchedAt": 1784131519
+        }
+      ]
+    },
+    {
+      "id": "node-23",
+      "kind": "symbol",
+      "name": "api",
+      "parentId": "node-22",
+      "responsibilities": [
+        {
+          "id": "resp-26",
+          "statement": "Exposes architecture IPC methods to the renderer",
+          "lastTouchedAt": 1784131519
+        }
+      ]
+    },
+    {
+      "id": "node-24",
+      "kind": "component",
+      "name": "Scryer CLI Adapter",
+      "parentId": "orca-cli",
+      "description": "Terminal operation adapter",
+      "responsibilities": [
+        {
+          "id": "resp-27",
+          "statement": "Maps terminal commands to architecture operation intents",
+          "lastTouchedAt": 1784131551
+        },
+        {
+          "id": "resp-28",
+          "statement": "Renders shared operation results for terminal users and agents",
+          "lastTouchedAt": 1784131551
+        }
+      ]
+    },
+    {
+      "id": "node-25",
+      "kind": "symbol",
+      "name": "SCRYER_COMMAND_SPECS",
+      "parentId": "node-24",
+      "responsibilities": [
+        {
+          "id": "resp-29",
+          "statement": "Declares the terminal command surface for architecture operations",
+          "lastTouchedAt": 1784131551
+        }
+      ]
+    },
+    {
+      "id": "node-26",
+      "kind": "symbol",
+      "name": "SCRYER_HANDLERS",
+      "parentId": "node-24",
+      "responsibilities": [
+        {
+          "id": "resp-30",
+          "statement": "Maps parsed terminal requests to architecture operation calls",
+          "lastTouchedAt": 1784131551
+        }
+      ]
+    },
+    {
+      "id": "node-27",
+      "kind": "container",
+      "name": "Mobile Client",
+      "parentId": "orca-scryer",
+      "technology": "Expo, React Native",
+      "description": "Mobile companion application",
+      "responsibilities": [
+        {
+          "id": "resp-31",
+          "statement": "Extends development workflows to mobile devices",
+          "lastTouchedAt": 1784131933
+        }
+      ]
+    },
+    {
+      "id": "node-28",
+      "kind": "container",
+      "name": "macOS Computer Use Helper",
+      "parentId": "orca-scryer",
+      "technology": "Swift",
+      "description": "Native macOS automation helper",
+      "responsibilities": [
+        {
+          "id": "resp-32",
+          "statement": "Executes native macOS computer-control actions",
+          "lastTouchedAt": 1784131933
+        }
+      ]
+    },
+    {
+      "id": "node-29",
+      "kind": "component",
+      "name": "Two-Way Audio Module",
+      "parentId": "node-27",
+      "description": "Mobile bidirectional audio package",
+      "responsibilities": [
+        {
+          "id": "resp-33",
+          "statement": "Provides bidirectional audio streaming for mobile agent sessions",
+          "lastTouchedAt": 1784132146
+        }
+      ]
+    },
+    {
+      "id": "node-30",
+      "kind": "symbol",
+      "name": "ExpoTwoWayAudioModule",
+      "parentId": "node-29",
+      "responsibilities": [
+        {
+          "id": "resp-34",
+          "statement": "Exposes bidirectional audio controls and events to the mobile application",
+          "lastTouchedAt": 1784132159
+        }
+      ]
+    },
+    {
+      "id": "node-31",
+      "kind": "component",
+      "name": "Engine Operation Contracts",
+      "parentId": "orca-desktop",
+      "description": "Canonical architecture operation contracts",
+      "responsibilities": [
+        {
+          "id": "resp-35",
+          "statement": "Defines accepted requests, results, and policy metadata for architecture operations",
+          "lastTouchedAt": 1784132280
+        }
+      ]
+    },
+    {
+      "id": "node-32",
+      "kind": "component",
+      "name": "Operation Catalog",
+      "parentId": "orca-desktop",
+      "description": "Architecture operation registry",
+      "responsibilities": [
+        {
+          "id": "resp-36",
+          "statement": "Associates architecture operation identities with executable contracts and policies",
+          "lastTouchedAt": 1784132280
+        }
+      ]
+    },
+    {
+      "id": "node-33",
+      "kind": "component",
+      "name": "Operation Schemas",
+      "parentId": "orca-desktop",
+      "description": "Architecture operation validation schemas",
+      "responsibilities": [
+        {
+          "id": "resp-37",
+          "statement": "Validates architecture operation requests and observable results",
+          "lastTouchedAt": 1784132280
+        }
+      ]
+    },
+    {
+      "id": "node-34",
+      "kind": "component",
+      "name": "Operation Pipeline",
+      "parentId": "orca-desktop",
+      "description": "Shared architecture operation execution policy",
+      "responsibilities": [
+        {
+          "id": "resp-38",
+          "statement": "Enforces shared safety rules for architecture operation execution",
+          "lastTouchedAt": 1784132280
+        }
+      ]
+    },
+    {
+      "id": "node-35",
+      "kind": "component",
+      "name": "State Transaction Store",
+      "parentId": "orca-desktop",
+      "description": "Architecture state transaction boundary",
+      "responsibilities": [
+        {
+          "id": "resp-39",
+          "statement": "Commits primary architecture state atomically",
+          "lastTouchedAt": 1784132280
+        },
+        {
+          "id": "resp-40",
+          "statement": "Reports maintenance sidecar outcomes separately from primary state",
+          "lastTouchedAt": 1784132280
+        }
+      ]
+    },
+    {
+      "id": "node-36",
+      "kind": "component",
+      "name": "Plan Difference Contracts",
+      "parentId": "orca-desktop",
+      "description": "Committed-to-planned change contracts",
+      "responsibilities": [
+        {
+          "id": "resp-41",
+          "statement": "Describes outstanding changes between committed and planned architecture state",
+          "lastTouchedAt": 1784132280
+        }
+      ]
+    },
+    {
+      "id": "node-37",
+      "kind": "symbol",
+      "name": "ScryerOperationResult",
+      "parentId": "node-31",
+      "properties": [
+        {
+          "label": "ok",
+          "description": "Whether the operation succeeded",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "operationId",
+          "description": "The invoked operation identity",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "requestId",
+          "description": "The request correlation identity",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "result",
+          "description": "The successful operation payload",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "error",
+          "description": "The structured operation failure",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "meta",
+          "description": "Supplementary operation evidence",
+          "lastTouchedAt": 1784132324
+        }
+      ]
+    },
+    {
+      "id": "node-38",
+      "kind": "symbol",
+      "name": "ScryerOperationContract",
+      "parentId": "node-31",
+      "properties": [
+        {
+          "label": "id",
+          "description": "The operation identity",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "inputSchema",
+          "description": "The accepted request shape",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "successSchema",
+          "description": "The successful result shape",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "errorCodes",
+          "description": "The permitted failure categories",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "errorDetailSchemas",
+          "description": "The permitted structured failure details",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "capability",
+          "description": "The operation capability class",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "policy",
+          "description": "The state and authorization policy",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "upstreamParity",
+          "description": "The semantic reference evidence",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "transports",
+          "description": "The supported adapter mappings",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "execute",
+          "description": "The operation implementation",
+          "lastTouchedAt": 1784132324
+        }
+      ]
+    },
+    {
+      "id": "node-39",
+      "kind": "symbol",
+      "name": "operationSchemas",
+      "parentId": "node-33",
+      "responsibilities": [
+        {
+          "id": "resp-42",
+          "statement": "Associates each catalog operation with strict request and result validation",
+          "lastTouchedAt": 1784132324
+        }
+      ]
+    },
+    {
+      "id": "node-40",
+      "kind": "symbol",
+      "name": "containerFillInputSchema",
+      "parentId": "node-33",
+      "responsibilities": [
+        {
+          "id": "resp-43",
+          "statement": "Validates a complete container generation proposal",
+          "lastTouchedAt": 1784132324
+        }
+      ]
+    },
+    {
+      "id": "node-41",
+      "kind": "symbol",
+      "name": "containerFillSuccessSchema",
+      "parentId": "node-33",
+      "responsibilities": [
+        {
+          "id": "resp-44",
+          "statement": "Validates the compact container generation result",
+          "lastTouchedAt": 1784132324
+        }
+      ]
+    },
+    {
+      "id": "node-42",
+      "kind": "symbol",
+      "name": "PendingChange",
+      "parentId": "node-36",
+      "properties": [
+        {
+          "label": "kind",
+          "description": "The changed architecture element kind",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "id",
+          "description": "The changed element identity",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "ownerId",
+          "description": "The owning architecture element identity",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "label",
+          "description": "The review label for the change",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "changes",
+          "description": "The field or structural changes",
+          "lastTouchedAt": 1784132324
+        }
+      ]
+    },
+    {
+      "id": "node-43",
+      "kind": "symbol",
+      "name": "validateContainerGenerationProposal",
+      "parentId": "node-6",
+      "responsibilities": [
+        {
+          "id": "resp-45",
+          "statement": "Rejects incomplete or structurally invalid container generation proposals",
+          "lastTouchedAt": 1784132324
+        }
+      ]
+    },
+    {
+      "id": "node-44",
+      "kind": "symbol",
+      "name": "planGeneratedSubtreeIdentity",
+      "parentId": "node-6",
+      "responsibilities": [
+        {
+          "id": "resp-46",
+          "statement": "Assigns stable identities to generated components, symbols, groups, and responsibilities",
+          "lastTouchedAt": 1784132324
+        }
+      ]
+    },
+    {
+      "id": "node-45",
+      "kind": "symbol",
+      "name": "planGeneratedSourceAnchors",
+      "parentId": "node-6",
+      "responsibilities": [
+        {
+          "id": "resp-47",
+          "statement": "Preserves source identity for generated symbols and responsibilities",
+          "lastTouchedAt": 1784132324
+        }
+      ]
+    },
+    {
+      "id": "node-46",
+      "kind": "symbol",
+      "name": "planGeneratedRelationships",
+      "parentId": "node-6",
+      "responsibilities": [
+        {
+          "id": "resp-48",
+          "statement": "Builds legal generated groups and links from available evidence",
+          "lastTouchedAt": 1784132324
+        }
+      ]
+    },
+    {
+      "id": "node-47",
+      "kind": "symbol",
+      "name": "planContainerGenerationResult",
+      "parentId": "node-6",
+      "responsibilities": [
+        {
+          "id": "resp-49",
+          "statement": "Summarizes generated elements, dropped relationships, and evidence status",
+          "lastTouchedAt": 1784132324
+        }
+      ]
+    }
+  ],
+  "links": [
+    {
+      "id": "link-node-18-node-22",
+      "src": "node-18",
+      "dst": "node-22",
+      "label": "sends intents",
+      "method": "Electron IPC"
+    },
+    {
+      "id": "link-node-20-node-18",
+      "src": "node-20",
+      "dst": "node-18",
+      "label": "invokes actions"
+    },
+    {
+      "id": "link-node-22-node-12",
+      "src": "node-22",
+      "dst": "node-12",
+      "label": "forwards requests",
+      "method": "Electron IPC"
+    },
+    {
+      "id": "link-node-12-node-1",
+      "src": "node-12",
+      "dst": "node-1",
+      "label": "executes operations"
+    },
+    {
+      "id": "link-node-12-node-8",
+      "src": "node-12",
+      "dst": "node-8",
+      "label": "coordinates sessions"
+    },
+    {
+      "id": "link-node-12-node-16",
+      "src": "node-12",
+      "dst": "node-16",
+      "label": "requests prompts"
+    },
+    {
+      "id": "link-node-12-node-14",
+      "src": "node-12",
+      "dst": "node-14",
+      "label": "requests views"
+    },
+    {
+      "id": "link-node-14-node-1",
+      "src": "node-14",
+      "dst": "node-1",
+      "label": "reads state"
+    },
+    {
+      "id": "link-node-8-node-1",
+      "src": "node-8",
+      "dst": "node-1",
+      "label": "checks and folds"
+    },
+    {
+      "id": "link-node-1-node-6",
+      "src": "node-1",
+      "dst": "node-6",
+      "label": "plans generation"
+    },
+    {
+      "id": "link-orca-cli-orca-desktop",
+      "src": "orca-cli",
+      "dst": "orca-desktop",
+      "label": "uses architecture engine",
+      "method": "in-process"
+    },
+    {
+      "id": "link-node-9-node-10",
+      "src": "node-9",
+      "dst": "node-10",
+      "label": "evaluates completion"
+    },
+    {
+      "id": "link-node-9-node-11",
+      "src": "node-9",
+      "dst": "node-11",
+      "label": "uses edit lease"
+    },
+    {
+      "id": "link-node-25-node-26",
+      "src": "node-25",
+      "dst": "node-26",
+      "label": "routes commands"
+    },
+    {
+      "id": "link-node-27-orca-desktop",
+      "src": "node-27",
+      "dst": "orca-desktop",
+      "label": "connects to sessions",
+      "method": "network"
+    },
+    {
+      "id": "link-orca-desktop-node-28",
+      "src": "orca-desktop",
+      "dst": "node-28",
+      "label": "requests automation",
+      "method": "native IPC"
+    },
+    {
+      "id": "link-node-1-node-32",
+      "src": "node-1",
+      "dst": "node-32",
+      "label": "loads catalog"
+    },
+    {
+      "id": "link-node-1-node-34",
+      "src": "node-1",
+      "dst": "node-34",
+      "label": "dispatches operations"
+    },
+    {
+      "id": "link-node-34-node-35",
+      "src": "node-34",
+      "dst": "node-35",
+      "label": "commits state"
+    },
+    {
+      "id": "link-node-32-node-31",
+      "src": "node-32",
+      "dst": "node-31",
+      "label": "uses contracts"
+    },
+    {
+      "id": "link-node-32-node-33",
+      "src": "node-32",
+      "dst": "node-33",
+      "label": "uses schemas"
+    },
+    {
+      "id": "link-node-34-node-31",
+      "src": "node-34",
+      "dst": "node-31",
+      "label": "enforces contracts"
+    },
+    {
+      "id": "link-node-6-node-31",
+      "src": "node-6",
+      "dst": "node-31",
+      "label": "uses generation contracts"
+    },
+    {
+      "id": "link-node-34-node-36",
+      "src": "node-34",
+      "dst": "node-36",
+      "label": "reads pending changes"
+    }
+  ],
+  "groups": [],
+  "sourceMap": {
+    "node-42": [
+      {
+        "pattern": "src/main/scryer/engine/pending-contracts.ts",
+        "symbol": "PendingChange"
+      }
+    ],
+    "resp-43": [
+      {
+        "pattern": "src/main/scryer/engine/container-generation-schemas.ts",
+        "symbol": "containerFillInputSchema"
+      }
+    ],
+    "resp-26": [
+      {
+        "pattern": "src/preload/index.ts",
+        "symbol": "api",
+        "line": 1799,
+        "endLine": 1907
+      }
+    ],
+    "resp-30": [
+      {
+        "pattern": "src/cli/handlers/scryer.ts",
+        "symbol": "SCRYER_HANDLERS"
+      }
+    ],
+    "resp-12": [
+      {
+        "pattern": "src/main/scryer/edit-session-gate.ts",
+        "symbol": "evaluateCompletionGate"
+      }
+    ],
+    "resp-24": [
+      {
+        "pattern": "src/renderer/src/components/architecture/ArchitectureCanvas.tsx",
+        "symbol": "ArchitectureCanvas"
+      }
+    ],
+    "resp-4": [
+      {
+        "pattern": "src/main/scryer/engine/pipeline.ts",
+        "symbol": "executeCatalogOperation"
+      }
+    ],
+    "resp-18": [
+      {
+        "pattern": "src/main/scryer/architecture-view-adapter.ts",
+        "symbol": "createArchitectureViewAdapter"
+      }
+    ],
+    "resp-49": [
+      {
+        "pattern": "src/main/scryer/engine/container-generation-result.ts",
+        "symbol": "planContainerGenerationResult"
+      }
+    ],
+    "resp-8": [
+      {
+        "pattern": "src/main/scryer/engine/container-generation-planner.ts",
+        "symbol": "ScryerContainerGenerationPlanner"
+      }
+    ],
+    "resp-46": [
+      {
+        "pattern": "src/main/scryer/engine/container-generation-identity.ts",
+        "symbol": "planGeneratedSubtreeIdentity"
+      }
+    ],
+    "resp-16": [
+      {
+        "pattern": "src/main/ipc/architecture.ts",
+        "symbol": "registerArchitectureHandlers"
+      }
+    ],
+    "resp-6": [
+      {
+        "pattern": "src/main/scryer/engine/state-store.ts",
+        "symbol": "createScryerStateStore"
+      }
+    ],
+    "resp-34": [
+      {
+        "pattern": "mobile/packages/expo-two-way-audio/android/src/main/java/expo/modules/twowayaudio/ExpoTwoWayAudioModule.kt",
+        "symbol": "ExpoTwoWayAudioModule"
+      }
+    ],
+    "resp-13": [
+      {
+        "pattern": "src/main/scryer/edit-lease-store.ts",
+        "symbol": "createScryerEditLeaseStore"
+      }
+    ],
+    "resp-20": [
+      {
+        "pattern": "src/shared/scryer/prompts.ts",
+        "symbol": "nodeFillPrompt"
+      }
+    ],
+    "resp-44": [
+      {
+        "pattern": "src/main/scryer/engine/container-generation-schemas.ts",
+        "symbol": "containerFillSuccessSchema"
+      }
+    ],
+    "resp-29": [
+      {
+        "pattern": "src/cli/specs/scryer.ts",
+        "symbol": "SCRYER_COMMAND_SPECS"
+      }
+    ],
+    "resp-42": [
+      {
+        "pattern": "src/main/scryer/engine/schemas.ts",
+        "symbol": "operationSchemas"
+      }
+    ],
+    "resp-45": [
+      {
+        "pattern": "src/main/scryer/engine/container-generation-proposal.ts",
+        "symbol": "validateContainerGenerationProposal"
+      }
+    ],
+    "resp-47": [
+      {
+        "pattern": "src/main/scryer/engine/container-generation-source-anchors.ts",
+        "symbol": "planGeneratedSourceAnchors"
+      }
+    ],
+    "node-37": [
+      {
+        "pattern": "src/main/scryer/engine/operation-results.ts",
+        "symbol": "ScryerOperationResult"
+      }
+    ],
+    "node-38": [
+      {
+        "pattern": "src/main/scryer/engine/operation-contracts.ts",
+        "symbol": "ScryerOperationContract"
+      }
+    ],
+    "resp-48": [
+      {
+        "pattern": "src/main/scryer/engine/container-generation-relationships.ts",
+        "symbol": "planGeneratedRelationships"
+      }
+    ],
+    "resp-11": [
+      {
+        "pattern": "src/main/scryer/edit-session-controller.ts",
+        "symbol": "createScryerEditSessionController"
+      }
+    ],
+    "resp-22": [
+      {
+        "pattern": "src/renderer/src/components/architecture/useArchitectureModelController.ts",
+        "symbol": "useArchitectureModelController"
+      }
+    ],
+    "resp-5": [
+      {
+        "pattern": "src/main/scryer/engine/catalog.ts",
+        "symbol": "createDefaultScryerOperationCatalog"
+      }
+    ]
+  },
+  "boundaries": {
+    "node-27": [
+      {
+        "pattern": "mobile/**/*"
+      }
+    ],
+    "node-28": [
+      {
+        "pattern": "native/computer-use-macos/**/*"
+      }
+    ],
+    "node-29": [
+      {
+        "pattern": "mobile/packages/expo-two-way-audio/**/*",
+        "comment": "Expo native audio package"
+      }
+    ]
+  }
+}
