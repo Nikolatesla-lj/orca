@@ -801,6 +801,34 @@
           "lastTouchedAt": 1784132324
         }
       ]
+    },
+    {
+      "id": "node-48",
+      "kind": "component",
+      "name": "Scryer Compatibility Tool Adapter",
+      "parentId": "orca-desktop",
+      "description": "Compatibility tool-name adapter",
+      "responsibilities": [
+        {
+          "id": "resp-50",
+          "statement": "Translates supported compatibility tool names into architecture operation intents",
+          "lastTouchedAt": 1784134939
+        }
+      ]
+    },
+    {
+      "id": "node-49",
+      "kind": "component",
+      "name": "Named Model File Adapter",
+      "parentId": "orca-desktop",
+      "description": "Non-default architecture model file adapter",
+      "responsibilities": [
+        {
+          "id": "resp-51",
+          "statement": "Supports named model file workflows without owning default architecture semantics",
+          "lastTouchedAt": 1784134939
+        }
+      ]
     }
   ],
   "links": [
@@ -952,20 +980,32 @@
       "src": "node-34",
       "dst": "node-36",
       "label": "reads pending changes"
+    },
+    {
+      "id": "link-node-48-node-1",
+      "src": "node-48",
+      "dst": "node-1",
+      "label": "executes operations"
+    },
+    {
+      "id": "link-node-12-node-49",
+      "src": "node-12",
+      "dst": "node-49",
+      "label": "manages named models"
     }
   ],
   "groups": [],
   "sourceMap": {
-    "node-42": [
+    "resp-16": [
       {
-        "pattern": "src/main/scryer/engine/pending-contracts.ts",
-        "symbol": "PendingChange"
+        "pattern": "src/main/ipc/architecture.ts",
+        "symbol": "registerArchitectureHandlers"
       }
     ],
-    "resp-43": [
+    "resp-22": [
       {
-        "pattern": "src/main/scryer/engine/container-generation-schemas.ts",
-        "symbol": "containerFillInputSchema"
+        "pattern": "src/renderer/src/components/architecture/useArchitectureModelController.ts",
+        "symbol": "useArchitectureModelController"
       }
     ],
     "resp-26": [
@@ -982,88 +1022,22 @@
         "symbol": "SCRYER_HANDLERS"
       }
     ],
-    "resp-12": [
-      {
-        "pattern": "src/main/scryer/edit-session-gate.ts",
-        "symbol": "evaluateCompletionGate"
-      }
-    ],
-    "resp-24": [
-      {
-        "pattern": "src/renderer/src/components/architecture/ArchitectureCanvas.tsx",
-        "symbol": "ArchitectureCanvas"
-      }
-    ],
     "resp-4": [
       {
         "pattern": "src/main/scryer/engine/pipeline.ts",
         "symbol": "executeCatalogOperation"
       }
     ],
-    "resp-18": [
+    "node-42": [
       {
-        "pattern": "src/main/scryer/architecture-view-adapter.ts",
-        "symbol": "createArchitectureViewAdapter"
+        "pattern": "src/main/scryer/engine/pending-contracts.ts",
+        "symbol": "PendingChange"
       }
     ],
-    "resp-49": [
+    "resp-24": [
       {
-        "pattern": "src/main/scryer/engine/container-generation-result.ts",
-        "symbol": "planContainerGenerationResult"
-      }
-    ],
-    "resp-8": [
-      {
-        "pattern": "src/main/scryer/engine/container-generation-planner.ts",
-        "symbol": "ScryerContainerGenerationPlanner"
-      }
-    ],
-    "resp-46": [
-      {
-        "pattern": "src/main/scryer/engine/container-generation-identity.ts",
-        "symbol": "planGeneratedSubtreeIdentity"
-      }
-    ],
-    "resp-16": [
-      {
-        "pattern": "src/main/ipc/architecture.ts",
-        "symbol": "registerArchitectureHandlers"
-      }
-    ],
-    "resp-6": [
-      {
-        "pattern": "src/main/scryer/engine/state-store.ts",
-        "symbol": "createScryerStateStore"
-      }
-    ],
-    "resp-34": [
-      {
-        "pattern": "mobile/packages/expo-two-way-audio/android/src/main/java/expo/modules/twowayaudio/ExpoTwoWayAudioModule.kt",
-        "symbol": "ExpoTwoWayAudioModule"
-      }
-    ],
-    "resp-13": [
-      {
-        "pattern": "src/main/scryer/edit-lease-store.ts",
-        "symbol": "createScryerEditLeaseStore"
-      }
-    ],
-    "resp-20": [
-      {
-        "pattern": "src/shared/scryer/prompts.ts",
-        "symbol": "nodeFillPrompt"
-      }
-    ],
-    "resp-44": [
-      {
-        "pattern": "src/main/scryer/engine/container-generation-schemas.ts",
-        "symbol": "containerFillSuccessSchema"
-      }
-    ],
-    "resp-29": [
-      {
-        "pattern": "src/cli/specs/scryer.ts",
-        "symbol": "SCRYER_COMMAND_SPECS"
+        "pattern": "src/renderer/src/components/architecture/ArchitectureCanvas.tsx",
+        "symbol": "ArchitectureCanvas"
       }
     ],
     "resp-42": [
@@ -1078,22 +1052,10 @@
         "symbol": "validateContainerGenerationProposal"
       }
     ],
-    "resp-47": [
+    "resp-46": [
       {
-        "pattern": "src/main/scryer/engine/container-generation-source-anchors.ts",
-        "symbol": "planGeneratedSourceAnchors"
-      }
-    ],
-    "node-37": [
-      {
-        "pattern": "src/main/scryer/engine/operation-results.ts",
-        "symbol": "ScryerOperationResult"
-      }
-    ],
-    "node-38": [
-      {
-        "pattern": "src/main/scryer/engine/operation-contracts.ts",
-        "symbol": "ScryerOperationContract"
+        "pattern": "src/main/scryer/engine/container-generation-identity.ts",
+        "symbol": "planGeneratedSubtreeIdentity"
       }
     ],
     "resp-48": [
@@ -1102,26 +1064,110 @@
         "symbol": "planGeneratedRelationships"
       }
     ],
+    "resp-5": [
+      {
+        "pattern": "src/main/scryer/engine/catalog.ts",
+        "symbol": "createDefaultScryerOperationCatalog"
+      }
+    ],
+    "resp-8": [
+      {
+        "pattern": "src/main/scryer/engine/container-generation-planner.ts",
+        "symbol": "ScryerContainerGenerationPlanner"
+      }
+    ],
+    "resp-44": [
+      {
+        "pattern": "src/main/scryer/engine/container-generation-schemas.ts",
+        "symbol": "containerFillSuccessSchema"
+      }
+    ],
+    "resp-20": [
+      {
+        "pattern": "src/shared/scryer/prompts.ts",
+        "symbol": "nodeFillPrompt"
+      }
+    ],
+    "resp-34": [
+      {
+        "pattern": "mobile/packages/expo-two-way-audio/android/src/main/java/expo/modules/twowayaudio/ExpoTwoWayAudioModule.kt",
+        "symbol": "ExpoTwoWayAudioModule"
+      }
+    ],
     "resp-11": [
       {
         "pattern": "src/main/scryer/edit-session-controller.ts",
         "symbol": "createScryerEditSessionController"
       }
     ],
-    "resp-22": [
+    "resp-12": [
       {
-        "pattern": "src/renderer/src/components/architecture/useArchitectureModelController.ts",
-        "symbol": "useArchitectureModelController"
+        "pattern": "src/main/scryer/edit-session-gate.ts",
+        "symbol": "evaluateCompletionGate"
       }
     ],
-    "resp-5": [
+    "resp-47": [
       {
-        "pattern": "src/main/scryer/engine/catalog.ts",
-        "symbol": "createDefaultScryerOperationCatalog"
+        "pattern": "src/main/scryer/engine/container-generation-source-anchors.ts",
+        "symbol": "planGeneratedSourceAnchors"
+      }
+    ],
+    "resp-49": [
+      {
+        "pattern": "src/main/scryer/engine/container-generation-result.ts",
+        "symbol": "planContainerGenerationResult"
+      }
+    ],
+    "resp-43": [
+      {
+        "pattern": "src/main/scryer/engine/container-generation-schemas.ts",
+        "symbol": "containerFillInputSchema"
+      }
+    ],
+    "resp-18": [
+      {
+        "pattern": "src/main/scryer/architecture-view-adapter.ts",
+        "symbol": "createArchitectureViewAdapter"
+      }
+    ],
+    "resp-29": [
+      {
+        "pattern": "src/cli/specs/scryer.ts",
+        "symbol": "SCRYER_COMMAND_SPECS"
+      }
+    ],
+    "resp-6": [
+      {
+        "pattern": "src/main/scryer/engine/state-store.ts",
+        "symbol": "createScryerStateStore"
+      }
+    ],
+    "node-38": [
+      {
+        "pattern": "src/main/scryer/engine/operation-contracts.ts",
+        "symbol": "ScryerOperationContract"
+      }
+    ],
+    "node-37": [
+      {
+        "pattern": "src/main/scryer/engine/operation-results.ts",
+        "symbol": "ScryerOperationResult"
+      }
+    ],
+    "resp-13": [
+      {
+        "pattern": "src/main/scryer/edit-lease-store.ts",
+        "symbol": "createScryerEditLeaseStore"
       }
     ]
   },
   "boundaries": {
+    "node-29": [
+      {
+        "pattern": "mobile/packages/expo-two-way-audio/**/*",
+        "comment": "Expo native audio package"
+      }
+    ],
     "node-27": [
       {
         "pattern": "mobile/**/*"
@@ -1130,12 +1176,6 @@
     "node-28": [
       {
         "pattern": "native/computer-use-macos/**/*"
-      }
-    ],
-    "node-29": [
-      {
-        "pattern": "mobile/packages/expo-two-way-audio/**/*",
-        "comment": "Expo native audio package"
       }
     ]
   }
