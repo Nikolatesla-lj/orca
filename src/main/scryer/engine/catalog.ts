@@ -4,6 +4,7 @@ import { ALL_SCRYER_OPERATION_IDS } from './catalog-operation-ids'
 import { metadataFor, type ScryerCatalogRow } from './catalog-policy'
 import { READ_CATALOG_ROWS } from './catalog-read-rows'
 import { STRUCTURAL_CATALOG_ROWS } from './catalog-structural-rows'
+import { SCRYER_OPERATION_SUPPORT } from './catalog-transport-support'
 import { createScryerOperationCatalog } from './catalog-validation'
 import { errorDetailSchemas } from './operation-error-schemas'
 import { operationSchemas } from './operation-schemas'
@@ -24,12 +25,27 @@ const CATALOG_ROWS: ScryerCatalogRow[] = [
   ...GENERATION_DRIFT_CATALOG_ROWS
 ]
 
+// Branded so the machine-parity gate can distinguish a genuine executor from the
+// generic not-implemented fallback without executing it (which would have side effects).
+const UNIMPLEMENTED_EXECUTOR = Symbol('scryerUnimplementedExecutor')
+
+export function isUnimplementedExecutor(
+  execute: ScryerOperationExecutor<unknown, unknown> | undefined
+): boolean {
+  return (
+    typeof execute === 'function' &&
+    (execute as { [UNIMPLEMENTED_EXECUTOR]?: boolean })[UNIMPLEMENTED_EXECUTOR] === true
+  )
+}
+
 function unimplemented(operationId: ScryerOperationId): ScryerOperationExecutor<unknown, unknown> {
-  return () =>
+  const executor: ScryerOperationExecutor<unknown, unknown> = () =>
     failure('internal_error', `${operationId} is registered but not implemented in this slice`, {
       reason: 'unexpected_exception',
       contractOperationId: operationId
     })
+  ;(executor as { [UNIMPLEMENTED_EXECUTOR]?: boolean })[UNIMPLEMENTED_EXECUTOR] = true
+  return executor
 }
 
 export function createDefaultScryerOperationCatalog(): ScryerOperationCatalog {
@@ -50,6 +66,7 @@ export function createDefaultScryerOperationCatalog(): ScryerOperationCatalog {
       policy: row.policy,
       upstream: row.upstream,
       transports: metadataFor(row.id, row.policy),
+      support: SCRYER_OPERATION_SUPPORT[row.id],
       execute: row.execute ?? unimplemented(row.id)
     }
     catalog.registerOperation(contract)

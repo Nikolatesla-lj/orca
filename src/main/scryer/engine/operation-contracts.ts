@@ -102,6 +102,28 @@ export type ScryerUpstreamAnchor = {
   symbol: string
 }
 
+// Explicit product-surface status for an operation, used by the machine-parity gate
+// to grade maturity honestly instead of assuming every operation reaches every
+// transport. `planned` marks an operation that is engine-executable and
+// adapter-verified but not yet wired to a product entry (tracked separately from
+// `landed`); `waived` marks an operation with no product-surface entry by design
+// (CLI/agent/system only).
+export type ScryerOperationUiSupport =
+  | { status: 'product_integrated'; surface: string; productEntry: string }
+  | { status: 'planned'; reason: string }
+  | { status: 'waived'; reason: string }
+
+export type ScryerOperationIpcSupport =
+  | { supported: true; channel: string }
+  | { supported: false; waiver: string }
+
+export type ScryerOperationSupport = {
+  // The transports this operation genuinely supports (not defaulted to all five).
+  transports: [ScryerTransport, ...ScryerTransport[]]
+  ipc: ScryerOperationIpcSupport
+  ui: ScryerOperationUiSupport
+}
+
 export type ScryerOperationExecutor<TInput, TResult> = (args: {
   input: TInput
   context: ScryerOperationContext
@@ -135,6 +157,9 @@ export type ScryerOperationContract<TInput = unknown, TResult = unknown> = {
   policy: ScryerOperationPolicy
   upstream: ScryerUpstreamAnchor[]
   transports: ScryerTransportMetadata
+  // Explicit, honest per-operation transport/UI support status. Additive metadata:
+  // it does not change operation identity, ordering, schemas, or execution.
+  support?: ScryerOperationSupport
   execute: ScryerOperationExecutor<TInput, TResult>
 }
 
