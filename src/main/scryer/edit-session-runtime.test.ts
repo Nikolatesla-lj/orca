@@ -20,7 +20,7 @@ describe('Scryer mutable agent run runtime', () => {
     const runtime = createScryerMutableAgentRunRuntime()
     await runtime.setRunStatus('run-listeners', 'running', { emit: false })
     const calls: string[] = []
-    await runtime.onRunFinished('run-listeners', async () => {
+    await runtime.onRunFinished('run-listeners', () => {
       calls.push('first')
       throw new Error('first listener failed')
     })
@@ -33,5 +33,20 @@ describe('Scryer mutable agent run runtime', () => {
       'first listener failed'
     )
     expect(calls).toEqual(['first', 'second'])
+  })
+
+  it('removes a late terminal listener when its replay fails', async () => {
+    const runtime = createScryerMutableAgentRunRuntime()
+    await runtime.setRunStatus('run-replay-failure', 'done', { emit: false })
+    let attempts = 0
+
+    await expect(
+      runtime.onRunFinished('run-replay-failure', () => {
+        attempts += 1
+        throw new Error('replay failed')
+      })
+    ).rejects.toThrow('replay failed')
+    await expect(runtime.setRunStatus('run-replay-failure', 'done')).resolves.toBeUndefined()
+    expect(attempts).toBe(1)
   })
 })
