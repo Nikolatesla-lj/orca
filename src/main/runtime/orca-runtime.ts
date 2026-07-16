@@ -18724,6 +18724,11 @@ export class OrcaRuntimeService {
         addIdentity(pty.paneKey, pty.connectionId)
       }
     }
+    // Why: an agent run maps to a single connected pane in the common case (a freshly
+    // launched agent tab). If a user splits that tab into multiple connected panes we
+    // cannot tell which one is the run, so we resolve to null rather than guess. Callers
+    // (e.g. Scryer edit sessions) then treat the run as unresolved/'crashed' and release
+    // the lease — a conservative reconcile that never reports a false completion.
     return identities.size === 1 ? (identities.values().next().value ?? null) : null
   }
 
