@@ -10,13 +10,10 @@ import {
   isImplementing,
   listProjectModels,
   migrateGlobalModelToProject,
-  patchNodeData,
   readModel,
   readModelDocument,
   saveProjectModelAs,
-  sanitizeProjectModelName,
-  writeModel,
-  writeModelDocument
+  sanitizeProjectModelName
 } from '../scryer/model-store'
 import { callScryerTool } from '../scryer/mcp-tools'
 import { writeArchitectureMcpConfig } from '../scryer/mcp-config'
@@ -52,12 +49,7 @@ import {
   nodeFillPrompt,
   serializeModelForPrompt
 } from '../../shared/scryer/prompts'
-import type {
-  C4ModelData,
-  C4NodeData,
-  DriftReport,
-  ScryerToolCall
-} from '../../shared/scryer/model-types'
+import type { C4ModelData, DriftReport, ScryerToolCall } from '../../shared/scryer/model-types'
 import {
   parseArchitectureBeginEditSessionRequest,
   parseArchitectureCancelEditSessionRequest,
@@ -134,13 +126,10 @@ export type ArchitectureHandlerDeps = {
   isImplementing: typeof isImplementing
   listProjectModels: typeof listProjectModels
   migrateGlobalModelToProject: typeof migrateGlobalModelToProject
-  patchNodeData: typeof patchNodeData
   readModel: typeof readModel
   readModelDocument: typeof readModelDocument
   saveProjectModelAs: typeof saveProjectModelAs
   sanitizeProjectModelName: typeof sanitizeProjectModelName
-  writeModel: typeof writeModel
-  writeModelDocument: typeof writeModelDocument
   callScryerTool: typeof callScryerTool
   scryerEngine: ScryerEngine
   architectureViewAdapter: ArchitectureViewAdapter
@@ -183,13 +172,10 @@ export const defaultArchitectureDeps: ArchitectureHandlerDeps = {
   isImplementing,
   listProjectModels,
   migrateGlobalModelToProject,
-  patchNodeData,
   readModel,
   readModelDocument,
   saveProjectModelAs,
   sanitizeProjectModelName,
-  writeModel,
-  writeModelDocument,
   callScryerTool,
   scryerEngine: defaultScryerEngine,
   architectureViewAdapter: defaultArchitectureViewAdapter,
@@ -355,8 +341,9 @@ function architectureModelFromReadView(
   if (typeof result !== 'object' || result === null) {
     return null
   }
-  const readResult = result as { fullModel?: unknown; model?: unknown }
-  const rawModel = readResult.fullModel ?? readResult.model
+  // Consume only the canonical ScryerReadView full-model shape; the legacy `fullModel`
+  // alias is retired.
+  const rawModel = (result as { model?: unknown }).model
   if (typeof rawModel !== 'object' || rawModel === null) {
     return null
   }
@@ -456,37 +443,6 @@ async function readRendererExtensionState(
   } catch {
     return null
   }
-}
-
-function nodeUpdateInputFromPatch(args: {
-  nodeId: string
-  patch: Partial<C4NodeData>
-}): { nodes: Record<string, unknown>[] } | null {
-  const node: Record<string, unknown> = { node_id: args.nodeId }
-  if (typeof args.patch.name === 'string') {
-    node.name = args.patch.name
-  }
-  if (typeof args.patch.description === 'string') {
-    node.description = args.patch.description
-  }
-  if (typeof args.patch.technology === 'string') {
-    node.technology = args.patch.technology
-  }
-  if (typeof args.patch.external === 'boolean') {
-    node.external = args.patch.external
-  }
-  if (Array.isArray(args.patch.properties)) {
-    node.properties = args.patch.properties
-  }
-  if (typeof args.patch.kind === 'string') {
-    node.kind =
-      args.patch.kind === 'operation' ||
-      args.patch.kind === 'process' ||
-      args.patch.kind === 'model'
-        ? 'symbol'
-        : args.patch.kind
-  }
-  return Object.keys(node).length > 1 ? { nodes: [node] } : null
 }
 
 function driftReportFromEngineResult(result: unknown): DriftReport | null {
@@ -599,100 +555,10 @@ export function registerArchitectureHandlers(
     }
   )
 
-  registrar.handle(
-    'architecture:writeModel',
-    async (event, args: { projectPath: string; model: unknown; modelName?: string | null }) => {
-      if (isDefaultModelName(args.modelName, deps)) {
-        await ensureNoActiveEditSession(args.projectPath, deps)
-        await writeDefaultScryModelThroughEngine(args.projectPath, args.model, deps)
-        notifyModelChanged(event, args.projectPath, args.modelName, deps)
-        return
-      }
-      await deps.writeModel(args.projectPath, args.model as C4ModelData, args.modelName)
-      notifyModelChanged(event, args.projectPath, args.modelName, deps)
-    }
-  )
-
-  registrar.handle(
-    'architecture:writeModelDocument',
-    async (
-      event,
-      args: {
-        projectPath: string
-        model: unknown
-        modelName?: string | null
-        baseRevision?: string | null
-      }
-    ) => {
-      if (isDefaultModelName(args.modelName, deps)) {
-        await ensureNoActiveEditSession(args.projectPath, deps)
-        const result = await writeDefaultScryModelThroughEngine(args.projectPath, args.model, deps)
-        notifyModelChanged(event, args.projectPath, args.modelName, deps)
-        return result
-      }
-      const result = await deps.writeModelDocument(
-        args.projectPath,
-        args.model as C4ModelData,
-        args.modelName,
-        {
-          baseRevision: args.baseRevision
-        }
-      )
-      notifyModelChanged(event, args.projectPath, args.modelName, deps)
-      return result
-    }
-  )
-
-  registrar.handle(
-    'architecture:patchNodeData',
-    async (
-      event,
-      args: {
-        projectPath: string
-        nodeId: string
-        patch: Partial<C4NodeData>
-        modelName?: string | null
-        baseRevision?: string | null
-        baseNodeData?: C4NodeData | null
-      }
-    ) => {
-      if (isDefaultModelName(args.modelName, deps)) {
-        const input = nodeUpdateInputFromPatch(args)
-        if (!input) {
-          throw new Error('Node patch does not contain any cataloged Scryer node fields')
-        }
-        const result = await deps.scryerEngine.executeOperation(
-          'scryer.node.update',
-          input,
-          contextForEngine(args.projectPath, 'ipc-node-update')
-        )
-        if (!result.ok) {
-          throw new Error(result.error.message)
-        }
-        const view = await deps.scryerEngine.readView(
-          { layer: 'plan', view: 'full' },
-          contextForEngine(args.projectPath, 'ipc-read')
-        )
-        if (!view.ok) {
-          throw new Error(view.error.message)
-        }
-        const extensionState = await readRendererExtensionState(
-          args.projectPath,
-          args.modelName,
-          deps
-        )
-        const model = architectureModelFromReadView(args.projectPath, view.result, extensionState)
-        if (model) {
-          notifyModelFileChanged(event, args.projectPath, 'planned.scry')
-          return { model, revision: result.requestId }
-        }
-        throw new Error('Scryer readView result did not include a full model for renderer mapping')
-      }
-      const result = await deps.patchNodeData(args.projectPath, args)
-      notifyModelChanged(event, args.projectPath, args.modelName, deps)
-      return result
-    }
-  )
+  // Retired: the default raw-document mutation channels (architecture:writeModel,
+  // architecture:writeModelDocument, architecture:patchNodeData). Default Architecture
+  // writes go through architecture:executeScryerOperation; there is no legacy raw-write
+  // entry point for the default model.
 
   registrar.handle('architecture:listModels', (_event, args: { projectPath: string }) =>
     deps.listProjectModels(args.projectPath)

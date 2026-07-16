@@ -233,39 +233,11 @@ describe('Architecture edit-session IPC handlers', () => {
     expect(controller.readEditSession).not.toHaveBeenCalled()
   })
 
-  it('blocks legacy default model writes while a Scryer edit session is active', async () => {
-    const projectPath = '/repo'
-    const writeModel = vi.fn(defaultArchitectureDeps.writeModel)
-    const writeModelDocument = vi.fn(defaultArchitectureDeps.writeModelDocument)
-    const controller: ScryerEditSessionController = {
-      beginAgentEditSession: vi.fn(),
-      completeAgentEditSession: vi.fn(),
-      cancelAgentEditSession: vi.fn(),
-      readEditSession: vi.fn(async () => ({
-        projectPath,
-        activeLease: { owner: 'agent' as const, agentRunId: 'run-1' }
-      }))
-    }
-    registerArchitectureHandlers(registrar(), {
-      ...defaultArchitectureDeps,
-      writeModel,
-      writeModelDocument,
-      scryerEditSessionController: controller
-    })
+  it('does not register the retired default raw-document mutation channels', () => {
+    registerArchitectureHandlers(registrar(), { ...defaultArchitectureDeps })
 
-    await expect(
-      handlers.get('architecture:writeModel')!(null, {
-        projectPath,
-        model: { projectPath, nodes: [], edges: [], sourceMap: {} }
-      })
-    ).rejects.toThrow('Scryer edit session is active')
-    await expect(
-      handlers.get('architecture:writeModelDocument')!(null, {
-        projectPath,
-        model: { projectPath, nodes: [], edges: [], sourceMap: {} }
-      })
-    ).rejects.toThrow('Scryer edit session is active')
-    expect(writeModel).not.toHaveBeenCalled()
-    expect(writeModelDocument).not.toHaveBeenCalled()
+    expect(handlers.get('architecture:writeModel')).toBeUndefined()
+    expect(handlers.get('architecture:writeModelDocument')).toBeUndefined()
+    expect(handlers.get('architecture:patchNodeData')).toBeUndefined()
   })
 })

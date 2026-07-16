@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, readFile, writeFile } from 'fs/promises'
-import { join } from 'path'
-import { tmpdir } from 'os'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 type ArchitectureWatchCallback = (eventType: string, filename: string) => void
@@ -382,45 +382,6 @@ describe('registerArchitectureHandlers', () => {
     ).toBe(true)
   })
 
-  it('does not create a legacy default model while refreshing planned node patches', async () => {
-    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-planned-patch-'))
-    const send = vi.fn()
-
-    const writeResult = await handlers.get('architecture:executeScryerOperation')!(
-      { sender: { send } },
-      {
-        projectPath,
-        operationId: 'scryer.system.add',
-        requestId: 'ipc-planned-system-add',
-        input: { items: [{ name: 'System 1', description: '' }] }
-      }
-    )
-    expect(writeResult).toMatchObject({ ok: true })
-
-    const plannedBefore = JSON.parse(
-      await readFile(join(projectPath, '.scryer', 'planned.scry'), 'utf8')
-    ) as { nodes: { id: string; name?: string }[] }
-    const nodeId = plannedBefore.nodes[0]?.id
-    expect(nodeId).toBeTruthy()
-
-    const patched = await handlers.get('architecture:patchNodeData')!(
-      { sender: { send } },
-      { projectPath, modelName: 'model', nodeId, patch: { name: 'Shop System' } }
-    )
-
-    expect(patched).toMatchObject({
-      model: {
-        nodes: [
-          expect.objectContaining({
-            id: nodeId,
-            data: expect.objectContaining({ name: 'Shop System' })
-          })
-        ]
-      }
-    })
-    await expect(readFile(join(projectPath, '.scryer', 'model.scry'), 'utf8')).rejects.toThrow()
-  })
-
   it('creates the default blank model through the Scryer operation catalog', async () => {
     handlers.clear()
     const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-default-create-'))
@@ -463,28 +424,6 @@ describe('registerArchitectureHandlers', () => {
     })
   })
 
-  it('rejects legacy C4-shaped default raw writes instead of converting them', async () => {
-    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-write-engine-'))
-
-    await expect(
-      handlers.get('architecture:writeModel')!(null, {
-        projectPath,
-        model: {
-          nodes: [
-            {
-              id: 'system',
-              type: 'c4',
-              data: { name: 'Shop', description: 'Commerce', kind: 'system' }
-            }
-          ],
-          edges: [],
-          sourceMap: {}
-        }
-      })
-    ).rejects.toThrow()
-    await expect(readFile(join(projectPath, '.scryer', 'model.scry'), 'utf8')).rejects.toThrow()
-  })
-
   it('routes drift and reconcile IPC channels through Native Scryer Engine envelopes', async () => {
     const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-drift-engine-'))
     await mkdir(join(projectPath, '.scryer'), { recursive: true })
@@ -524,95 +463,6 @@ describe('registerArchitectureHandlers', () => {
     expect(changedScryerModelFileForOperation('scryer.source.update')).toBe('planned.scry')
     expect(changedScryerModelFileForOperation('scryer.model.set')).toBe('model.scry')
     expect(changedScryerModelFileForOperation('scryer.plan.fold')).toBe('model.scry')
-  })
-
-  it('notifies the renderer immediately when IPC writes replace the model', async () => {
-    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-write-'))
-    const send = vi.fn()
-
-    await handlers.get('architecture:writeModel')!(
-      { sender: { send } },
-      {
-        projectPath,
-        model: {
-          version: '0.3',
-          nodes: [
-            {
-              id: 'system',
-              kind: 'system',
-              name: 'System',
-              description: 'Root system'
-            }
-          ],
-          links: [],
-          boundaries: {},
-          sourceMap: {},
-          groups: []
-        }
-      }
-    )
-
-    expect(send).toHaveBeenCalledWith('architecture:modelChanged', {
-      projectPath,
-      fileName: 'model.scry'
-    })
-  })
-
-  it('bridges revisioned document reads and node patches through IPC', async () => {
-    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-revision-'))
-    const send = vi.fn()
-    const modelName = 'legacy-draft'
-
-    const first = (await handlers.get('architecture:writeModelDocument')!(
-      { sender: { send } },
-      {
-        projectPath,
-        modelName,
-        model: {
-          nodes: [
-            {
-              id: 'api',
-              type: 'c4',
-              data: { name: 'API', description: 'Initial description', kind: 'system' }
-            }
-          ],
-          edges: [],
-          sourceMap: {},
-          groups: []
-        }
-      }
-    )) as { model: { nodes: { data: Record<string, unknown> }[] }; revision: string }
-    expect(first).toMatchObject({
-      model: expect.objectContaining({ nodes: expect.any(Array) }),
-      revision: expect.any(String)
-    })
-
-    const patched = await handlers.get('architecture:patchNodeData')!(
-      { sender: { send } },
-      {
-        projectPath,
-        modelName,
-        nodeId: 'api',
-        patch: { name: 'API Local Draft' },
-        baseRevision: first.revision,
-        baseNodeData: first.model.nodes[0]!.data
-      }
-    )
-
-    expect(patched).toMatchObject({
-      model: expect.objectContaining({
-        nodes: [
-          expect.objectContaining({
-            data: expect.objectContaining({ name: 'API Local Draft' })
-          })
-        ]
-      }),
-      revision: expect.any(String)
-    })
-    expect(send).toHaveBeenLastCalledWith('architecture:modelChanged', {
-      projectPath,
-      fileName: 'legacy-draft.scry'
-    })
   })
 
   it('forwards Native Scryer Engine operation envelopes through IPC', async () => {

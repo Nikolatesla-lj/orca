@@ -422,7 +422,6 @@ import type {
 import type { KeybindingActionId, KeybindingFileSnapshot } from '../shared/keybindings'
 import type {
   C4ModelData,
-  C4NodeData,
   DriftReport,
   ScryerToolCall,
   ScryerToolResult
@@ -865,25 +864,8 @@ export type ArchitectureApi = {
     model: C4ModelData
     revision: string
   }>
-  writeModel: (args: {
-    projectPath: string
-    model: C4ModelData
-    modelName?: string | null
-  }) => Promise<void>
-  writeModelDocument: (args: {
-    projectPath: string
-    model: C4ModelData
-    modelName?: string | null
-    baseRevision?: string | null
-  }) => Promise<{ model: C4ModelData; revision: string }>
-  patchNodeData: (args: {
-    projectPath: string
-    nodeId: string
-    patch: Partial<C4NodeData>
-    modelName?: string | null
-    baseRevision?: string | null
-    baseNodeData?: C4NodeData | null
-  }) => Promise<{ model: C4ModelData; revision: string }>
+  // Retired: raw writeModel/writeModelDocument/patchNodeData. Default Architecture
+  // writes go through executeScryerOperation.
   listModels: (args: { projectPath: string }) => Promise<
     {
       name: string
