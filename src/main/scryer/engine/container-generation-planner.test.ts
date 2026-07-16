@@ -448,4 +448,73 @@ describe('ScryerContainerGenerationPlanner', () => {
     // No durable changes are produced when the final snapshot check fails.
     expect('outcome' in result).toBe(false)
   })
+
+  it('counts a shared-subtree warning once across the committed and planned snapshots', () => {
+    const committed = baseModel()
+    const planned: ScryModel = JSON.parse(JSON.stringify(committed))
+    const base = services(committed, planned)
+    // The generated subtree is identical in both layers, so validating each
+    // yields the same warning; it must be surfaced and counted once.
+    const injected: ScryerOperationServices = {
+      ...base,
+      validators: {
+        ...base.validators,
+        validateModel: () => [
+          {
+            code: 'coverage_gap',
+            severity: 'warning',
+            message: 'generated subtree coverage gap',
+            path: 'node:node-2'
+          }
+        ]
+      }
+    }
+    const result = createScryerContainerGenerationPlanner({
+      committed,
+      planned,
+      services: injected,
+      buildEdges: null
+    }).plan(singleComponent)
+
+    const value = expectOk(result)
+    // Not doubled by the two-layer validation.
+    expect(value.reports.warningCount).toBe(1)
+    expect(value.reports.findings).toHaveLength(1)
+    expect(value.reports.findings[0].code).toBe('coverage_gap')
+  })
+
+  it('still hard-errors on a blocking finding shared by both layers, unaffected by dedupe', () => {
+    const committed = baseModel()
+    const planned: ScryModel = JSON.parse(JSON.stringify(committed))
+    const base = services(committed, planned)
+    const injected: ScryerOperationServices = {
+      ...base,
+      validators: {
+        ...base.validators,
+        validateModel: () => [
+          {
+            code: 'invalid_hierarchy',
+            severity: 'error',
+            message: 'shared blocking finding',
+            path: 'node:node-2'
+          }
+        ]
+      }
+    }
+    const result = createScryerContainerGenerationPlanner({
+      committed,
+      planned,
+      services: injected,
+      buildEdges: null
+    }).plan(singleComponent)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.failure.code).toBe('validation_failed')
+      const findings = result.failure.details?.findings as unknown[]
+      // Deduped to the single unique blocking finding, but still rejects.
+      expect(findings).toHaveLength(1)
+    }
+    expect('outcome' in result).toBe(false)
+  })
 })

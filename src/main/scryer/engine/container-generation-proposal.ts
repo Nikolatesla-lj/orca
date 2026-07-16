@@ -189,3 +189,31 @@ export function validateContainerGenerationProposal(args: {
 export function isBlockingContainerGenerationFinding(finding: ScryerValidationFinding): boolean {
   return finding.severity === 'error' || BLOCKING_CODES.has(finding.code)
 }
+
+// The committed and planned snapshots share the freshly generated subtree, so a
+// finding about generated content appears identically in both layers. Collapse
+// exact duplicates by a stable key before surfacing/counting so a single issue
+// is never double-reported. This is purely a surfacing concern: both layers are
+// still validated, and any blocking finding still rejects the write.
+export function dedupeContainerGenerationFindings(
+  findings: ScryerValidationFinding[]
+): ScryerValidationFinding[] {
+  const seen = new Set<string>()
+  const unique: ScryerValidationFinding[] = []
+  for (const finding of findings) {
+    const key = JSON.stringify([
+      finding.code,
+      finding.severity,
+      finding.path ?? null,
+      finding.jsonPointer ?? null,
+      finding.message,
+      finding.details ?? null
+    ])
+    if (seen.has(key)) {
+      continue
+    }
+    seen.add(key)
+    unique.push(finding)
+  }
+  return unique
+}

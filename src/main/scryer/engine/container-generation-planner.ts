@@ -5,6 +5,7 @@ import type {
 } from './container-generation-contracts'
 import { planGeneratedSubtreeIdentity } from './container-generation-identity'
 import {
+  dedupeContainerGenerationFindings,
   failContainerGeneration,
   invalidContainerGenerationProposal,
   isBlockingContainerGenerationFinding,
@@ -121,10 +122,12 @@ export class ScryerContainerGenerationPlanner {
       existingLinks: this.planned.links
     })
 
-    const snapshotFindings = [
+    // Both layers are always validated; dedupe only collapses the identical
+    // findings the shared generated subtree yields in each layer.
+    const snapshotFindings = dedupeContainerGenerationFindings([
       ...this.services.validators.validateModel(committed),
       ...this.services.validators.validateModel(planned)
-    ]
+    ])
     const blocking = snapshotFindings.filter(isBlockingContainerGenerationFinding)
     if (blocking.length > 0) {
       return invalidContainerGenerationProposal(
