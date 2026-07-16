@@ -20,7 +20,8 @@ function operationContext(ctx: HandlerContext): ScryerOperationContext {
     caller: 'human',
     cwd: ctx.cwd,
     projectRoot: getOptionalStringFlag(ctx.flags, 'project'),
-    leaseToken: getOptionalStringFlag(ctx.flags, 'lease-token'),
+    // Why: CLI callers are human operators; the edit-session lease token is
+    // trusted runtime context and must never be sourced from process args.
     output: { json: ctx.json }
   }
 }

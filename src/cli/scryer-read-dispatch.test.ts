@@ -1,7 +1,7 @@
-import { mkdir, mkdtemp, writeFile } from 'fs/promises'
-import { tmpdir } from 'os'
-import { join } from 'path'
-import { Readable } from 'stream'
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { Readable } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ScryModel } from '../main/scryer/engine/model'
 
@@ -36,6 +36,7 @@ vi.mock('./runtime-client', () => {
 })
 
 import { main } from './index'
+import { SCRYER_COMMAND_SPECS } from './specs/scryer'
 
 function model(): ScryModel {
   return {
@@ -204,5 +205,31 @@ describe('orca scryer #31 read CLI dispatch', () => {
       },
       exitCode: undefined
     })
+  })
+
+  it('rejects the removed public --lease-token flag on read and write commands', async () => {
+    const projectPath = await writeProject()
+    const secret = 'scryer-edit-context-secret'
+
+    for (const argv of [
+      ['scryer', 'model', 'read', '--project', projectPath, '--lease-token', secret, '--json'],
+      ['scryer', 'node', 'update', '--project', projectPath, '--lease-token', secret, '--json']
+    ]) {
+      const { output, exitCode } = await runJson(argv, projectPath)
+      expect(exitCode).toBe(1)
+      expect(output).toMatchObject({
+        ok: false,
+        error: { code: 'invalid_argument' }
+      })
+      // Why: an unknown-flag rejection must not echo the secret token value.
+      expect(JSON.stringify(output)).toContain('Unknown flag --lease-token')
+      expect(JSON.stringify(output)).not.toContain(secret)
+    }
+  })
+
+  it('never exposes lease-token as a public flag on any scryer command', () => {
+    for (const spec of SCRYER_COMMAND_SPECS) {
+      expect(spec.allowedFlags).not.toContain('lease-token')
+    }
   })
 })
