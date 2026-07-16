@@ -13,7 +13,8 @@ import {
 } from './useArchitectureModelController'
 import {
   isArchitectureCompletionGateSuccess,
-  resolveArchitectureSyncFinishOutcome
+  resolveArchitectureSyncFinishOutcome,
+  resolveArchitectureSyncLoadOutcome
 } from './architecture-completion-gate-terminal'
 
 function gateResult(
@@ -278,6 +279,61 @@ describe('architecture model controller helpers', () => {
       expect(isArchitectureCompletionGateSuccess(gate)).toBe(false)
       expect(resolveArchitectureSyncFinishOutcome(gate)).toEqual({ kind: 'attention' })
     }
+  })
+
+  it('re-derives an attention terminal on load when main retains an attention-blocked sync', () => {
+    const attentionGate = gateResult({ ok: false, nextAction: 'manual_review' })
+
+    // Panel remount resets local syncStatus to idle, but the retained sync (implementing
+    // + snapshot) with a recorded attention gate must resolve to attention, not running.
+    expect(
+      resolveArchitectureSyncLoadOutcome({
+        localAttention: false,
+        isSyncing: true,
+        hasPreSyncSnapshot: true,
+        recordedGate: attentionGate
+      })
+    ).toBe('attention')
+
+    // A genuinely in-progress sync (no recorded gate yet) stays running.
+    expect(
+      resolveArchitectureSyncLoadOutcome({
+        localAttention: false,
+        isSyncing: true,
+        hasPreSyncSnapshot: true,
+        recordedGate: null
+      })
+    ).toBe('running')
+
+    // A recorded success gate on a still-open session is not attention.
+    expect(
+      resolveArchitectureSyncLoadOutcome({
+        localAttention: false,
+        isSyncing: true,
+        hasPreSyncSnapshot: true,
+        recordedGate: gateResult({ ok: true, nextAction: 'nothing_to_fold' })
+      })
+    ).toBe('running')
+
+    // A local attention terminal is preserved even with no open main session.
+    expect(
+      resolveArchitectureSyncLoadOutcome({
+        localAttention: true,
+        isSyncing: false,
+        hasPreSyncSnapshot: false,
+        recordedGate: null
+      })
+    ).toBe('attention')
+
+    // No open session resolves any stale running back to idle.
+    expect(
+      resolveArchitectureSyncLoadOutcome({
+        localAttention: false,
+        isSyncing: false,
+        hasPreSyncSnapshot: true,
+        recordedGate: attentionGate
+      })
+    ).toBe('clear-running')
   })
 
   it('keeps the last 10 undo snapshots and batches rapid edits for one second', () => {

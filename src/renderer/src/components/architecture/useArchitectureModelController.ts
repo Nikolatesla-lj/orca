@@ -21,7 +21,8 @@ import type { ModelUpdater } from './ArchitectureCanvas'
 import type { SyncStatus } from './SyncBar'
 import {
   formatCompletionGateMessage,
-  resolveArchitectureSyncFinishOutcome
+  resolveArchitectureSyncFinishOutcome,
+  resolveArchitectureSyncLoadOutcome
 } from './architecture-completion-gate-terminal'
 import {
   analyzeExternalModelUpdate,
@@ -732,9 +733,10 @@ export function useArchitectureModelController({
           }
         }
 
-        const [nextImplementing, hasPreSyncSnapshot] = await Promise.all([
+        const [nextImplementing, hasPreSyncSnapshot, editSession] = await Promise.all([
           window.api.architecture.isSyncing({ projectPath }),
-          window.api.architecture.hasPreSyncSnapshot({ projectPath })
+          window.api.architecture.hasPreSyncSnapshot({ projectPath }),
+          window.api.architecture.readEditSession({ projectPath }).catch(() => null)
         ])
         if (requestId !== loadRequestIdRef.current) {
           return
@@ -768,24 +770,34 @@ export function useArchitectureModelController({
         setSelectedGroupId((current) =>
           current && (nextModel.groups ?? []).some((group) => group.id === current) ? current : null
         )
-        // Why: an attention terminal (completion gate blocked folding) leaves main's
-        // sync still open (implementing flag + pre-sync snapshot retained). A watcher
-        // reload must not resurrect the 'running' spinner or relock over that terminal,
-        // which would misread an unresolved sync as still-in-progress.
-        const inAttentionTerminal = syncStatusRef.current === 'attention'
-        if (!inAttentionTerminal) {
+        // Why: re-derive the sync terminal from durable main-side state. An attention
+        // terminal (completion gate blocked folding) leaves main's sync open
+        // (implementing flag + pre-sync snapshot + recorded gate retained). It must
+        // survive a panel remount that resets local syncStatus, and a watcher reload
+        // must never resurrect a 'running' spinner over it.
+        const recordedGate = editSession?.completionGate ?? null
+        const loadOutcome = resolveArchitectureSyncLoadOutcome({
+          localAttention: syncStatusRef.current === 'attention',
+          isSyncing: nextImplementing,
+          hasPreSyncSnapshot,
+          recordedGate
+        })
+        if (loadOutcome !== 'attention') {
           setImplementing(nextImplementing)
         }
         setSyncStatus((current) => {
-          if (current === 'attention') {
-            return current
+          if (loadOutcome === 'attention') {
+            return 'attention'
           }
-          if (nextImplementing && hasPreSyncSnapshot) {
+          if (loadOutcome === 'running') {
             return 'running'
           }
           return current === 'running' ? 'idle' : current
         })
-        if (nextImplementing && hasPreSyncSnapshot && !inAttentionTerminal) {
+        if (loadOutcome === 'attention' && recordedGate) {
+          setCompletionGate(recordedGate)
+        }
+        if (loadOutcome === 'running') {
           setSyncLog((current) =>
             current.length > 0 ? current : ['Architecture sync is still in progress']
           )

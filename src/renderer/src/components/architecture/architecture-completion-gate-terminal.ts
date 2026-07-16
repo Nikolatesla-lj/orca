@@ -26,6 +26,30 @@ export function resolveArchitectureSyncFinishOutcome(
     : { kind: 'success' }
 }
 
+// 'attention' enters/keeps the attention terminal (restore the gate); 'running' shows
+// the in-progress spinner; 'clear-running' resolves a stale running back to idle while
+// leaving other statuses untouched.
+export type ArchitectureSyncLoadOutcome = 'attention' | 'running' | 'clear-running'
+
+// Why: on (re)load the renderer must re-derive the sync terminal from durable main-side
+// state, because its local syncStatus is lost when the architecture panel unmounts. A
+// retained sync (implementing + pre-sync snapshot) whose recorded gate needs attention
+// is an attention terminal, NOT a running spinner.
+export function resolveArchitectureSyncLoadOutcome(input: {
+  localAttention: boolean
+  isSyncing: boolean
+  hasPreSyncSnapshot: boolean
+  recordedGate: ScryerCompletionGateResult | null
+}): ArchitectureSyncLoadOutcome {
+  const sessionOpen = input.isSyncing && input.hasPreSyncSnapshot
+  const recordedAttention =
+    !!input.recordedGate && isArchitectureCompletionGateAttention(input.recordedGate)
+  if (input.localAttention || (sessionOpen && recordedAttention)) {
+    return 'attention'
+  }
+  return sessionOpen ? 'running' : 'clear-running'
+}
+
 export function formatCompletionGateMessage(gate: ScryerCompletionGateResult): string {
   switch (gate.nextAction) {
     case 'nothing_to_fold':
