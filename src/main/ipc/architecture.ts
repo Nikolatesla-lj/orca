@@ -530,10 +530,9 @@ export function registerArchitectureHandlers(
     }
   )
 
-  // Retired: the default raw-document mutation channels (architecture:writeModel,
-  // architecture:writeModelDocument, architecture:patchNodeData). Default Architecture
-  // writes go through architecture:executeScryerOperation; there is no legacy raw-write
-  // entry point for the default model.
+  // Retired: the default raw-document mutation channels. Default Architecture writes go
+  // through the executeScryerOperation channel; there is no legacy raw-write entry point
+  // for the default model.
 
   registrar.handle('architecture:listModels', (_event, args: { projectPath: string }) =>
     deps.listProjectModels(args.projectPath)

@@ -100,6 +100,25 @@ describe('architecture sync lifecycle', () => {
     expect(hasPreSyncSnapshot(projectPath)).toBe(false)
   })
 
+  it('surfaces an Engine read failure on begin without falling back to a legacy reader', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-sync-no-fallback-'))
+    await mkdir(join(projectPath, '.scryer'), { recursive: true })
+    // A legacy C4-shaped document the strict Engine cannot parse. A legacy reader would
+    // happily parse it; the Engine seam rejects it, and sync surfaces the failure.
+    await writeFile(
+      join(projectPath, '.scryer', 'model.scry'),
+      JSON.stringify({
+        nodes: [{ id: 'system', type: 'c4', data: { name: 'Shop', kind: 'system' } }],
+        edges: []
+      }),
+      'utf8'
+    )
+
+    await expect(beginSync(projectPath, { modelName: 'Architecture' })).rejects.toThrow()
+    // No sync sentinel is left behind by the failed begin.
+    expect(hasPreSyncSnapshot(projectPath)).toBe(false)
+  })
+
   it('clears implementing state and updates sync marker when sync finishes', async () => {
     const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-sync-finish-'))
     await seedCommitted(projectPath, scryModel())

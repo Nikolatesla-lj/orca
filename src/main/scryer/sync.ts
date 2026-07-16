@@ -29,8 +29,8 @@ function syncContext(projectPath: string) {
   }
 }
 
-// Why: sync reads the committed architecture through the Engine seam (never the legacy
-// readModel), then adapts the strict 0.3 model into the C4 shape the prompt serializer
+// Why: sync reads the committed architecture through the Engine seam (never a legacy
+// reader), then adapts the strict 0.3 model into the C4 shape the prompt serializer
 // expects. This is prompt/snapshot maintenance, not legacy semantic ownership.
 async function readCommittedArchitectureModel(projectPath: string): Promise<C4ModelData> {
   const view = await syncEngine.readView(
