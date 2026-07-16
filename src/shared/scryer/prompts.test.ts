@@ -18,12 +18,17 @@ describe('nodeFillPrompt (Container Generation cutover)', () => {
     expect(fillPrompt({ nodeName: 'Handler' })).toContain('Fill out the internals of "Handler"')
   })
 
-  it('directs the agent to a single atomic fill_container Container Generation call', () => {
+  it('directs the agent to a single atomic orca CLI Container Generation run', () => {
     const prompt = fillPrompt()
     expect(prompt).toContain('Container Generation')
-    expect(prompt).toContain('fill_container')
+    expect(prompt).toContain('orca scryer container fill --json-input -')
     expect(prompt).toContain('EXACTLY ONCE')
-    expect(prompt).toContain('container_id "container-api"')
+    expect(prompt).toContain('"container_id" "container-api"')
+  })
+
+  it('targets the Orca CLI, not the retired Scryer MCP write tool', () => {
+    // ADR 0004 / Decision #6: the product write path is the orca CLI, not fill_container MCP.
+    expect(fillPrompt()).not.toContain('fill_container')
   })
 
   it('removes every legacy set_node / per-node mutation instruction', () => {

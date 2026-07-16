@@ -46,10 +46,11 @@ Instructions:
 }
 
 // Why: the visible Fill with AI is the Container Generation entry point (#73). The
-// agent must build one complete proposal and commit it with a single atomic
-// fill_container call — the retired legacy set_node path is no longer offered, the
-// Engine never falls back to it, and the agent never folds or decides the terminal
-// state (Orca's completion gate owns that).
+// agent builds one complete proposal and commits it with a single atomic run of the
+// `orca scryer container fill` CLI — the product path per ADR 0004 (the Orca CLI
+// replaces the Scryer MCP for writes). The retired legacy set_node path is no longer
+// offered, the Engine never falls back to it, and the agent never folds or decides the
+// terminal state (Orca's completion gate owns that).
 export function nodeFillPrompt(args: {
   modelName: string
   cwd: string
@@ -58,7 +59,7 @@ export function nodeFillPrompt(args: {
   nodeKind: string
   modelJson: string
 }): string {
-  return `You have access to Orca's Scryer-compatible architecture MCP tools. Fill out the internals of "${args.nodeName}" in model "${args.modelName}" from ${args.cwd} using Container Generation.
+  return `You have access to Orca's Scryer-compatible architecture tools and the \`orca scryer\` CLI. Fill out the internals of "${args.nodeName}" in model "${args.modelName}" from ${args.cwd} using Container Generation.
 
 Current model state:
 ${args.modelJson}
@@ -66,12 +67,12 @@ ${args.modelJson}
 Instructions:
 1. Call get_rules to load the modeling workflow and C4 rules.
 2. Call get_structure with path "${args.cwd}" and read the source files that implement "${args.nodeName}" (id "${args.nodeId}") so you understand its real components, their relationships, and boundaries.
-3. Assemble ONE complete proposal for the internals of "${args.nodeName}": every component, the links between them, and any groups — as a single request-local structure. Reference components only by local proposal keys; never invent node ids.
-4. Call fill_container EXACTLY ONCE with container_id "${args.nodeId}" and that complete proposal. This is a single atomic Container Generation: one call fills the whole container.
+3. Assemble ONE complete JSON proposal for the internals of "${args.nodeName}": "container_id" "${args.nodeId}", a non-empty "components" array (each component a local "key", a "name", and its "symbols" with their "source_file"), and any "links" and "groups" between those components. Reference components only by their local keys; never invent node ids.
+4. Run \`orca scryer container fill --json-input -\` in this terminal EXACTLY ONCE, piping that JSON proposal on stdin (for example with a heredoc). This single command atomically generates the whole container subtree.
 
 Constraints:
-- Build the internals ONLY through the single fill_container call. Do not use the retired per-node mutation tools, node subtree edits, or any other legacy path to add components one by one.
-- If fill_container (the Engine) fails, do NOT fall back to a legacy tool and do NOT retry with a per-node mutation — stop and report the failure verbatim.
+- Build the internals ONLY through that single \`orca scryer container fill\` command. Do not use the retired per-node mutation tools, node subtree edits, or any other legacy path to add components one by one.
+- If \`orca scryer container fill\` (the Engine) fails, do NOT fall back to a legacy tool and do NOT retry with a per-node mutation — stop and report the failure verbatim.
 - Do NOT fold, mark nodes implemented, or otherwise decide whether the result is accepted. Orca's completion gate owns the terminal state of the generated subtree.
 - Focus only on "${args.nodeName}". Do not change anything outside this container's scope.`
 }
