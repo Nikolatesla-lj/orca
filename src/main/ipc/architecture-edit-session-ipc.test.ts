@@ -37,6 +37,9 @@ describe('Architecture edit-session IPC handlers', () => {
       completeAgentEditSession: vi.fn(async () => ({
         ok: true,
         foldAllowed: true,
+        autoFoldAllowed: true,
+        outcome: 'folded' as const,
+        leaseDisposition: 'released_after_completion' as const,
         nextAction: 'fold_allowed' as const,
         pending: {
           total: 1,

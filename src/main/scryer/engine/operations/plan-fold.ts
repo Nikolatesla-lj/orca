@@ -4,10 +4,30 @@ import type {
   ScryerPlanFoldInput,
   ScryerPlanFoldResult
 } from '../types'
-import { diffModels } from '../diff'
+import { diffModels, type PendingChange } from '../diff'
 import { failure, success } from './operation-result'
 
-function selectors(input: ScryerPlanFoldInput): ScryerFoldTarget[] {
+function targetForPendingChange(change: PendingChange): ScryerFoldTarget | null {
+  switch (change.kind) {
+    case 'node':
+      return { kind: 'node', node_id: change.id }
+    case 'responsibility':
+      return { kind: 'responsibility', responsibility_id: change.id }
+    case 'property':
+      return change.ownerId ? { kind: 'property', node_id: change.ownerId, label: change.id } : null
+    case 'link':
+      return { kind: 'link', link_id: change.id }
+    case 'group':
+      return { kind: 'group', group_id: change.id }
+  }
+}
+
+function selectors(input: ScryerPlanFoldInput, pending: PendingChange[]): ScryerFoldTarget[] {
+  if (input.all === true && !input.node_id) {
+    return pending
+      .map(targetForPendingChange)
+      .filter((target): target is ScryerFoldTarget => target !== null)
+  }
   const targets: ScryerFoldTarget[] = []
   const hasSubselectors =
     (input.responsibility_ids?.length ?? 0) > 0 ||
@@ -52,7 +72,8 @@ export const planFoldOperation: ScryerOperationExecutor<
       contractOperationId: 'scryer.plan.fold'
     })
   }
-  const targets = selectors(input)
+  const pending = diffModels(state.committed, state.planned)
+  const targets = selectors(input, pending)
   if (targets.length === 0) {
     return failure('invalid_input', 'plan.fold requires at least one fold selector', undefined, {
       fieldErrors: [
@@ -63,7 +84,6 @@ export const planFoldOperation: ScryerOperationExecutor<
       ]
     })
   }
-  const pending = diffModels(state.committed, state.planned)
   const pendingKeys = new Set(
     pending.map((change) =>
       change.kind === 'property'

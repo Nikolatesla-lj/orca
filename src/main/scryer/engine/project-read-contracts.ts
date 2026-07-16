@@ -1,4 +1,5 @@
 import type { ScryerValidationFinding } from './operation-results'
+import type { ScryerLayer } from './operation-identifiers'
 import type { ScryerReadView, ScryerReadViewInput } from './model-read-contracts'
 
 export type ScryerRuleIndexEntry = {
@@ -68,6 +69,7 @@ export type ScryerModelReadResult = ScryerReadView
 
 export type ScryerModelValidateInput = {
   project?: string
+  layer?: ScryerLayer
 }
 
 export type ScryerModelValidateResult = {

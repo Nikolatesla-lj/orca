@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { scryLayerSchema } from './model-schemas'
 import { validationFindingSchema } from './operation-error-schemas'
 
 const ruleIndexEntrySchema = z
@@ -86,7 +87,8 @@ export const codebaseReadSuccessSchema = z
 
 export const modelValidateInputSchema = z
   .object({
-    project: z.string().optional()
+    project: z.string().optional(),
+    layer: scryLayerSchema.optional()
   })
   .strict()
 

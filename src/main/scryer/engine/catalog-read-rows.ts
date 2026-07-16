@@ -68,7 +68,7 @@ export const READ_CATALOG_ROWS: ScryerCatalogRow[] = [
     policy: flatPolicy({
       lock: 'none',
       lease: 'none',
-      reads: ['committed'],
+      reads: ['committed', 'planned'],
       validation: ['structural_warnings', 'coverage_warnings', 'anchor_warnings']
     }),
     upstream: [{ symbol: 'read.rs::validate_model' }, { symbol: 'validate.rs' }],
