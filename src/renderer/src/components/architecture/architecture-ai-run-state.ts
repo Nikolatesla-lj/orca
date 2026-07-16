@@ -5,6 +5,7 @@ export type ArchitectureAiRunPhase =
   | 'running'
   | 'failed'
   | 'cancelled'
+  | 'needs_attention'
   | 'done'
 
 export type ArchitectureAiRunState = {
@@ -15,7 +16,15 @@ export type ArchitectureAiRunState = {
 
 export type ArchitectureAiRunStore = Record<ArchitectureAiRunKind, ArchitectureAiRunState>
 
-const TERMINAL_PHASES = new Set<ArchitectureAiRunPhase>(['failed', 'cancelled', 'done'])
+// Why: 'needs_attention' is a terminal, non-success outcome — the run stopped without
+// completing (e.g. the Scryer completion gate blocked folding), so it must not later
+// transition to 'done' and read as success.
+const TERMINAL_PHASES = new Set<ArchitectureAiRunPhase>([
+  'failed',
+  'cancelled',
+  'needs_attention',
+  'done'
+])
 
 function idleRun(): ArchitectureAiRunState {
   return { phase: 'idle', message: null, runId: 0 }
