@@ -1,7 +1,7 @@
-import { existsSync } from 'fs'
-import { mkdir, mkdtemp, readFile, writeFile } from 'fs/promises'
-import { tmpdir } from 'os'
-import { join } from 'path'
+import { existsSync } from 'node:fs'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createScryerEngine, createScryerStateStore } from './index'
 import type { ScryModel } from './model'
@@ -53,6 +53,14 @@ async function writeProject(
     )
   }
   return projectPath
+}
+
+async function writeActiveLease(projectPath: string, token: string): Promise<void> {
+  await writeFile(
+    join(projectPath, '.scryer', '.model-edit-lease.json'),
+    JSON.stringify({ token, owner: 'human' }),
+    'utf8'
+  )
 }
 
 const ordersInput: ScryerContainerFillInput = {
@@ -188,6 +196,58 @@ describe('scryer.container.fill operation', () => {
       before.planned
     )
     expect(existsSync(join(projectPath, '.scryer', 'history.jsonl'))).toBe(false)
+  })
+
+  it('writes when no model-edit lease is active (write_if_active)', async () => {
+    const projectPath = await writeProject(emptyContainerModel())
+    const result = await createScryerEngine().executeOperation<ScryerContainerFillResult>(
+      'scryer.container.fill',
+      ordersInput,
+      context(projectPath)
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.result.summary.components).toBe(1)
+    }
+  })
+
+  it('rejects the semantic write when an active lease is unmatched', async () => {
+    const projectPath = await writeProject(emptyContainerModel())
+    await writeActiveLease(projectPath, 'lease-token-abc')
+    const before = await readFile(join(projectPath, '.scryer', 'model.scry'), 'utf8')
+
+    const result = await createScryerEngine().executeOperation(
+      'scryer.container.fill',
+      ordersInput,
+      context(projectPath)
+    )
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error.code).toBe('lease_required')
+    }
+    // The active lease blocked the write; the committed model is untouched.
+    expect(await readFile(join(projectPath, '.scryer', 'model.scry'), 'utf8')).toBe(before)
+  })
+
+  it('allows the write when the caller presents the matching lease token', async () => {
+    const projectPath = await writeProject(emptyContainerModel())
+    await writeActiveLease(projectPath, 'lease-token-abc')
+
+    const result = await createScryerEngine().executeOperation<ScryerContainerFillResult>(
+      'scryer.container.fill',
+      ordersInput,
+      { ...context(projectPath), leaseToken: 'lease-token-abc' }
+    )
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      const componentId = result.result.created.components[0].id
+      const committed = JSON.parse(
+        await readFile(join(projectPath, '.scryer', 'model.scry'), 'utf8')
+      ) as ScryModel
+      expect(committed.nodes.some((node) => node.id === componentId)).toBe(true)
+    }
   })
 
   it('returns not_found for a missing container through the engine', async () => {

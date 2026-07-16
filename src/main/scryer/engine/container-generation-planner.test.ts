@@ -121,7 +121,25 @@ describe('ScryerContainerGenerationPlanner', () => {
     const respId = value.created.symbols[0].responsibilityIds[0]
     expect(changes?.committed?.sourceMap[respId]?.[0]?.pattern).toBe('src/orders.ts')
     expect(changes?.planned?.sourceMap[respId]?.[0]?.pattern).toBe('src/orders.ts')
-    expect(value.summary.sourceAnchors).toBe(1)
+    // A plain-string responsibility anchors to the whole symbol, never inheriting
+    // the symbol's declared line range.
+    expect(changes?.committed?.sourceMap[respId]?.[0]?.line).toBeUndefined()
+    expect(changes?.committed?.sourceMap[respId]?.[0]?.endLine).toBeUndefined()
+
+    // Every symbol also keeps its own node-level source anchor, mirrored to planned.
+    const symbolId = value.created.symbols[0].id
+    expect(changes?.committed?.sourceMap[symbolId]?.[0]).toMatchObject({
+      pattern: 'src/orders.ts',
+      symbol: 'handleOrder',
+      line: 10,
+      endLine: 40
+    })
+    expect(changes?.planned?.sourceMap[symbolId]?.[0]?.pattern).toBe('src/orders.ts')
+
+    // Node anchor + responsibility anchor.
+    expect(value.summary.sourceAnchors).toBe(2)
+    // A clean snapshot surfaces no warning-severity findings.
+    expect(value.reports.warningCount).toBe(0)
   })
 
   it('does not refresh the baseline or advance any drift anchor', () => {
@@ -150,27 +168,52 @@ describe('ScryerContainerGenerationPlanner', () => {
     expect(new Set(mintedIds).size).toBe(mintedIds.length)
   })
 
-  it('allows a thin symbol with no responsibilities or properties', () => {
-    const value = expectOk(
-      run({
-        container_id: 'api',
-        components: [
-          {
-            key: 'reexport',
-            name: 'ReExport',
-            symbols: [{ key: 'index', name: 'index', source_file: 'src/index.ts' }]
-          }
-        ]
-      })
-    )
+  it('allows a thin symbol with no responsibilities or properties but keeps its node anchor', () => {
+    const result = run({
+      container_id: 'api',
+      components: [
+        {
+          key: 'reexport',
+          name: 'ReExport',
+          symbols: [{ key: 'index', name: 'index', source_file: 'src/index.ts' }]
+        }
+      ]
+    })
+    const value = expectOk(result)
     expect(value.summary.symbols).toBe(1)
     expect(value.reports.thinSymbolCount).toBe(1)
+
+    // A thin symbol still retains a persistent node-level source anchor in both
+    // layers — no fabricated responsibility, just its own code identity.
+    const symbolId = value.created.symbols[0].id
+    expect(value.created.symbols[0].responsibilityIds).toHaveLength(0)
+    const changes = result.ok ? result.outcome.changes : undefined
+    expect(changes?.committed?.sourceMap[symbolId]?.[0]?.pattern).toBe('src/index.ts')
+    expect(changes?.planned?.sourceMap[symbolId]?.[0]?.pattern).toBe('src/index.ts')
+    expect(value.summary.sourceAnchors).toBe(1)
   })
 
   it('rejects a container that already has component children', () => {
     const committed = baseModel()
     committed.nodes.push({ id: 'existing', kind: 'component', name: 'Existing', parentId: 'api' })
     const result = run(singleComponent, { committed })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.failure.code).toBe('validation_failed')
+      const findings = result.failure.details?.findings as { details?: { reason?: string } }[]
+      expect(findings.some((f) => f.details?.reason === 'empty_generation_target_required')).toBe(
+        true
+      )
+    }
+  })
+
+  it('rejects generation when only the planned layer already has a component child', () => {
+    const committed = baseModel()
+    const planned: ScryModel = JSON.parse(JSON.stringify(committed))
+    // A concurrent session drafted a component under the same container; the
+    // committed layer is still empty, but effective state is not.
+    planned.nodes.push({ id: 'planned-comp', kind: 'component', name: 'Planned', parentId: 'api' })
+    const result = run(singleComponent, { committed, planned })
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.failure.code).toBe('validation_failed')
@@ -260,6 +303,27 @@ describe('ScryerContainerGenerationPlanner', () => {
     }
   })
 
+  it('owns a generated group under the target container with only its direct component children', () => {
+    const twoComponents: ScryerContainerFillInput = {
+      container_id: 'api',
+      components: [
+        { key: 'a', name: 'A', symbols: [{ key: 'a1', name: 'a1', source_file: 'a.ts' }] },
+        { key: 'b', name: 'B', symbols: [{ key: 'b1', name: 'b1', source_file: 'b.ts' }] }
+      ],
+      groups: [{ name: 'Pair', member_keys: ['a', 'b'] }]
+    }
+    const result = run(twoComponents)
+    const value = expectOk(result)
+    const componentIds = value.created.components.map((component) => component.id)
+
+    const committedGroup = result.ok ? result.outcome.changes!.committed!.groups[0] : undefined
+    expect(committedGroup?.parentNodeId).toBe('api')
+    expect(committedGroup?.memberIds).toEqual(componentIds)
+    // Mirrored into planned with the same container ownership.
+    const plannedGroup = result.ok ? result.outcome.changes!.planned!.groups[0] : undefined
+    expect(plannedGroup?.parentNodeId).toBe('api')
+  })
+
   it('keeps a legal agent link and drops unknown, self, and illegal ones', () => {
     const input: ScryerContainerFillInput = {
       container_id: 'api',
@@ -326,5 +390,62 @@ describe('ScryerContainerGenerationPlanner', () => {
     expect(
       expectOk(run(singleComponent, { buildEdges: { symbolEdges: [] } })).reports.edgeGraphStatus
     ).toBe('empty')
+  })
+
+  it('reports partially_unresolved for an in-scope unresolved endpoint but ignores unrelated edges', () => {
+    const input: ScryerContainerFillInput = {
+      container_id: 'api',
+      components: [
+        { key: 'a', name: 'A', symbols: [{ key: 'a1', name: 'a1', source_file: 'a.ts' }] }
+      ]
+    }
+    const buildEdges: ScryerBuildEdgeGraph = {
+      symbolEdges: [
+        // Relevant: a.ts is a generated source file, but a.ts#missing was never
+        // proposed, so the derived-link set is incomplete for this file.
+        { src: 'a.ts#a1@1', dst: 'a.ts#missing@9' },
+        // Wholly outside the generation scope: a global-cache edge that must be
+        // ignored, never inflated into a partial-evidence claim.
+        { src: 'x.ts#x1@1', dst: 'y.ts#y1@1' }
+      ]
+    }
+    const value = expectOk(run(input, { buildEdges }))
+    expect(value.reports.edgeGraphStatus).toBe('partially_unresolved')
+    expect(value.summary.derivedLinks).toBe(0)
+  })
+
+  it('rejects and writes nothing when a final snapshot validator returns a blocking finding', () => {
+    const committed = baseModel()
+    const planned: ScryModel = JSON.parse(JSON.stringify(committed))
+    const base = services(committed, planned)
+    const injected: ScryerOperationServices = {
+      ...base,
+      validators: {
+        ...base.validators,
+        // A blocking finding on the final would-be snapshot is a hard error.
+        validateModel: () => [
+          {
+            code: 'invalid_hierarchy',
+            severity: 'error',
+            message: 'injected snapshot failure',
+            path: 'model'
+          }
+        ]
+      }
+    }
+    const result = createScryerContainerGenerationPlanner({
+      committed,
+      planned,
+      services: injected,
+      buildEdges: null
+    }).plan(singleComponent)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.failure.code).toBe('validation_failed')
+      expect(result.failure.details?.reason).toBe('generation_proposal_invalid')
+    }
+    // No durable changes are produced when the final snapshot check fails.
+    expect('outcome' in result).toBe(false)
   })
 })
