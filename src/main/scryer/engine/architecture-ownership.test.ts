@@ -1,5 +1,5 @@
-import { readdir, readFile } from 'fs/promises'
-import { join, relative } from 'path'
+import { readdir, readFile } from 'node:fs/promises'
+import { join, relative } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const ROOT = process.cwd()
@@ -75,6 +75,29 @@ describe('Scryer architecture ownership', () => {
         `${relative(ROOT, file)} imports an engine internal module`
       ).toEqual([])
     }
+  })
+
+  it('keeps the architecture view adapter off engine internals and legacy C4 types', async () => {
+    const imports = importsOf(
+      await readFile(join(ROOT, 'src/main/scryer/architecture-view-adapter.ts'), 'utf8')
+    )
+    const forbidden = [
+      './engine/model',
+      './engine/validators',
+      './engine/diff',
+      './engine/fold',
+      './engine/read-selector',
+      './engine/state-store',
+      './engine/pipeline',
+      '../../shared/scryer/model-types'
+    ]
+
+    expect(
+      imports.filter((specifier) =>
+        forbidden.some((blocked) => specifier === blocked || specifier.startsWith(`${blocked}/`))
+      ),
+      'architecture-view-adapter.ts imports an engine internal or legacy C4 semantic type'
+    ).toEqual([])
   })
 
   it('keeps state-store independent of operations and product adapters', async () => {
