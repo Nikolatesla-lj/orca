@@ -110,9 +110,11 @@ describe('native Scryer agent run source wiring', () => {
       payload: { state: 'done', prompt: '', interrupted: true }
     })
 
-    await vi.waitFor(async () => {
-      await expect(leaseStore.read({ projectPath })).resolves.toBeNull()
-    })
+    // Why: await the real release chain instead of polling — polling read()
+    // contends with the release on the same per-project write lock, which can
+    // make the fire-and-forget release throw lock_busy and silently lose.
+    await runtime.whenFinishedListenersSettled()
+    await expect(leaseStore.read({ projectPath })).resolves.toBeNull()
     runtime.dispose()
     agentHookServer.stop()
   })
@@ -131,9 +133,11 @@ describe('native Scryer agent run source wiring', () => {
 
     runtimeService.onPtyExit('pty-native-source', 9)
 
-    await vi.waitFor(async () => {
-      await expect(leaseStore.read({ projectPath })).resolves.toBeNull()
-    })
+    // Why: await the real release chain instead of polling — polling read()
+    // contends with the release on the same per-project write lock, which can
+    // make the fire-and-forget release throw lock_busy and silently lose.
+    await runtime.whenFinishedListenersSettled()
+    await expect(leaseStore.read({ projectPath })).resolves.toBeNull()
     runtime.dispose()
     agentHookServer.stop()
   })

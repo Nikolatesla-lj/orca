@@ -45,6 +45,11 @@ type NativeAgentRunRecord = NativeAgentRunIdentity & {
 
 export type NativeScryerAgentRunRuntime = ScryerAgentRunRuntime & {
   dispose(): void
+  // Why: test seam — resolves once every in-flight finished-listener chain
+  // (e.g. the async lease release) has settled. Lets a test deterministically
+  // await completion instead of polling, which otherwise races the reader
+  // against the release on the same per-project write lock.
+  whenFinishedListenersSettled(): Promise<void>
 }
 
 type NativeAgentRunRuntimeOptions = {
@@ -82,6 +87,10 @@ export function createNativeScryerAgentRunRuntime(
     options.identityResolveDelaysMs ?? DEFAULT_IDENTITY_RESOLVE_DELAYS_MS
   const runs = new Map<string, NativeAgentRunRecord>()
   const resolvingRuns = new Map<string, Promise<NativeAgentRunRecord | null>>()
+  // Why: track the fire-and-forget listener promises so a test can await their
+  // settlement. Production never reads this; entries self-evict on settle so it
+  // does not grow. Notification stays fire-and-forget for the live runtime.
+  const inFlightNotifications = new Set<Promise<void>>()
   const reportListenerError =
     options.onListenerError ??
     (() => {
@@ -99,7 +108,9 @@ export function createNativeScryerAgentRunRuntime(
     }
     for (const listener of record.listeners) {
       try {
-        void Promise.resolve(listener(event)).catch(reportListenerError)
+        const settled = Promise.resolve(listener(event)).catch(reportListenerError)
+        inFlightNotifications.add(settled)
+        void settled.finally(() => inFlightNotifications.delete(settled))
       } catch (error) {
         reportListenerError(error)
       }
@@ -216,6 +227,15 @@ export function createNativeScryerAgentRunRuntime(
       unsubscribeTermination()
       runs.clear()
       resolvingRuns.clear()
+      inFlightNotifications.clear()
+    },
+    async whenFinishedListenersSettled() {
+      // Why: a settling listener can enqueue further notifications, so drain
+      // until the set is empty. Each promise already swallows its own error
+      // via reportListenerError, so allSettled here always resolves.
+      while (inFlightNotifications.size > 0) {
+        await Promise.allSettled(inFlightNotifications)
+      }
     }
   }
 }
