@@ -13,6 +13,20 @@ import type {
   ScryerCompletionGateResult,
   ScryerEditSessionStatus
 } from '../shared/scryer/edit-session'
+import type {
+  ArchitectureBeginEditSessionRequest,
+  ArchitectureCancelEditSessionRequest,
+  ArchitectureCompleteEditSessionRequest,
+  ArchitectureExecuteScryerOperationRequest,
+  ArchitectureReadEditSessionRequest
+} from '../shared/scryer/architecture-ipc-contracts'
+export type {
+  ArchitectureBeginEditSessionRequest,
+  ArchitectureCancelEditSessionRequest,
+  ArchitectureCompleteEditSessionRequest,
+  ArchitectureExecuteScryerOperationRequest,
+  ArchitectureReadEditSessionRequest
+} from '../shared/scryer/architecture-ipc-contracts'
 import type { ReadClipboardTextOptions } from '../shared/clipboard-text'
 import type { AppIdentity } from '../shared/app-identity'
 import type { TerminalPaneSplitSource } from '../shared/feature-education-telemetry'
@@ -922,24 +936,16 @@ export type ArchitectureApi = {
   }) => Promise<{ prompt: string; drift: DriftReport; snapshot: C4ModelData }>
   cancelSync: (args: { projectPath: string }) => Promise<C4ModelData>
   finishSync: (args: { projectPath: string }) => Promise<void>
-  beginEditSession: (args: {
-    projectPath: string
-    agentRunId: string
-  }) => Promise<{ projectPath: string; agentRunId: string }>
-  completeEditSession: (args: {
-    projectPath: string
-    agentRunId: string
-    foldPolicy?: 'never' | 'when_gate_passes'
-  }) => Promise<ScryerCompletionGateResult>
-  cancelEditSession: (args: { projectPath: string; agentRunId: string }) => Promise<void>
-  readEditSession: (args: { projectPath: string }) => Promise<ScryerEditSessionStatus>
+  beginEditSession: (
+    args: ArchitectureBeginEditSessionRequest
+  ) => Promise<{ projectPath: string; agentRunId: string }>
+  completeEditSession: (
+    args: ArchitectureCompleteEditSessionRequest
+  ) => Promise<ScryerCompletionGateResult>
+  cancelEditSession: (args: ArchitectureCancelEditSessionRequest) => Promise<void>
+  readEditSession: (args: ArchitectureReadEditSessionRequest) => Promise<ScryerEditSessionStatus>
   callTool: (args: { projectPath: string; call: ScryerToolCall }) => Promise<ScryerToolResult>
-  executeScryerOperation: (args: {
-    projectPath: string
-    operationId: string
-    input?: unknown
-    requestId?: string
-  }) => Promise<unknown>
+  executeScryerOperation: (args: ArchitectureExecuteScryerOperationRequest) => Promise<unknown>
   watchModel: (args: { projectPath: string }) => Promise<void>
   onModelChanged: (
     callback: (event: { projectPath: string; fileName: string }) => void

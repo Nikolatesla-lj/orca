@@ -25,6 +25,18 @@ function registrar(): ArchitectureIpcRegistrar {
   }
 }
 
+async function captureError(action: () => unknown): Promise<Error> {
+  try {
+    await action()
+  } catch (error) {
+    if (error instanceof Error) {
+      return error
+    }
+    throw error
+  }
+  throw new Error('Expected action to fail')
+}
+
 describe('Architecture edit-session IPC handlers', () => {
   it('routes edit-session IPC channels through ScryerEditSessionController', async () => {
     const projectPath = '/repo'
@@ -104,6 +116,69 @@ describe('Architecture edit-session IPC handlers', () => {
       projectPath,
       fileName: 'model.scry'
     })
+  })
+
+  it('rejects authorization, unknown fields, and missing identity before controller dispatch', async () => {
+    const controller: ScryerEditSessionController = {
+      beginAgentEditSession: vi.fn(),
+      completeAgentEditSession: vi.fn(),
+      cancelAgentEditSession: vi.fn(),
+      readEditSession: vi.fn()
+    }
+    registerArchitectureHandlers(registrar(), {
+      ...defaultArchitectureDeps,
+      scryerEditSessionController: controller
+    })
+    const validRequests = {
+      'architecture:beginEditSession': { projectPath: '/repo', agentRunId: 'run-1' },
+      'architecture:completeEditSession': { projectPath: '/repo', agentRunId: 'run-1' },
+      'architecture:cancelEditSession': { projectPath: '/repo', agentRunId: 'run-1' },
+      'architecture:readEditSession': { projectPath: '/repo' }
+    } as const
+    const authorizationFields = [
+      'leaseToken',
+      'token',
+      'leaseId',
+      'activeLeaseId',
+      'authorization'
+    ] as const
+
+    for (const [channel, validRequest] of Object.entries(validRequests)) {
+      for (const field of authorizationFields) {
+        const secret = `must-not-leak-${channel}-${field}`
+        const error = await captureError(() =>
+          handlers.get(channel)!(null, { ...validRequest, [field]: secret })
+        )
+
+        expect(error.message).toContain(`forbidden authorization field '${field}'`)
+        expect(error.message).not.toContain(secret)
+      }
+
+      const unknownValue = `must-not-leak-${channel}-unknown`
+      const error = await captureError(() =>
+        handlers.get(channel)!(null, { ...validRequest, unexpected: unknownValue })
+      )
+      expect(error.message).toContain("unknown field 'unexpected'")
+      expect(error.message).not.toContain(unknownValue)
+    }
+
+    const invalidIdentityRequests = [
+      ['architecture:beginEditSession', { projectPath: '/repo' }],
+      ['architecture:beginEditSession', { projectPath: '/repo', agentRunId: '   ' }],
+      ['architecture:completeEditSession', { projectPath: '/repo' }],
+      ['architecture:cancelEditSession', { projectPath: '/repo' }],
+      ['architecture:readEditSession', {}],
+      ['architecture:readEditSession', { projectPath: '   ' }]
+    ] as const
+    for (const [channel, request] of invalidIdentityRequests) {
+      const error = await captureError(() => handlers.get(channel)!(null, request))
+      expect(error.message).toContain('invalid request field')
+    }
+
+    expect(controller.beginAgentEditSession).not.toHaveBeenCalled()
+    expect(controller.completeAgentEditSession).not.toHaveBeenCalled()
+    expect(controller.cancelAgentEditSession).not.toHaveBeenCalled()
+    expect(controller.readEditSession).not.toHaveBeenCalled()
   })
 
   it('blocks legacy default model writes while a Scryer edit session is active', async () => {

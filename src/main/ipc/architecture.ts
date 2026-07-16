@@ -55,6 +55,13 @@ import type {
   DriftReport,
   ScryerToolCall
 } from '../../shared/scryer/model-types'
+import {
+  parseArchitectureBeginEditSessionRequest,
+  parseArchitectureCancelEditSessionRequest,
+  parseArchitectureCompleteEditSessionRequest,
+  parseArchitectureExecuteScryerOperationRequest,
+  parseArchitectureReadEditSessionRequest
+} from '../../shared/scryer/architecture-ipc-contracts'
 import { BUILT_IN_SCRYER_TEMPLATES } from '../../shared/scryer/templates'
 
 const watchers = new Map<string, FSWatcher>()
@@ -855,46 +862,34 @@ export function registerArchitectureHandlers(
     await deps.finishSync(args.projectPath)
   })
 
-  registrar.handle(
-    'architecture:beginEditSession',
-    async (_event, args: { projectPath: string; agentRunId: string }) => {
-      await deps.scryerAgentRunRuntime?.setRunStatus(args.agentRunId, 'running', { emit: false })
-      return requireEditSessionController(deps).beginAgentEditSession(args)
-    }
-  )
+  registrar.handle('architecture:beginEditSession', async (_event, rawArgs: unknown) => {
+    const args = parseArchitectureBeginEditSessionRequest(rawArgs)
+    await deps.scryerAgentRunRuntime?.setRunStatus(args.agentRunId, 'running', { emit: false })
+    return requireEditSessionController(deps).beginAgentEditSession(args)
+  })
 
-  registrar.handle(
-    'architecture:completeEditSession',
-    async (
-      event,
-      args: {
-        projectPath: string
-        agentRunId: string
-        foldPolicy?: 'never' | 'when_gate_passes'
-      }
-    ) => {
-      await deps.scryerAgentRunRuntime?.setRunStatus(args.agentRunId, 'done', { emit: false })
-      const result = await requireEditSessionController(deps).completeAgentEditSession(args)
-      deps.scryerAgentRunRuntime?.clearRun(args.agentRunId)
-      if (result.outcome === 'folded') {
-        notifyModelChanged(event, args.projectPath, undefined, deps)
-      }
-      return result
+  registrar.handle('architecture:completeEditSession', async (event, rawArgs: unknown) => {
+    const args = parseArchitectureCompleteEditSessionRequest(rawArgs)
+    await deps.scryerAgentRunRuntime?.setRunStatus(args.agentRunId, 'done', { emit: false })
+    const result = await requireEditSessionController(deps).completeAgentEditSession(args)
+    deps.scryerAgentRunRuntime?.clearRun(args.agentRunId)
+    if (result.outcome === 'folded') {
+      notifyModelChanged(event, args.projectPath, undefined, deps)
     }
-  )
+    return result
+  })
 
-  registrar.handle(
-    'architecture:cancelEditSession',
-    async (_event, args: { projectPath: string; agentRunId: string }) => {
-      await deps.scryerAgentRunRuntime?.setRunStatus(args.agentRunId, 'cancelled', { emit: false })
-      await requireEditSessionController(deps).cancelAgentEditSession(args)
-      deps.scryerAgentRunRuntime?.clearRun(args.agentRunId)
-    }
-  )
+  registrar.handle('architecture:cancelEditSession', async (_event, rawArgs: unknown) => {
+    const args = parseArchitectureCancelEditSessionRequest(rawArgs)
+    await deps.scryerAgentRunRuntime?.setRunStatus(args.agentRunId, 'cancelled', { emit: false })
+    await requireEditSessionController(deps).cancelAgentEditSession(args)
+    deps.scryerAgentRunRuntime?.clearRun(args.agentRunId)
+  })
 
-  registrar.handle('architecture:readEditSession', (_event, args: { projectPath: string }) =>
-    requireEditSessionController(deps).readEditSession(args)
-  )
+  registrar.handle('architecture:readEditSession', (_event, rawArgs: unknown) => {
+    const args = parseArchitectureReadEditSessionRequest(rawArgs)
+    return requireEditSessionController(deps).readEditSession(args)
+  })
 
   registrar.handle(
     'architecture:callTool',
@@ -907,34 +902,25 @@ export function registerArchitectureHandlers(
     }
   )
 
-  registrar.handle(
-    'architecture:executeScryerOperation',
-    async (
-      event,
-      args: {
-        projectPath: string
-        operationId: ScryerOperationId
-        input?: unknown
-        requestId?: string
-      }
-    ) => {
-      const result = await deps.scryerEngine.executeOperation(args.operationId, args.input ?? {}, {
-        requestId: args.requestId ?? `ipc-${Date.now()}`,
-        transport: 'ipc',
-        caller: 'human',
-        cwd: args.projectPath,
-        projectRoot: args.projectPath
-      })
-      if (result.ok && SCRYER_WRITE_OPERATIONS.has(args.operationId)) {
-        notifyModelFileChanged(
-          event,
-          args.projectPath,
-          changedScryerModelFileForOperation(args.operationId)
-        )
-      }
-      return result
+  registrar.handle('architecture:executeScryerOperation', async (event, rawArgs: unknown) => {
+    const args = parseArchitectureExecuteScryerOperationRequest(rawArgs)
+    const operationId = args.operationId as ScryerOperationId
+    const result = await deps.scryerEngine.executeOperation(operationId, args.input ?? {}, {
+      requestId: args.requestId ?? `ipc-${Date.now()}`,
+      transport: 'ipc',
+      caller: 'human',
+      cwd: args.projectPath,
+      projectRoot: args.projectPath
+    })
+    if (result.ok && SCRYER_WRITE_OPERATIONS.has(operationId)) {
+      notifyModelFileChanged(
+        event,
+        args.projectPath,
+        changedScryerModelFileForOperation(operationId)
+      )
     }
-  )
+    return result
+  })
 
   registrar.handle('architecture:watchModel', async (event, args: { projectPath: string }) => {
     const key = projectKey(args.projectPath, deps)

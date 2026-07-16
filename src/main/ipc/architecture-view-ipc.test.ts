@@ -1,6 +1,6 @@
-import { mkdtemp } from 'fs/promises'
-import { tmpdir } from 'os'
-import { join } from 'path'
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const handlers = new Map<string, (_event: unknown, args: unknown) => Promise<unknown>>()
@@ -19,6 +19,18 @@ import {
   type ArchitectureIpcRegistrar
 } from './architecture'
 import type { ScryerEngine } from '../scryer/engine'
+
+async function captureError(action: () => unknown): Promise<Error> {
+  try {
+    await action()
+  } catch (error) {
+    if (error instanceof Error) {
+      return error
+    }
+    throw error
+  }
+  throw new Error('Expected action to fail')
+}
 
 describe('registerArchitectureHandlers native engine migration', () => {
   afterEach(() => {
@@ -548,8 +560,7 @@ describe('registerArchitectureHandlers native engine migration', () => {
         projectPath,
         operationId: 'scryer.node.update',
         input: { nodes: [{ node_id: 'api', name: 'API' }] },
-        requestId: 'req-node-update',
-        leaseToken: 'renderer-token'
+        requestId: 'req-node-update'
       }
     )
 
@@ -571,12 +582,67 @@ describe('registerArchitectureHandlers native engine migration', () => {
       { nodes: [{ node_id: 'api', name: 'API' }] },
       expect.objectContaining({ requestId: 'req-node-update', transport: 'ipc' })
     )
-    expect(executeOperation.mock.calls[2]?.[2]).not.toHaveProperty('leaseToken')
     expect(send).toHaveBeenCalledWith('architecture:modelChanged', {
       projectPath,
       fileName: 'planned.scry'
     })
     expect(readView).not.toHaveBeenCalled()
+  })
+
+  it('rejects authorization and unknown execute-operation request fields without leaking values', async () => {
+    handlers.clear()
+    const executeOperation = vi.fn()
+    const registrar: ArchitectureIpcRegistrar = {
+      handle: (channel, handler) => {
+        handlers.set(channel, handler as (_event: unknown, args: unknown) => Promise<unknown>)
+      }
+    }
+    registerArchitectureHandlers(registrar, {
+      ...defaultArchitectureDeps,
+      scryerEngine: {
+        executeOperation: executeOperation as unknown as ScryerEngine['executeOperation'],
+        readView: vi.fn() as unknown as ScryerEngine['readView']
+      }
+    })
+    const handler = handlers.get('architecture:executeScryerOperation')!
+    const baseRequest = {
+      projectPath: '/repo',
+      operationId: 'scryer.node.update',
+      input: { nodes: [] }
+    }
+    const authorizationFields = [
+      'leaseToken',
+      'token',
+      'leaseId',
+      'activeLeaseId',
+      'authorization'
+    ] as const
+
+    for (const field of authorizationFields) {
+      const secret = `must-not-leak-execute-${field}`
+      const error = await captureError(() => handler(null, { ...baseRequest, [field]: secret }))
+      expect(error.message).toContain(`forbidden authorization field '${field}'`)
+      expect(error.message).not.toContain(secret)
+    }
+
+    const unknownValue = 'must-not-leak-execute-unknown'
+    const unknownError = await captureError(() =>
+      handler(null, {
+        ...baseRequest,
+        unexpected: unknownValue
+      })
+    )
+    expect(unknownError.message).toContain("unknown field 'unexpected'")
+    expect(unknownError.message).not.toContain(unknownValue)
+
+    await expect(handler(null, { operationId: 'scryer.node.update' })).rejects.toThrow(
+      'invalid request field'
+    )
+    await expect(handler(null, { projectPath: '/repo' })).rejects.toThrow('invalid request field')
+    await expect(handler(null, { ...baseRequest, projectPath: '   ' })).rejects.toThrow(
+      'invalid request field'
+    )
+    expect(executeOperation).not.toHaveBeenCalled()
   })
 
   it('forwards #32 structural mutation operations through generic engine dispatch', async () => {
