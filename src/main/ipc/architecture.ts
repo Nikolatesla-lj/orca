@@ -36,13 +36,10 @@ import {
 import { emptyScryModel } from '../scryer/engine/model'
 import {
   createScryerEditSessionController,
+  type ScryerAgentRunRuntime,
   type ScryerEditSessionController
 } from '../scryer/edit-session-controller'
 import { createScryerEditLeaseStore } from '../scryer/edit-lease-store'
-import {
-  createScryerMutableAgentRunRuntime,
-  type ScryerMutableAgentRunRuntime
-} from '../scryer/edit-session-runtime'
 import {
   advisorPrompt,
   initialModelPrompt,
@@ -146,12 +143,28 @@ export type ArchitectureHandlerDeps = {
   cancelSync: typeof cancelSync
   finishSync: typeof finishSync
   scryerEditSessionController?: ScryerEditSessionController
-  scryerAgentRunRuntime?: ScryerMutableAgentRunRuntime
 }
 
 const defaultScryerEngine = createScryerEngine()
 const defaultArchitectureViewAdapter = createArchitectureViewAdapter(defaultScryerEngine)
-const defaultScryerAgentRunRuntime = createScryerMutableAgentRunRuntime()
+const unavailableAgentRunRuntime: ScryerAgentRunRuntime = {
+  async getRunStatus() {
+    return 'crashed'
+  },
+  async onRunFinished() {
+    return () => undefined
+  }
+}
+
+export function createArchitectureEditSessionControllerForAgentRuntime(
+  agentRuntime: ScryerAgentRunRuntime
+): ScryerEditSessionController {
+  return createScryerEditSessionController({
+    engine: defaultScryerEngine,
+    leaseStore: createScryerEditLeaseStore(),
+    agentRuntime
+  })
+}
 
 export const defaultArchitectureDeps: ArchitectureHandlerDeps = {
   createProjectModel,
@@ -175,12 +188,9 @@ export const defaultArchitectureDeps: ArchitectureHandlerDeps = {
   beginSync,
   cancelSync,
   finishSync,
-  scryerEditSessionController: createScryerEditSessionController({
-    engine: defaultScryerEngine,
-    leaseStore: createScryerEditLeaseStore(),
-    agentRuntime: defaultScryerAgentRunRuntime
-  }),
-  scryerAgentRunRuntime: defaultScryerAgentRunRuntime
+  scryerEditSessionController: createArchitectureEditSessionControllerForAgentRuntime(
+    unavailableAgentRunRuntime
+  )
 }
 
 export function shouldNotifyModelFile(filename: string | Buffer): boolean {
@@ -864,15 +874,12 @@ export function registerArchitectureHandlers(
 
   registrar.handle('architecture:beginEditSession', async (_event, rawArgs: unknown) => {
     const args = parseArchitectureBeginEditSessionRequest(rawArgs)
-    await deps.scryerAgentRunRuntime?.setRunStatus(args.agentRunId, 'running', { emit: false })
     return requireEditSessionController(deps).beginAgentEditSession(args)
   })
 
   registrar.handle('architecture:completeEditSession', async (event, rawArgs: unknown) => {
     const args = parseArchitectureCompleteEditSessionRequest(rawArgs)
-    await deps.scryerAgentRunRuntime?.setRunStatus(args.agentRunId, 'done', { emit: false })
     const result = await requireEditSessionController(deps).completeAgentEditSession(args)
-    deps.scryerAgentRunRuntime?.clearRun(args.agentRunId)
     if (result.outcome === 'folded') {
       notifyModelChanged(event, args.projectPath, undefined, deps)
     }
@@ -881,9 +888,7 @@ export function registerArchitectureHandlers(
 
   registrar.handle('architecture:cancelEditSession', async (_event, rawArgs: unknown) => {
     const args = parseArchitectureCancelEditSessionRequest(rawArgs)
-    await deps.scryerAgentRunRuntime?.setRunStatus(args.agentRunId, 'cancelled', { emit: false })
     await requireEditSessionController(deps).cancelAgentEditSession(args)
-    deps.scryerAgentRunRuntime?.clearRun(args.agentRunId)
   })
 
   registrar.handle('architecture:readEditSession', (_event, rawArgs: unknown) => {
