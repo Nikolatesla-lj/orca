@@ -45,6 +45,11 @@ Instructions:
 8. Call get_changes to summarize what was modeled.`
 }
 
+// Why: the visible Fill with AI is the Container Generation entry point (#73). The
+// agent must build one complete proposal and commit it with a single atomic
+// fill_container call — the retired legacy set_node path is no longer offered, the
+// Engine never falls back to it, and the agent never folds or decides the terminal
+// state (Orca's completion gate owns that).
 export function nodeFillPrompt(args: {
   modelName: string
   cwd: string
@@ -53,30 +58,22 @@ export function nodeFillPrompt(args: {
   nodeKind: string
   modelJson: string
 }): string {
-  const childKind =
-    args.nodeKind === 'system'
-      ? 'containers'
-      : args.nodeKind === 'container'
-        ? 'components'
-        : args.nodeKind === 'component'
-          ? 'operations, processes, and models'
-          : 'child nodes'
-
-  return `You have access to Orca's Scryer-compatible architecture MCP tools. Fill out the internals of "${args.nodeName}" in model "${args.modelName}" from ${args.cwd}.
+  return `You have access to Orca's Scryer-compatible architecture MCP tools. Fill out the internals of "${args.nodeName}" in model "${args.modelName}" from ${args.cwd} using Container Generation.
 
 Current model state:
 ${args.modelJson}
 
 Instructions:
-1. Call get_rules.
-2. Call get_node with id "${args.nodeId}" to inspect the node context.
-3. Use get_structure with path "${args.cwd}" and read relevant source files.
-4. Add ${childKind} using set_node on "${args.nodeId}".
-5. Set status "implemented" on nodes that already exist in code. Leave new planned nodes as "proposed".
-6. Update source mappings for new nodes.
-7. Call get_changes.
+1. Call get_rules to load the modeling workflow and C4 rules.
+2. Call get_structure with path "${args.cwd}" and read the source files that implement "${args.nodeName}" (id "${args.nodeId}") so you understand its real components, their relationships, and boundaries.
+3. Assemble ONE complete proposal for the internals of "${args.nodeName}": every component, the links between them, and any groups — as a single request-local structure. Reference components only by local proposal keys; never invent node ids.
+4. Call fill_container EXACTLY ONCE with container_id "${args.nodeId}" and that complete proposal. This is a single atomic Container Generation: one call fills the whole container.
 
-Focus only on "${args.nodeName}". Do not change boundaries outside this scope.`
+Constraints:
+- Build the internals ONLY through the single fill_container call. Do not use the retired per-node mutation tools, node subtree edits, or any other legacy path to add components one by one.
+- If fill_container (the Engine) fails, do NOT fall back to a legacy tool and do NOT retry with a per-node mutation — stop and report the failure verbatim.
+- Do NOT fold, mark nodes implemented, or otherwise decide whether the result is accepted. Orca's completion gate owns the terminal state of the generated subtree.
+- Focus only on "${args.nodeName}". Do not change anything outside this container's scope.`
 }
 
 export function advisorPrompt(args: { modelName: string; cwd: string; modelJson: string }): string {
