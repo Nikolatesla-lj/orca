@@ -5,7 +5,7 @@ import { detectLanguage } from '../../lib/language-detect'
 import { launchAgentInNewTab } from '../../lib/launch-agent-in-new-tab'
 import { useAppStore } from '../../store'
 import type { AgentStatusEntry } from '../../../../shared/agent-status-types'
-import type { ArchitectureWorkspace } from '../../../../shared/types'
+import type { ArchitectureWorkspace, TuiAgent } from '../../../../shared/types'
 import type {
   ArchitectureDriftReport,
   ArchitectureGroup,
@@ -36,6 +36,7 @@ import {
   type ArchitectureProjectModelEntry
 } from './useArchitectureModelSession'
 import { useArchitectureAiRunSession } from './useArchitectureAiRunSession'
+import { useArchitectureContainerFillRun } from './useArchitectureContainerFillRun'
 
 export type {
   ArchitectureProjectModelEntry,
@@ -2013,42 +2014,22 @@ export function useArchitectureModelController({
     flushPendingArchitectureViewWork
   ])
 
-  const fillNodeWithAi = useCallback(
-    async (nodeId: string) => {
-      if (!projectPath) {
-        return
-      }
-      if (!aiRunSession.beginRun('fill', 'Preparing Fill with AI prompt')) {
-        return
-      }
-      try {
-        await flushPendingArchitectureViewWork()
-        const result = await window.api.architecture.prepareNodeFillPrompt({
-          projectPath,
-          modelName: activeModelNameRef.current,
-          nodeId
-        })
-        launchArchitectureAgentPrompt(
-          result.prompt,
-          'Could not launch an Orca agent terminal for architecture node fill.'
-        )
-        setMessage('Fill with AI prompt sent')
-        aiRunSession.markRun('fill', 'done', 'Fill with AI prompt sent')
-      } catch (aiError) {
-        const text = aiError instanceof Error ? aiError.message : String(aiError)
-        setError(text)
-        aiRunSession.markRun('fill', 'failed', text)
-        toast.error(text)
-      }
-    },
-    [
-      activeModelNameRef,
-      aiRunSession,
-      launchArchitectureAgentPrompt,
-      projectPath,
-      flushPendingArchitectureViewWork
-    ]
-  )
+  // Why: the visible Fill with AI is the Container Generation product path (#73). Its
+  // run lifecycle — acquire the edit-session lease before the agent launches, then
+  // reflect the token-free completion gate — lives in a focused hook so this controller
+  // stays a thin wiring layer instead of growing another agent terminal state machine.
+  const { fillNodeWithAi } = useArchitectureContainerFillRun({
+    projectPath,
+    worktreeId: workspace.worktreeId,
+    agentName: (activeAgent?.name ?? 'codex') as TuiAgent,
+    activeModelName,
+    beginFillRun: (message) => aiRunSession.beginRun('fill', message),
+    markFillRun: (phase, message) => aiRunSession.markRun('fill', phase, message),
+    flushPendingWork: flushPendingArchitectureViewWork,
+    reloadModel: () => loadModel('model'),
+    setMessage,
+    setError
+  })
 
   const startAdvisorReview = useCallback(async () => {
     if (!projectPath) {
