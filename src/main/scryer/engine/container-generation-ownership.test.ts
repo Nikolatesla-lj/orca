@@ -1,5 +1,5 @@
-import { readFile } from 'fs/promises'
-import { join } from 'path'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const ROOT = process.cwd()

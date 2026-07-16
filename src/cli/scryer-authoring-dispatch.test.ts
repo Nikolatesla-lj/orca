@@ -1,8 +1,8 @@
-import { existsSync } from 'fs'
-import { mkdir, mkdtemp, readFile, writeFile } from 'fs/promises'
-import { tmpdir } from 'os'
-import { join } from 'path'
-import { Readable } from 'stream'
+import { existsSync } from 'node:fs'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { Readable } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ScryModel } from '../main/scryer/engine/model'
 
