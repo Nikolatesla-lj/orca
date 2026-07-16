@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -123,6 +124,93 @@ describe('Scryer operation pipeline', () => {
       ok: false,
       error: { code: 'internal_error', details: { reason: 'error_details_schema_failed' } }
     })
+  })
+
+  it('fails a malformed executor warning before the first semantic write', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-pipeline-warn-'))
+    await writeModel(projectPath)
+    const catalog = createDefaultScryerOperationCatalog()
+    const contract = catalog.getOperationContract('scryer.node.update')!
+    const original = contract.execute
+    contract.execute = async (args) => {
+      const base = await original(args)
+      if (!base.ok) {
+        return base
+      }
+      return {
+        ok: true,
+        outcome: {
+          ...base.outcome,
+          meta: { ...base.outcome.meta, warnings: [{ code: 'not_a_real_warning_code' } as never] }
+        }
+      }
+    }
+
+    const result = await createScryerEngine({ catalog }).executeOperation(
+      'scryer.node.update',
+      { nodes: [{ node_id: 'api', name: 'Renamed API' }] },
+      context(projectPath, 'req-warn')
+    )
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: 'internal_error', details: { reason: 'malformed_warning' } }
+    })
+    // No planned write leaked despite the executor having produced changes.
+    expect(existsSync(join(projectPath, '.scryer', 'planned.scry'))).toBe(false)
+    const committed = JSON.parse(await readFile(join(projectPath, '.scryer', 'model.scry'), 'utf8'))
+    expect(committed.nodes[0].name).toBe('API')
+  })
+
+  it('leaves committed and planned untouched when the final snapshot is invalid', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-pipeline-snapshot-'))
+    await writeModel(projectPath)
+    const catalog = createDefaultScryerOperationCatalog()
+    const contract = catalog.getOperationContract('scryer.node.update')!
+    const original = contract.execute
+    contract.execute = async (args) => {
+      const base = await original(args)
+      if (!base.ok) {
+        return base
+      }
+      // Structurally broken planned snapshot: missing required arrays.
+      return {
+        ok: true,
+        outcome: { ...base.outcome, changes: { planned: { version: '0.3', nodes: [] } as never } }
+      }
+    }
+
+    const result = await createScryerEngine({ catalog }).executeOperation(
+      'scryer.node.update',
+      { nodes: [{ node_id: 'api', name: 'Broken API' }] },
+      context(projectPath, 'req-snapshot')
+    )
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: 'internal_error', details: { reason: 'invalid_final_snapshot' } }
+    })
+    expect(existsSync(join(projectPath, '.scryer', 'planned.scry'))).toBe(false)
+    const committed = JSON.parse(await readFile(join(projectPath, '.scryer', 'model.scry'), 'utf8'))
+    expect(committed.nodes[0].name).toBe('API')
+  })
+
+  it('surfaces a commit IO failure as an error without a partial or legacy write', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-pipeline-io-'))
+    await writeModel(projectPath)
+    const stateStore = createScryerStateStore({ test: { failPrimaryTarget: 'planned' } })
+
+    const result = await createScryerEngine({ stateStore }).executeOperation(
+      'scryer.node.update',
+      { nodes: [{ node_id: 'api', name: 'Renamed API' }] },
+      context(projectPath, 'req-io')
+    )
+
+    expect(result).toMatchObject({ ok: false, error: { code: 'io_error' } })
+    // The engine surfaces the failure; it never falls back to a legacy writer.
+    expect(existsSync(join(projectPath, '.scryer', 'planned.scry'))).toBe(false)
+    const committed = JSON.parse(await readFile(join(projectPath, '.scryer', 'model.scry'), 'utf8'))
+    expect(committed.nodes[0].name).toBe('API')
   })
 
   it('resolves branched policy before execution', async () => {

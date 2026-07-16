@@ -85,6 +85,34 @@ describe('Scryer state store', () => {
     expect(committed.nodes[0].name).toBe('API')
   })
 
+  it('defensively rejects an illegal commit plan before writing any semantic file', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-state-illegal-plan-'))
+    await writeModel(projectPath, 'model.scry', model('API'))
+    await writeModel(projectPath, 'planned.scry', model('API Draft'))
+    const store = createScryerStateStore()
+    const plan: ScryerStateCommitPlan = {
+      operationId: 'scryer.node.update',
+      requestId: 'req-illegal',
+      project: { projectRoot: projectPath },
+      primary: [
+        // Structurally invalid: missing the required links/groups arrays.
+        { target: 'planned', model: { version: '0.3', nodes: [] } as never },
+        { target: 'committed', model: model('Should Not Land') as never }
+      ],
+      bestEffort: []
+    }
+
+    await expect(store.commit(plan)).rejects.toMatchObject({
+      code: 'internal_error',
+      details: { reason: 'invalid_final_snapshot' }
+    })
+    const planned = JSON.parse(await readFile(join(projectPath, '.scryer', 'planned.scry'), 'utf8'))
+    const committed = JSON.parse(await readFile(join(projectPath, '.scryer', 'model.scry'), 'utf8'))
+    // Nothing was written: both files retain their pre-commit contents.
+    expect(planned.nodes[0].name).toBe('API Draft')
+    expect(committed.nodes[0].name).toBe('API')
+  })
+
   it('keeps successful primary writes when best-effort maintenance fails', async () => {
     const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-state-best-effort-'))
     await writeModel(projectPath, 'model.scry', model('API'))

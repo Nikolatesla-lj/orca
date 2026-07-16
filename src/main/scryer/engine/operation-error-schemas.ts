@@ -155,6 +155,7 @@ export const errorDetailSchemas = {
         z.literal('policy_violation'),
         z.literal('malformed_warning'),
         z.literal('unknown_warning_code'),
+        z.literal('invalid_final_snapshot'),
         z.literal('unexpected_exception')
       ]),
       contractOperationId: z.string().optional()

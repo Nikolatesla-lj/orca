@@ -45,6 +45,7 @@ export function internalError(
     | 'policy_violation'
     | 'malformed_warning'
     | 'unknown_warning_code'
+    | 'invalid_final_snapshot'
     | 'unexpected_exception',
   message: string
 ): ScryerOperationResult {

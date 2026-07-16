@@ -52,6 +52,7 @@ async function runResolvedOperation(args: {
     return failureResult(operationId, requestId, options.errorMapper, authorizationFailure)
   }
   const state = await options.store.loadDeclaredState(project, policy)
+  const services = createServices(state, options.clock)
   let executorResult
   try {
     executorResult = await contract.execute({
@@ -59,7 +60,7 @@ async function runResolvedOperation(args: {
       context,
       project,
       state,
-      services: createServices(state, options.clock)
+      services
     })
   } catch (error) {
     return options.errorMapper.toOperationResult({
@@ -118,22 +119,47 @@ async function runResolvedOperation(args: {
       plan.message
     )
   }
-  const commitResult =
-    plan.primary.length > 0 || plan.bestEffort.length > 0
-      ? await options.store.commit(plan)
-      : { warnings: [] }
-  for (const warning of commitResult.warnings) {
-    const warningCheck = operationWarningSchema.safeParse(warning)
-    if (!warningCheck.success) {
+  // Single pre-commit gate: validate executor-declared warnings and the final
+  // snapshot(s) BEFORE the first semantic write, so a malformed warning or an
+  // invalid would-be snapshot never leaves a partial write on disk.
+  for (const warning of executorResult.outcome.meta?.warnings ?? []) {
+    if (!operationWarningSchema.safeParse(warning).success) {
       return internalError(
         operationId,
         requestId,
         options.errorMapper,
         'malformed_warning',
-        `State-store warning for ${operationId} violated warning schema`
+        `Executor warning for ${operationId} violated warning schema`
       )
     }
   }
+  for (const item of plan.primary) {
+    if (item.target !== 'planned' && item.target !== 'committed') {
+      continue
+    }
+    let snapshotInvalid: boolean
+    try {
+      snapshotInvalid = services.validators
+        .validateModel(item.model)
+        .some((finding) => finding.severity === 'error')
+    } catch {
+      // A snapshot the validators cannot even traverse is structurally broken.
+      snapshotInvalid = true
+    }
+    if (snapshotInvalid) {
+      return internalError(
+        operationId,
+        requestId,
+        options.errorMapper,
+        'invalid_final_snapshot',
+        `Final ${item.target} snapshot for ${operationId} failed validation`
+      )
+    }
+  }
+  const commitResult =
+    plan.primary.length > 0 || plan.bestEffort.length > 0
+      ? await options.store.commit(plan)
+      : { warnings: [] }
   return options.errorMapper.toOperationResult({
     ok: true,
     operationId,

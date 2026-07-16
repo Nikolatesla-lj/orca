@@ -3,6 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { ScryerEngineError } from './engine-error'
 import type { ScryModel } from './model'
+import { scryModelSchema } from './model-schemas'
 import type { ScryerPaths } from './paths'
 import {
   atomicWriteStateFile,
@@ -106,6 +107,22 @@ export async function commitScryerStatePlan(args: {
   failureInjection?: StateStoreFailureInjection
   readCommitted(): Promise<ScryModel>
 }): Promise<ScryerStateCommitResult> {
+  // Why: defensively reject an illegal commit plan before touching planned.scry or
+  // model.scry, so a structurally-invalid snapshot never lands on disk and never
+  // leaves a partial write behind. Legal plans still get all-or-nothing IO rollback.
+  for (const item of args.plan.primary) {
+    if (item.target !== 'planned' && item.target !== 'committed') {
+      continue
+    }
+    if (!scryModelSchema.safeParse(item.model).success) {
+      throw new ScryerEngineError(
+        'internal_error',
+        `Refusing to commit an invalid ${item.target} snapshot for ${args.plan.operationId}`,
+        { reason: 'invalid_final_snapshot', contractOperationId: args.plan.operationId }
+      )
+    }
+  }
+
   const backups = new Map<string, string | null>()
   const committed = args.plan.primary.find((item) => item.target === 'committed') as
     | { target: 'committed'; model: ScryModel }
