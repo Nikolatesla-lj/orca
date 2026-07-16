@@ -3,8 +3,39 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { CompletionGateResult } from './edit-session-gate'
-import { hasPreSyncSnapshot, readModel, writeModel } from './model-store'
+import { hasPreSyncSnapshot } from './model-store'
 import { beginSync, cancelSync, finishSync, recordSyncCompletionGate } from './sync'
+
+type ScryModel = {
+  version: '0.3'
+  nodes: Record<string, unknown>[]
+  links: Record<string, unknown>[]
+  groups: Record<string, unknown>[]
+  sourceMap: Record<string, unknown>
+  boundaries: Record<string, unknown>
+}
+
+function scryModel(overrides: Partial<ScryModel> = {}): ScryModel {
+  return {
+    version: '0.3',
+    nodes: [],
+    links: [],
+    groups: [],
+    sourceMap: {},
+    boundaries: {},
+    ...overrides
+  }
+}
+
+// Seed the strict committed model on disk so sync reads it through the Engine.
+async function seedCommitted(projectPath: string, model: ScryModel): Promise<void> {
+  await mkdir(join(projectPath, '.scryer'), { recursive: true })
+  await writeFile(
+    join(projectPath, '.scryer', 'model.scry'),
+    JSON.stringify(model, null, 2),
+    'utf8'
+  )
+}
 
 function completionGate(
   overrides: Partial<
@@ -34,53 +65,44 @@ function completionGate(
 }
 
 describe('architecture sync lifecycle', () => {
-  it('creates a real pre-sync snapshot, builds a drift prompt, and restores the model on cancel', async () => {
+  it('creates a real pre-sync snapshot and builds a drift prompt from the Engine model', async () => {
     const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-sync-'))
     await mkdir(join(projectPath, 'src'), { recursive: true })
     await writeFile(join(projectPath, 'src', 'index.ts'), 'export const v = 1\n')
-    await writeModel(projectPath, {
-      nodes: [
-        {
-          id: 'system',
-          type: 'c4',
-          data: { name: 'Shop', description: 'Commerce', kind: 'system' }
-        },
-        {
-          id: 'api',
-          parentId: 'system',
-          type: 'c4',
-          data: { name: 'API', description: 'HTTP API', kind: 'container', status: 'implemented' }
-        }
-      ],
-      edges: [],
-      sourceMap: { api: [{ pattern: 'src/**/*.ts' }] },
-      projectPath
-    })
+    await seedCommitted(
+      projectPath,
+      scryModel({
+        nodes: [
+          { id: 'system', kind: 'system', name: 'Shop', description: 'Commerce' },
+          {
+            id: 'api',
+            kind: 'container',
+            name: 'API',
+            parentId: 'system',
+            description: 'HTTP API',
+            appearance: { status: 'implemented' }
+          }
+        ],
+        sourceMap: { api: [{ pattern: 'src/**/*.ts' }] }
+      })
+    )
 
-    await beginSync(projectPath, { modelName: 'Architecture' })
-    const model = await readModel(projectPath)
-    model.nodes[1]!.data.name = 'Broken During Sync'
-    await writeModel(projectPath, model)
-
-    const restored = await cancelSync(projectPath)
-    expect(restored.nodes.find((node) => node.id === 'api')?.data.name).toBe('API')
-
-    const prompt = (await beginSync(projectPath, { modelName: 'Architecture' })).prompt
+    const { prompt } = await beginSync(projectPath, { modelName: 'Architecture' })
+    expect(hasPreSyncSnapshot(projectPath)).toBe(true)
     expect(prompt).toContain('architecture model "Architecture"')
     expect(prompt).toContain('"api"')
     expect(prompt).toContain('src/**/*.ts')
     expect(prompt).not.toContain('"position"')
     expect(prompt).not.toContain('"refPositions"')
+
+    // Cancel tears down the sync sentinel; it does not restore through a legacy writer.
+    await cancelSync(projectPath)
+    expect(hasPreSyncSnapshot(projectPath)).toBe(false)
   })
 
   it('clears implementing state and updates sync marker when sync finishes', async () => {
     const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-sync-finish-'))
-    await writeModel(projectPath, {
-      nodes: [],
-      edges: [],
-      sourceMap: {},
-      projectPath
-    })
+    await seedCommitted(projectPath, scryModel())
 
     await beginSync(projectPath, { modelName: 'Architecture' })
     recordSyncCompletionGate(projectPath, completionGate())
@@ -134,7 +156,7 @@ describe('architecture sync lifecycle', () => {
     }
   ])('preserves sync recovery state when completion is $label', async ({ gate }) => {
     const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-sync-gate-'))
-    await writeModel(projectPath, { nodes: [], edges: [], sourceMap: {}, projectPath })
+    await seedCommitted(projectPath, scryModel())
     await beginSync(projectPath, { modelName: 'Architecture' })
     const baselinePath = join(projectPath, '.scryer', 'model.baseline.scry')
     await writeFile(baselinePath, 'baseline-before', 'utf8')
@@ -150,7 +172,7 @@ describe('architecture sync lifecycle', () => {
 
   it('clears stale completion state when a sync is cancelled', async () => {
     const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-sync-cancel-gate-'))
-    await writeModel(projectPath, { nodes: [], edges: [], sourceMap: {}, projectPath })
+    await seedCommitted(projectPath, scryModel())
     await beginSync(projectPath, { modelName: 'Architecture' })
     recordSyncCompletionGate(projectPath, completionGate())
 
@@ -163,7 +185,7 @@ describe('architecture sync lifecycle', () => {
 
   it('does not let a duplicate blocked completion downgrade a successful gate', async () => {
     const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-sync-duplicate-gate-'))
-    await writeModel(projectPath, { nodes: [], edges: [], sourceMap: {}, projectPath })
+    await seedCommitted(projectPath, scryModel())
     await beginSync(projectPath, { modelName: 'Architecture' })
     recordSyncCompletionGate(projectPath, completionGate())
     recordSyncCompletionGate(

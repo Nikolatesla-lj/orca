@@ -915,8 +915,8 @@ export type ArchitectureApi = {
   beginSync: (args: {
     projectPath: string
     modelName?: string
-  }) => Promise<{ prompt: string; drift: DriftReport; snapshot: C4ModelData }>
-  cancelSync: (args: { projectPath: string }) => Promise<C4ModelData>
+  }) => Promise<{ prompt: string; drift: DriftReport }>
+  cancelSync: (args: { projectPath: string }) => Promise<void>
   finishSync: (args: { projectPath: string }) => Promise<void>
   beginEditSession: (
     args: ArchitectureBeginEditSessionRequest

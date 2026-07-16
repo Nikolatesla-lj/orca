@@ -1,21 +1,50 @@
 import type { C4ModelData, DriftReport } from '../../shared/scryer/model-types'
+import { parseModelData } from '../../shared/scryer/parse-model'
 import { serializeModelForPrompt, syncPrompt } from '../../shared/scryer/prompts'
-import { checkDrift } from './drift'
+import { readDriftReport } from './architecture-drift-report'
 import type { CompletionGateResult } from './edit-session-gate'
+import { createScryerEngine } from './engine'
 import {
   clearPreSyncSnapshot,
+  hasPreSyncSnapshot,
   markSynced,
-  readModel,
-  readPreSyncSnapshot,
   setImplementing,
-  writeModel,
   writePreSyncSnapshot
 } from './model-store'
 
 export type BeginSyncResult = {
   prompt: string
   drift: DriftReport
-  snapshot: C4ModelData
+}
+
+const syncEngine = createScryerEngine()
+
+function syncContext(projectPath: string) {
+  return {
+    requestId: `sync-${Date.now()}`,
+    transport: 'ipc' as const,
+    caller: 'human' as const,
+    cwd: projectPath,
+    projectRoot: projectPath
+  }
+}
+
+// Why: sync reads the committed architecture through the Engine seam (never the legacy
+// readModel), then adapts the strict 0.3 model into the C4 shape the prompt serializer
+// expects. This is prompt/snapshot maintenance, not legacy semantic ownership.
+async function readCommittedArchitectureModel(projectPath: string): Promise<C4ModelData> {
+  const view = await syncEngine.readView(
+    { layer: 'committed', view: 'full' },
+    syncContext(projectPath)
+  )
+  if (!view.ok) {
+    throw new Error(view.error.message)
+  }
+  const model = view.result.view === 'full' ? view.result.model : null
+  if (!model) {
+    throw new Error('Scryer readView did not return a full model for architecture sync')
+  }
+  return { ...parseModelData(JSON.stringify(model)), projectPath }
 }
 
 const completionGatesByProject = new Map<string, CompletionGateResult>()
@@ -68,7 +97,10 @@ export async function beginSync(
   options?: { modelName?: string }
 ): Promise<BeginSyncResult> {
   completionGatesByProject.delete(projectPath)
-  const [model, drift] = await Promise.all([readModel(projectPath), checkDrift(projectPath)])
+  const [model, drift] = await Promise.all([
+    readCommittedArchitectureModel(projectPath),
+    readDriftReport(syncEngine, syncContext(projectPath))
+  ])
   await writePreSyncSnapshot(projectPath, model)
   await setImplementing(projectPath, true)
   return {
@@ -78,23 +110,22 @@ export async function beginSync(
       drift,
       modelJson: serializeModelForPrompt(model)
     }),
-    drift,
-    snapshot: model
+    drift
   }
 }
 
-export async function cancelSync(projectPath: string): Promise<C4ModelData> {
-  const snapshot = await readPreSyncSnapshot(projectPath)
-  if (!snapshot) {
-    completionGatesByProject.delete(projectPath)
-    await setImplementing(projectPath, false)
-    throw new Error('No pre-sync architecture snapshot found.')
-  }
-  await writeModel(projectPath, snapshot)
+// Why: cancelling a sync tears down the sync sentinel and implementing flag only. It does
+// NOT restore the committed model through a legacy writer — the sync agent's edits live in
+// the plan layer behind its edit-session lease, and cancelling that session (#70) discards
+// them. There is nothing for cancelSync to roll back on the committed model.
+export async function cancelSync(projectPath: string): Promise<void> {
+  const hadSnapshot = hasPreSyncSnapshot(projectPath)
   await clearPreSyncSnapshot(projectPath)
   await setImplementing(projectPath, false)
   completionGatesByProject.delete(projectPath)
-  return snapshot
+  if (!hadSnapshot) {
+    throw new Error('No pre-sync architecture snapshot found.')
+  }
 }
 
 export async function finishSync(projectPath: string): Promise<void> {

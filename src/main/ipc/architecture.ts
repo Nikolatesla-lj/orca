@@ -16,6 +16,7 @@ import {
   sanitizeProjectModelName
 } from '../scryer/model-store'
 import { callScryerTool } from '../scryer/mcp-tools'
+import { driftReportFromEngineResult } from '../scryer/architecture-drift-report'
 import { writeArchitectureMcpConfig } from '../scryer/mcp-config'
 import {
   beginSync,
@@ -49,7 +50,7 @@ import {
   nodeFillPrompt,
   serializeModelForPrompt
 } from '../../shared/scryer/prompts'
-import type { C4ModelData, DriftReport, ScryerToolCall } from '../../shared/scryer/model-types'
+import type { C4ModelData, ScryerToolCall } from '../../shared/scryer/model-types'
 import {
   parseArchitectureBeginEditSessionRequest,
   parseArchitectureCancelEditSessionRequest,
@@ -442,32 +443,6 @@ async function readRendererExtensionState(
     }
   } catch {
     return null
-  }
-}
-
-function driftReportFromEngineResult(result: unknown): DriftReport | null {
-  if (typeof result !== 'object' || result === null) {
-    return null
-  }
-  const record = result as {
-    clean?: unknown
-    scopes?: Record<string, unknown>[]
-  }
-  if (!Array.isArray(record.scopes)) {
-    return null
-  }
-  return {
-    nodes: record.scopes.map((scope) => ({
-      nodeId: String(scope.nodeId),
-      nodeName: typeof scope.nodeName === 'string' ? scope.nodeName : '',
-      patterns:
-        typeof scope.path === 'string'
-          ? [scope.path]
-          : Array.isArray(scope.changedFiles)
-            ? scope.changedFiles.filter((item): item is string => typeof item === 'string')
-            : []
-    })),
-    structureChanged: record.clean === false && record.scopes.length === 0
   }
 }
 
