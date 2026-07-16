@@ -10,6 +10,7 @@ export const fieldErrorSchema = z
   .strict()
 
 export const validationFindingCodeSchema = z.enum([
+  'destructive_change',
   'duplicate_id',
   'missing_reference',
   'invalid_hierarchy',

@@ -71,6 +71,7 @@ export type EvaluateCompletionGateInput = {
   validation: ScryerModelValidateResult
   activeLease?: ModelEditLease | null
   agentRunId?: string
+  requireActiveLease?: boolean
 }
 
 const KNOWN_PENDING_KINDS = new Set(['node', 'link', 'responsibility', 'property', 'group'])
@@ -137,7 +138,13 @@ function pendingRisks(changes: PendingChange[]): CompletionGateRisk[] {
 function leaseBlocker(input: EvaluateCompletionGateInput): CompletionGateBlocker | null {
   const lease = input.activeLease
   if (!lease) {
-    return null
+    return input.requireActiveLease
+      ? {
+          code: 'lease_conflict',
+          message: 'Scryer completion requires an active agent edit lease',
+          details: { agentRunId: input.agentRunId }
+        }
+      : null
   }
   if (lease.owner && lease.owner !== 'agent') {
     return {

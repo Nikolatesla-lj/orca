@@ -70,7 +70,7 @@ export type ScryerAgentRunRuntime = {
   onRunFinished(
     agentRunId: string,
     callback: (event: ScryerAgentRunFinishedEvent) => void | Promise<void>
-  ): () => void
+  ): Promise<() => void>
 }
 
 export type CreateScryerEditSessionControllerOptions = {
@@ -147,7 +147,8 @@ async function readCompletionGate(input: {
     pending,
     validation,
     activeLease: input.activeLease,
-    agentRunId: input.agentRunId
+    agentRunId: input.agentRunId,
+    requireActiveLease: true
   })
 }
 
@@ -215,10 +216,10 @@ export function createScryerEditSessionController(
         )
       }
       const key = sessionKey(input.projectPath, input.agentRunId)
-      subscriptions.get(key)?.()
-      subscriptions.set(
-        key,
-        options.agentRuntime.onRunFinished(input.agentRunId, async (event) => {
+      unsubscribeSession(input.projectPath, input.agentRunId)
+      const unsubscribe = await options.agentRuntime.onRunFinished(
+        input.agentRunId,
+        async (event) => {
           if (event.status === 'done') {
             await controller.completeAgentEditSession({
               projectPath: input.projectPath,
@@ -231,8 +232,13 @@ export function createScryerEditSessionController(
             projectPath: input.projectPath,
             agentRunId: input.agentRunId
           })
-        })
+        }
       )
+      if ((await options.agentRuntime.getRunStatus(input.agentRunId)) === 'running') {
+        subscriptions.set(key, unsubscribe)
+      } else {
+        unsubscribe()
+      }
       return {
         projectPath: input.projectPath,
         agentRunId: input.agentRunId

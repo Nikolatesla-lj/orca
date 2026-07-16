@@ -243,6 +243,39 @@ describe('Scryer edit session controller', () => {
     await expect(leaseStore.read({ projectPath })).resolves.toMatchObject({ agentRunId })
   })
 
+  it('rejects a destructive candidate introduced after the pre-fold gate', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-controller-race-'))
+    await writeScryerFile(projectPath, 'model.scry', model())
+    await writeScryerFile(projectPath, 'planned.scry', model('Public API'))
+    const baseEngine = createScryerEngine()
+    let changedBeforeFold = false
+    const engine: ScryerEngine = {
+      ...baseEngine,
+      async executeOperation<T = unknown>(operationId, input, context) {
+        if (operationId === 'scryer.plan.fold' && !changedBeforeFold) {
+          changedBeforeFold = true
+          await writeScryerFile(projectPath, 'planned.scry', { ...model(), nodes: [] })
+        }
+        return baseEngine.executeOperation<T>(operationId, input, context)
+      }
+    }
+    const { controller, leaseStore, runtime } = controllerHarness(engine)
+    const agentRunId = 'run-race'
+    await beginSession({ projectPath, agentRunId, controller, runtime })
+    await markDone(runtime, agentRunId)
+
+    await expect(
+      controller.completeAgentEditSession({
+        projectPath,
+        agentRunId,
+        foldPolicy: 'when_gate_passes'
+      })
+    ).rejects.toThrow('Automatic completion requires manual review')
+    await expect(leaseStore.read({ projectPath })).resolves.toMatchObject({ agentRunId })
+    const committed = JSON.parse(await readFile(join(projectPath, '.scryer', 'model.scry'), 'utf8'))
+    expect(committed.nodes).toHaveLength(1)
+  })
+
   it('retains the lease when completion evaluation fails unexpectedly', async () => {
     const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-controller-error-'))
     const engine: ScryerEngine = {

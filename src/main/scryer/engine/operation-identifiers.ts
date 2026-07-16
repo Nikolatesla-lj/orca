@@ -137,6 +137,7 @@ export type ScryerValidationPolicy =
   | 'generation_postconditions'
 
 export type ScryerValidationFindingCode =
+  | 'destructive_change'
   | 'duplicate_id'
   | 'missing_reference'
   | 'invalid_hierarchy'

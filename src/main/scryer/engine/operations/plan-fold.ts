@@ -2,7 +2,8 @@ import type {
   ScryerFoldTarget,
   ScryerOperationExecutor,
   ScryerPlanFoldInput,
-  ScryerPlanFoldResult
+  ScryerPlanFoldResult,
+  ScryerValidationFinding
 } from '../types'
 import { diffModels, type PendingChange } from '../diff'
 import { failure, success } from './operation-result'
@@ -62,6 +63,26 @@ function selectors(input: ScryerPlanFoldInput, pending: PendingChange[]): Scryer
   return targets
 }
 
+function automaticCompletionBlockers(
+  pending: PendingChange[],
+  findings: ScryerValidationFinding[]
+): ScryerValidationFinding[] {
+  const blockers = findings.filter((finding) => finding.severity === 'error')
+  for (const change of pending) {
+    if (!change.changes.some((item) => item.type === 'deleted')) {
+      continue
+    }
+    blockers.push({
+      code: 'destructive_change',
+      severity: 'error',
+      message: `${change.kind} '${change.id}' requires manual review before folding`,
+      path: 'model',
+      details: { kind: change.kind, id: change.id }
+    })
+  }
+  return blockers
+}
+
 export const planFoldOperation: ScryerOperationExecutor<
   ScryerPlanFoldInput,
   ScryerPlanFoldResult
@@ -73,6 +94,18 @@ export const planFoldOperation: ScryerOperationExecutor<
     })
   }
   const pending = diffModels(state.committed, state.planned)
+  if (input.mode === 'agent_completion') {
+    const blockers = automaticCompletionBlockers(
+      pending,
+      services.validators.validateModel(state.planned)
+    )
+    if (blockers.length > 0) {
+      // The locked snapshot must still satisfy the automatic gate checked by the controller.
+      return failure('validation_failed', 'Automatic completion requires manual review', {
+        findings: blockers
+      })
+    }
+  }
   const targets = selectors(input, pending)
   if (targets.length === 0) {
     return failure('invalid_input', 'plan.fold requires at least one fold selector', undefined, {

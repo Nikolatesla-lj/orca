@@ -876,7 +876,7 @@ export function registerArchitectureHandlers(
       await deps.scryerAgentRunRuntime?.setRunStatus(args.agentRunId, 'done', { emit: false })
       const result = await requireEditSessionController(deps).completeAgentEditSession(args)
       deps.scryerAgentRunRuntime?.clearRun(args.agentRunId)
-      if (args.foldPolicy === 'when_gate_passes' && result.foldAllowed) {
+      if (result.outcome === 'folded') {
         notifyModelChanged(event, args.projectPath, undefined, deps)
       }
       return result

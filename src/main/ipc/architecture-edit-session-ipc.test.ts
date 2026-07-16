@@ -36,16 +36,16 @@ describe('Architecture edit-session IPC handlers', () => {
       })),
       completeAgentEditSession: vi.fn(async () => ({
         ok: true,
-        foldAllowed: true,
-        autoFoldAllowed: true,
+        foldAllowed: false,
+        autoFoldAllowed: false,
         outcome: 'folded' as const,
         leaseDisposition: 'released_after_completion' as const,
-        nextAction: 'fold_allowed' as const,
+        nextAction: 'nothing_to_fold' as const,
         pending: {
-          total: 1,
+          total: 0,
           foldable: true,
-          byKind: { node: 1 },
-          byChange: { added: 1 },
+          byKind: {},
+          byChange: {},
           changes: [],
           blockers: [],
           risks: []
@@ -74,7 +74,7 @@ describe('Architecture edit-session IPC handlers', () => {
         { sender },
         { projectPath, agentRunId: 'run-1', foldPolicy: 'when_gate_passes' }
       )
-    ).resolves.toMatchObject({ nextAction: 'fold_allowed' })
+    ).resolves.toMatchObject({ outcome: 'folded', nextAction: 'nothing_to_fold' })
     await expect(
       handlers.get('architecture:readEditSession')!(null, { projectPath })
     ).resolves.toMatchObject({ activeLease: { owner: 'agent', agentRunId: 'run-1' } })

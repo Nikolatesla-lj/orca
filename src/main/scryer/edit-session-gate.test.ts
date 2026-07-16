@@ -114,6 +114,23 @@ describe('Scryer edit session completion gate', () => {
     })
   })
 
+  it('blocks controller completion when its required lease is missing', () => {
+    const result = evaluateCompletionGate({
+      pending: pending('reworded'),
+      validation: validation(),
+      requireActiveLease: true
+    })
+
+    expect(result).toMatchObject({
+      ok: false,
+      foldAllowed: false,
+      autoFoldAllowed: false,
+      outcome: 'needs_attention',
+      nextAction: 'blocked_by_lease',
+      lease: { active: false, blocked: true }
+    })
+  })
+
   it('builds one all-target fold input for automatic completion', () => {
     expect(foldInputFor(pending('reworded').changes)).toEqual({
       mode: 'agent_completion',

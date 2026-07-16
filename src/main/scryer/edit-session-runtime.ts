@@ -25,8 +25,18 @@ export function createScryerMutableAgentRunRuntime(): ScryerMutableAgentRunRunti
       return
     }
     const event: ScryerAgentRunFinishedEvent = { agentRunId, status }
-    for (const listener of listeners.get(agentRunId) ?? []) {
-      await listener(event)
+    const outcomes = await Promise.allSettled(
+      [...(listeners.get(agentRunId) ?? [])].map((listener) => listener(event))
+    )
+    const failures = outcomes.filter((outcome) => outcome.status === 'rejected')
+    if (failures.length === 1) {
+      throw failures[0].reason
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(
+        failures.map((failure) => failure.reason),
+        'Scryer agent run listeners failed'
+      )
     }
   }
 
@@ -34,16 +44,21 @@ export function createScryerMutableAgentRunRuntime(): ScryerMutableAgentRunRunti
     async getRunStatus(agentRunId) {
       return statuses.get(agentRunId) ?? 'crashed'
     },
-    onRunFinished(agentRunId, callback) {
+    async onRunFinished(agentRunId, callback) {
       const set = listeners.get(agentRunId) ?? new Set()
       set.add(callback)
       listeners.set(agentRunId, set)
-      return () => {
+      const unsubscribe = () => {
         set.delete(callback)
         if (set.size === 0) {
           listeners.delete(agentRunId)
         }
       }
+      const current = statuses.get(agentRunId)
+      if (current && current !== 'running') {
+        await callback({ agentRunId, status: current })
+      }
+      return unsubscribe
     },
     async setRunStatus(agentRunId, status, options = {}) {
       statuses.set(agentRunId, status)
