@@ -1,7 +1,7 @@
 import type { C4Edge, C4ModelData, Group } from '../../shared/scryer/model-types'
 import { isRecord } from './mcp-tool-execution'
 import { kindLabel } from './mcp-model-values'
-import { collectDescendantIds, stripNodeForAgent } from './mcp-task-model'
+import { collectDescendantIds, stripNodeForAgent } from './mcp-model-support'
 
 export function getScopedNode(model: C4ModelData, nodeId: string): unknown {
   const target = model.nodes.find((node) => node.id === nodeId)

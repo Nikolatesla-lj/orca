@@ -1,5 +1,6 @@
 import type { C4ModelData, C4Node, ScryerToolResult } from '../../shared/scryer/model-types'
 import { TASK_INSTRUCTIONS } from '../../shared/scryer/rules'
+import { groupMemberIds } from './mcp-model-support'
 import { ok } from './mcp-tool-execution'
 import {
   ancestorChain,
@@ -8,7 +9,6 @@ import {
   findNextName,
   formatContractAndNotes,
   formatContractBlock,
-  groupMemberIds,
   isSatisfied,
   mergeContract
 } from './mcp-task-model'

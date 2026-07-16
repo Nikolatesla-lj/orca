@@ -18,7 +18,7 @@ import {
 } from './mcp-model-values'
 import { validateModelShape, validateParent } from './mcp-model-validation'
 import { readModel } from './model-store'
-import { cleanupReferences, collectDescendantIds, nextNodeId } from './mcp-task-model'
+import { cleanupReferences, collectDescendantIds, nextNodeId } from './mcp-model-support'
 import { writeModelAndBaseline } from './mcp-model-persistence'
 import { strictAddEdges, strictUpdateEdges } from './mcp-strict-operation-adapters'
 

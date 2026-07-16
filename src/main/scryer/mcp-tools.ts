@@ -19,7 +19,7 @@ import {
   strictSetGroups,
   strictUpdateSourceMap
 } from './mcp-strict-operation-adapters'
-import { cleanupReferences, collectDescendantIds, stripPositions } from './mcp-task-model'
+import { cleanupReferences, collectDescendantIds, stripPositions } from './mcp-model-support'
 import { getTask } from './mcp-task-reader'
 import { fail, isRecord, isStrictScryerModel, ok } from './mcp-tool-execution'
 import {

@@ -2,7 +2,7 @@ import type { C4ModelData, ScryerToolResult } from '../../shared/scryer/model-ty
 import { parseModelData } from '../../shared/scryer/parse-model'
 import { writeBaseline, writeModel } from './model-store'
 import { executeStrictScryerOperation, fail, isStrictScryerModel, ok } from './mcp-tool-execution'
-import { stripPositions } from './mcp-task-model'
+import { stripPositions } from './mcp-model-support'
 import { validateModelShape } from './mcp-model-validation'
 
 export async function writeModelAndBaseline(
