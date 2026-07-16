@@ -69,4 +69,7 @@ export type ScryerEditSessionStatus = {
     createdAt?: string
     expiresAt?: string
   } | null
+  // Why: the last recorded completion gate for a retained sync (token-free). Lets the
+  // renderer re-derive an attention terminal after a panel remount loses local state.
+  completionGate?: ScryerCompletionGateResult | null
 }

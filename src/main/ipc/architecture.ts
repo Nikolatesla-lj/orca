@@ -20,7 +20,13 @@ import {
 } from '../scryer/model-store'
 import { callScryerTool } from '../scryer/mcp-tools'
 import { writeArchitectureMcpConfig } from '../scryer/mcp-config'
-import { beginSync, cancelSync, finishSync, recordSyncCompletionGate } from '../scryer/sync'
+import {
+  beginSync,
+  cancelSync,
+  finishSync,
+  readSyncCompletionGate,
+  recordSyncCompletionGate
+} from '../scryer/sync'
 import {
   createArchitectureViewAdapter,
   type ArchitectureViewAdapter
@@ -143,6 +149,7 @@ export type ArchitectureHandlerDeps = {
   cancelSync: typeof cancelSync
   finishSync: typeof finishSync
   recordSyncCompletionGate: typeof recordSyncCompletionGate
+  readSyncCompletionGate: typeof readSyncCompletionGate
   scryerEditSessionController?: ScryerEditSessionController
 }
 
@@ -191,6 +198,7 @@ export const defaultArchitectureDeps: ArchitectureHandlerDeps = {
   cancelSync,
   finishSync,
   recordSyncCompletionGate,
+  readSyncCompletionGate,
   scryerEditSessionController: createArchitectureEditSessionControllerForAgentRuntime(
     unavailableAgentRunRuntime
   )
@@ -895,9 +903,13 @@ export function registerArchitectureHandlers(
     await requireEditSessionController(deps).cancelAgentEditSession(args)
   })
 
-  registrar.handle('architecture:readEditSession', (_event, rawArgs: unknown) => {
+  registrar.handle('architecture:readEditSession', async (_event, rawArgs: unknown) => {
     const args = parseArchitectureReadEditSessionRequest(rawArgs)
-    return requireEditSessionController(deps).readEditSession(args)
+    const status = await requireEditSessionController(deps).readEditSession(args)
+    // Why: surface the last recorded completion gate (token-free) so the renderer can
+    // re-derive an attention terminal after a panel remount, rather than treating the
+    // still-open sync as a running spinner.
+    return { ...status, completionGate: deps.readSyncCompletionGate(args.projectPath) }
   })
 
   registrar.handle(

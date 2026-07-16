@@ -124,6 +124,52 @@ describe('Architecture edit-session IPC handlers', () => {
     })
   })
 
+  it('surfaces the recorded completion gate on readEditSession so remount can re-derive attention', async () => {
+    const projectPath = '/repo'
+    const attentionGate = {
+      ok: false,
+      foldAllowed: false,
+      autoFoldAllowed: false,
+      outcome: 'needs_attention' as const,
+      leaseDisposition: 'retained' as const,
+      nextAction: 'manual_review' as const,
+      pending: {
+        total: 1,
+        foldable: false,
+        byKind: { node: 1 },
+        byChange: { deleted: 1 },
+        changes: [],
+        blockers: [],
+        risks: []
+      },
+      validation: { blockingCount: 0, warningCount: 0, findings: [] },
+      lease: { active: true, blocked: false, owner: 'agent' as const, agentRunId: 'run-1' }
+    }
+    const controller: ScryerEditSessionController = {
+      beginAgentEditSession: vi.fn(),
+      completeAgentEditSession: vi.fn(),
+      cancelAgentEditSession: vi.fn(),
+      readEditSession: vi.fn(async () => ({
+        projectPath,
+        activeLease: { owner: 'agent' as const, agentRunId: 'run-1' }
+      }))
+    }
+    const readSyncCompletionGate = vi.fn(() => attentionGate)
+    registerArchitectureHandlers(registrar(), {
+      ...defaultArchitectureDeps,
+      readSyncCompletionGate,
+      scryerEditSessionController: controller
+    })
+
+    const status = (await handlers.get('architecture:readEditSession')!(null, { projectPath })) as {
+      completionGate: { nextAction: string } | null
+      activeLease: unknown
+    }
+    expect(readSyncCompletionGate).toHaveBeenCalledWith(projectPath)
+    expect(status.completionGate).toEqual(attentionGate)
+    expect(status).not.toHaveProperty('activeLease.token')
+  })
+
   it('rejects authorization, unknown fields, and missing identity before controller dispatch', async () => {
     const controller: ScryerEditSessionController = {
       beginAgentEditSession: vi.fn(),

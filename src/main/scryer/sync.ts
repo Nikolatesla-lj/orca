@@ -37,6 +37,14 @@ export function recordSyncCompletionGate(projectPath: string, gate: CompletionGa
   completionGatesByProject.set(projectPath, gate)
 }
 
+// Why: the completion gate result is the only durable signal of a retained,
+// attention-blocked sync (main keeps implementing + snapshot open). Exposing it lets
+// the renderer re-derive an attention terminal after its local state is lost on a panel
+// remount, instead of misreading the still-open session as a running spinner.
+export function readSyncCompletionGate(projectPath: string): CompletionGateResult | null {
+  return completionGatesByProject.get(projectPath) ?? null
+}
+
 function requireSuccessfulCompletionGate(projectPath: string): CompletionGateResult {
   const gate = completionGatesByProject.get(projectPath)
   if (!gate) {
