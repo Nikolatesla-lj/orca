@@ -17,6 +17,12 @@ export type ScryerOperationContext = {
   }
 }
 
+export type ScryerTrustedAgentIdentity = {
+  agentRunId?: string
+  paneKey?: string
+  connectionId?: string | null
+}
+
 export type ResolvedScryerProject = {
   projectRoot: string
 }
@@ -27,6 +33,9 @@ export type ModelEditLease = {
   token: string
   owner?: 'agent' | 'human' | 'system'
   agentRunId?: string
+  paneKey?: string
+  connectionId?: string | null
+  sessionStartedAt?: number
   createdAt?: string
   expiresAt?: string
 }

@@ -1,9 +1,9 @@
-import { mkdir, mkdtemp, writeFile } from 'fs/promises'
-import { tmpdir } from 'os'
-import { join } from 'path'
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createDefaultScryerOperationCatalog } from './catalog'
-import { createScryerEngine } from './index'
+import { createScryerEngine, createScryerStateStore } from './index'
 import type { ScryerOperationContext } from './types'
 
 function context(projectPath: string, requestId = 'req-pipeline'): ScryerOperationContext {
@@ -150,6 +150,100 @@ describe('Scryer operation pipeline', () => {
     expect(result).toMatchObject({
       ok: false,
       error: { code: 'agent_run_required' }
+    })
+  })
+
+  it('evaluates lease authorization while the semantic write lock is held', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-pipeline-lock-'))
+    await writeModel(projectPath)
+    const baseStore = createScryerStateStore()
+    let lockHeld = false
+    let leaseReadObserved = false
+    const stateStore = {
+      ...baseStore,
+      async readActiveLease(root: string) {
+        expect(root).toBe(projectPath)
+        expect(lockHeld).toBe(true)
+        leaseReadObserved = true
+        return null
+      },
+      async withWriteLock<T>(root: string, action: () => Promise<T>): Promise<T> {
+        expect(root).toBe(projectPath)
+        lockHeld = true
+        try {
+          return await action()
+        } finally {
+          lockHeld = false
+        }
+      }
+    }
+
+    const result = await createScryerEngine({ stateStore }).executeOperation(
+      'scryer.node.update',
+      { nodes: [{ node_id: 'api', name: 'Locked API' }] },
+      context(projectPath, 'req-lock')
+    )
+
+    expect(result).toMatchObject({ ok: true })
+    expect(leaseReadObserved).toBe(true)
+  })
+
+  it('redacts lease credentials and credential aliases from public errors', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-pipeline-redaction-'))
+    await writeModel(projectPath)
+    await writeFile(
+      join(projectPath, '.scryer', '.model-edit-lease.json'),
+      JSON.stringify({
+        token: 'scryer-edit-super-secret',
+        owner: 'agent',
+        agentRunId: 'run-1'
+      }),
+      'utf8'
+    )
+
+    const result = await createScryerEngine().executeOperation(
+      'scryer.node.update',
+      { nodes: [{ node_id: 'api', name: 'Blocked API' }] },
+      context(projectPath, 'req-redaction')
+    )
+    const serialized = JSON.stringify(result)
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: 'lease_required',
+        details: {
+          policy: 'write_if_active',
+          reason: 'missing_authorization',
+          owner: 'agent'
+        },
+        retryable: true
+      }
+    })
+    expect(serialized).not.toContain('scryer-edit-super-secret')
+    expect(serialized).not.toContain('activeLeaseId')
+    expect(serialized).not.toContain('leaseId')
+    expect(serialized).not.toContain('leaseToken')
+  })
+
+  it('does not echo a credential from an unexpected exception message', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-pipeline-exception-'))
+    await writeModel(projectPath)
+    const catalog = createDefaultScryerOperationCatalog()
+    catalog.getOperationContract('scryer.model.validate')!.execute = () => {
+      throw new Error('unexpected scryer-edit-context-secret')
+    }
+
+    const result = await createScryerEngine({ catalog }).executeOperation(
+      'scryer.model.validate',
+      {},
+      { ...context(projectPath, 'req-exception'), leaseToken: 'scryer-edit-context-secret' }
+    )
+
+    expect(JSON.stringify(result)).not.toContain('scryer-edit-context-secret')
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: 'internal_error', message: 'Unexpected Scryer engine error' }
     })
   })
 })

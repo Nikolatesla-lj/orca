@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, readFile, writeFile } from 'fs/promises'
-import { tmpdir } from 'os'
-import { join } from 'path'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createScryerStateStore, type ScryerStateCommitPlan } from './state-store'
 import type { ScryerFlatOperationPolicy } from './types'
@@ -104,5 +104,23 @@ describe('Scryer state store', () => {
     ])
     const committed = JSON.parse(await readFile(join(projectPath, '.scryer', 'model.scry'), 'utf8'))
     expect(committed.nodes[0].name).toBe('Committed')
+  })
+
+  it('treats an expired lease as stale while the caller holds the project lock', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-state-expired-lease-'))
+    await writeModel(projectPath, '.model-edit-lease.json', {
+      token: 'expired-secret',
+      owner: 'agent',
+      agentRunId: 'run-expired',
+      expiresAt: '2000-01-01T00:00:00.000Z'
+    })
+    const store = createScryerStateStore()
+
+    const lease = await store.withWriteLock(projectPath, () => store.readActiveLease(projectPath))
+
+    expect(lease).toBeNull()
+    await expect(
+      readFile(join(projectPath, '.scryer', '.model-edit-lease.json'), 'utf8')
+    ).rejects.toThrow()
   })
 })

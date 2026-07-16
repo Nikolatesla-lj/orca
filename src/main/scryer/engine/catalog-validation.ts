@@ -70,6 +70,13 @@ export function createScryerOperationCatalog(): ScryerOperationCatalog {
           }
         }
         for (const policy of flatPolicies(contract.policy)) {
+          if (policy.semanticWrites.length > 0 && policy.lease === 'none') {
+            errors.push({
+              operationId: contract.id,
+              code: 'invalid_policy',
+              message: `${contract.id} semantic writes require an edit lease policy`
+            })
+          }
           for (const effect of policy.sideEffects) {
             const requirement = sideEffectRequirements(effect)
             if (

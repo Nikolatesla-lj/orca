@@ -27,7 +27,8 @@ import type {
   ScryerClock,
   ScryerLoadedState,
   ScryerOperationContext,
-  ScryerRequestIdFactory
+  ScryerRequestIdFactory,
+  ScryerTrustedAgentIdentity
 } from './operation-state-contracts'
 
 export type ScryerOperationAuthorizationPolicy = {
@@ -212,6 +213,9 @@ export type CreateScryerEngineOptions = {
   errorMapper?: ScryerErrorMapper
   clock?: ScryerClock
   requestIds?: ScryerRequestIdFactory
+  trustedRuntimeIdentity?: {
+    read(): ScryerTrustedAgentIdentity | null
+  }
   test?: {
     allowTestTransport?: boolean
   }

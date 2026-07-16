@@ -115,6 +115,18 @@ export const ioErrorDetailsSchema = z
   })
   .strict()
 
+const leaseAuthorizationDetailsSchema = z
+  .object({
+    policy: z.union([z.literal('write_if_active'), z.literal('completion_gate')]),
+    reason: z.union([
+      z.literal('missing_authorization'),
+      z.literal('authorization_mismatch'),
+      z.literal('run_mismatch')
+    ]),
+    owner: z.union([z.literal('agent'), z.literal('human'), z.literal('system')]).optional()
+  })
+  .strict()
+
 export const errorDetailSchemas = {
   invalid_input: z.undefined(),
   invalid_context: invalidContextDetailsSchema,
@@ -127,22 +139,7 @@ export const errorDetailSchemas = {
       retryAfterMs: z.number().optional()
     })
     .strict(),
-  lease_required: z
-    .object({
-      policy: z.union([z.literal('write_if_active'), z.literal('completion_gate')]),
-      activeLeaseId: z.string().optional(),
-      activeOwner: z
-        .union([
-          z.literal('cli'),
-          z.literal('ipc'),
-          z.literal('ui'),
-          z.literal('agent'),
-          z.literal('system'),
-          z.literal('test')
-        ])
-        .optional()
-    })
-    .strict(),
+  lease_required: leaseAuthorizationDetailsSchema,
   operation_not_found: z
     .object({
       operationId: z.string()
@@ -198,17 +195,5 @@ export const errorDetailSchemas = {
       findings: z.array(validationFindingSchema)
     })
     .strict(),
-  agent_run_required: z
-    .object({
-      mode: z.literal('agent_completion'),
-      reason: z.union([
-        z.literal('missing_context'),
-        z.literal('inactive_run'),
-        z.literal('lease_mismatch'),
-        z.literal('run_not_complete')
-      ]),
-      agentRunId: z.string().optional(),
-      leaseId: z.string().optional()
-    })
-    .strict()
+  agent_run_required: leaseAuthorizationDetailsSchema
 } satisfies Record<ScryerOperationErrorCode, z.ZodTypeAny>

@@ -7,6 +7,7 @@ import type {
   ScryerOperationContext,
   ScryerOperationPolicy
 } from './types'
+import type { PipelineOptions } from './pipeline-contracts'
 import type { ScryerStateStore } from './state-store'
 
 export function fieldErrorsFromZod(error: unknown): ScryerFieldError[] {
@@ -132,13 +133,19 @@ export async function leaseFailure(
   project: ResolvedScryerProject,
   policy: ScryerFlatOperationPolicy,
   context: ScryerOperationContext,
-  input: Record<string, unknown>
+  input: Record<string, unknown>,
+  options: Pick<PipelineOptions, 'trustedRuntimeIdentity'>
 ): Promise<ScryerExecutorFailure | null> {
-  if (policy.authorization.agentRun.required && !context.agentRunId) {
+  const trustedIdentity =
+    context.transport === 'agent' && context.caller === 'agent'
+      ? options.trustedRuntimeIdentity.read()
+      : null
+  const effectiveAgentRunId = context.agentRunId ?? trustedIdentity?.agentRunId
+  if (policy.authorization.agentRun.required && !effectiveAgentRunId) {
     return {
       code: 'agent_run_required',
       message: 'Trusted Orca agent-run context is required',
-      details: { mode: 'agent_completion', reason: 'missing_context' }
+      details: { policy: 'completion_gate', reason: 'missing_authorization' }
     }
   }
   if (policy.lease === 'none') {
@@ -150,27 +157,29 @@ export async function leaseFailure(
       ? {
           code: 'lease_required',
           message: 'Completion-gated Scryer fold requires an active matching lease',
-          details: { policy: 'completion_gate' }
+          details: { policy: 'completion_gate', reason: 'missing_authorization' }
         }
       : null
   }
-  if (context.leaseToken !== lease.token) {
+  const tokenMatches = Boolean(context.leaseToken && context.leaseToken === lease.token)
+  const trustedIdentityMatches = Boolean(
+    trustedIdentity?.agentRunId &&
+    lease.agentRunId === trustedIdentity.agentRunId &&
+    (!lease.paneKey || trustedIdentity.paneKey === lease.paneKey)
+  )
+  if (!tokenMatches && !trustedIdentityMatches) {
+    const reason =
+      context.leaseToken || trustedIdentity?.agentRunId
+        ? 'authorization_mismatch'
+        : 'missing_authorization'
     return {
       code: policy.lease === 'completion_gate' ? 'agent_run_required' : 'lease_required',
-      message: 'A Scryer model edit lease is active; the matching lease token is required.',
-      details:
-        policy.lease === 'completion_gate'
-          ? {
-              mode: 'agent_completion',
-              reason: 'lease_mismatch',
-              agentRunId: context.agentRunId,
-              leaseId: lease.token
-            }
-          : {
-              policy: 'write_if_active',
-              activeLeaseId: lease.token,
-              activeOwner: context.transport
-            },
+      message: 'A Scryer model edit lease is active; trusted authorization is required.',
+      details: {
+        policy: policy.lease,
+        reason,
+        ...(lease.owner ? { owner: lease.owner } : {})
+      },
       retryable: true
     }
   }
@@ -179,17 +188,17 @@ export async function leaseFailure(
     typeof input.mode === 'string' &&
     input.mode === 'agent_completion' &&
     lease.agentRunId &&
-    context.agentRunId !== lease.agentRunId
+    effectiveAgentRunId !== lease.agentRunId
   ) {
     return {
       code: 'agent_run_required',
       message: 'Completion-gated fold lease is bound to a different agent run',
       details: {
-        mode: 'agent_completion',
-        reason: 'lease_mismatch',
-        agentRunId: context.agentRunId,
-        leaseId: lease.token
-      }
+        policy: 'completion_gate',
+        reason: 'run_mismatch',
+        ...(lease.owner ? { owner: lease.owner } : {})
+      },
+      retryable: false
     }
   }
   return null

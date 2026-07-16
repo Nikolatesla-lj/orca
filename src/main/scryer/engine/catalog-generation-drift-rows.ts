@@ -18,7 +18,7 @@ export const GENERATION_DRIFT_CATALOG_ROWS: ScryerCatalogRow[] = [
     writeScope: 'whole_model',
     policy: flatPolicy({
       lock: 'exclusive',
-      lease: 'none',
+      lease: 'write_if_active',
       reads: [],
       semanticWrites: ['committed', 'planned'],
       maintenanceWrites: [{ target: 'baseline', mode: 'best_effort' }],
@@ -37,7 +37,7 @@ export const GENERATION_DRIFT_CATALOG_ROWS: ScryerCatalogRow[] = [
     writeScope: 'subtree',
     policy: flatPolicy({
       lock: 'exclusive',
-      lease: 'none',
+      lease: 'write_if_active',
       reads: ['committed', 'planned', 'build_edges'],
       semanticWrites: ['committed', 'planned'],
       maintenanceWrites: [{ target: 'history', mode: 'best_effort' }],

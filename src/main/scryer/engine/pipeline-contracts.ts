@@ -7,5 +7,6 @@ export type PipelineOptions = {
   errorMapper: ScryerErrorMapper
   clock: NonNullable<CreateScryerEngineOptions['clock']>
   requestIds: NonNullable<CreateScryerEngineOptions['requestIds']>
+  trustedRuntimeIdentity: NonNullable<CreateScryerEngineOptions['trustedRuntimeIdentity']>
   allowTestTransport: boolean
 }

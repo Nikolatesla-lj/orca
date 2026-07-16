@@ -124,9 +124,7 @@ describe('Scryer operation catalog', () => {
       )
       expect(contract!.successSchema).toBe(operationSchemas[operationId].success)
       expect(contract!.successSchema).not.toBe(operationSchemas['scryer.model.health'].success)
-      expect(contract!.successSchema.safeParse({ arbitrary: 'generic-record' }).success).toBe(
-        false
-      )
+      expect(contract!.successSchema.safeParse({ arbitrary: 'generic-record' }).success).toBe(false)
     }
   })
 
@@ -139,9 +137,7 @@ describe('Scryer operation catalog', () => {
       expect(String(contract!.execute)).not.toContain('registered but not implemented')
       expect(contract!.policy).toMatchObject({ semanticWrites: ['planned'] })
       expect(contract!.successSchema).toBe(operationSchemas[operationId].success)
-      expect(contract!.successSchema.safeParse({ arbitrary: 'generic-record' }).success).toBe(
-        false
-      )
+      expect(contract!.successSchema.safeParse({ arbitrary: 'generic-record' }).success).toBe(false)
     }
 
     expect(catalog.getOperationContract('scryer.node.set-subtree')).toMatchObject({
@@ -161,5 +157,35 @@ describe('Scryer operation catalog', () => {
       operationClass: 'model_correction',
       writeScope: 'subtree'
     })
+  })
+
+  it('requires every semantic writer to declare a lease policy', () => {
+    const catalog = createDefaultScryerOperationCatalog()
+
+    expect(catalog.getOperationContract('scryer.model.set')?.policy).toMatchObject({
+      lease: 'write_if_active'
+    })
+    expect(catalog.getOperationContract('scryer.container.fill')?.policy).toMatchObject({
+      lease: 'write_if_active'
+    })
+
+    const invalid = createScryerOperationCatalog()
+    const base = catalog.getOperationContract('scryer.node.update')!
+    invalid.registerOperation({
+      ...base,
+      policy: {
+        ...base.policy,
+        lease: 'none'
+      }
+    })
+
+    expect(invalid.validateCatalog().errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          operationId: 'scryer.node.update',
+          code: 'invalid_policy'
+        })
+      ])
+    )
   })
 })

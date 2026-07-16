@@ -4,7 +4,7 @@ import { createScryerIdMinter } from './id-minter'
 import { operationWarningSchema } from './operation-error-schemas'
 import { buildCommitPlan } from './pipeline-commit-plan'
 import type { PipelineOptions } from './pipeline-contracts'
-import { internalError, validateErrorDetails } from './pipeline-results'
+import { failureResult, internalError, validateErrorDetails } from './pipeline-results'
 import { createScryerSourceRouter } from './source-router'
 import { createScryerValidatorSet } from './validators'
 import type {
@@ -12,6 +12,7 @@ import type {
   ScryerFlatOperationPolicy,
   ScryerOperationContext,
   ScryerOperationContract,
+  ScryerExecutorFailure,
   ScryerOperationId,
   ScryerOperationResult,
   ScryerOperationServices
@@ -43,8 +44,13 @@ async function runResolvedOperation(args: {
   policy: ScryerFlatOperationPolicy
   project: ResolvedScryerProject
   options: PipelineOptions
+  authorize: () => Promise<ScryerExecutorFailure | null>
 }): Promise<ScryerOperationResult> {
   const { contract, input, context, requestId, policy, project, options, operationId } = args
+  const authorizationFailure = await args.authorize()
+  if (authorizationFailure) {
+    return failureResult(operationId, requestId, options.errorMapper, authorizationFailure)
+  }
   const state = await options.store.loadDeclaredState(project, policy)
   let executorResult
   try {
@@ -142,7 +148,10 @@ async function runResolvedOperation(args: {
 }
 
 export async function executeWithPolicyLock(args: Parameters<typeof runResolvedOperation>[0]) {
-  if (args.policy.lock === 'exclusive') {
+  if (
+    args.policy.lock === 'exclusive' ||
+    (args.policy.semanticWrites.length > 0 && args.policy.lease !== 'none')
+  ) {
     return args.options.store.withWriteLock(args.project.projectRoot, () =>
       runResolvedOperation(args)
     )

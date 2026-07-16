@@ -95,26 +95,44 @@ export function createScryerStateStore(
         value = JSON.parse(raw)
       } catch {
         throw new ScryerEngineError('lease_required', 'Scryer model edit lease is unreadable', {
-          policy: 'write_if_active'
+          policy: 'write_if_active',
+          reason: 'missing_authorization'
         })
       }
       if (typeof value !== 'object' || value === null) {
         throw new ScryerEngineError('lease_required', 'Scryer model edit lease is invalid', {
-          policy: 'write_if_active'
+          policy: 'write_if_active',
+          reason: 'missing_authorization'
         })
       }
       const record = value as Record<string, unknown>
       if (typeof record.token !== 'string' || record.token.length === 0) {
-        throw new ScryerEngineError('lease_required', 'Scryer model edit lease has no token', {
-          policy: 'write_if_active'
+        throw new ScryerEngineError('lease_required', 'Scryer model edit lease is incomplete', {
+          policy: 'write_if_active',
+          reason: 'missing_authorization'
         })
+      }
+      const expiresAt = typeof record.expiresAt === 'string' ? record.expiresAt : undefined
+      const expiresAtMs = expiresAt ? Date.parse(expiresAt) : null
+      if (expiresAtMs !== null && (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now())) {
+        await unlink(paths.leasePath).catch(() => undefined)
+        return null
       }
       return {
         token: record.token,
         ...(record.owner === 'agent' || record.owner === 'human' || record.owner === 'system'
           ? { owner: record.owner }
           : {}),
-        ...(typeof record.agentRunId === 'string' ? { agentRunId: record.agentRunId } : {})
+        ...(typeof record.agentRunId === 'string' ? { agentRunId: record.agentRunId } : {}),
+        ...(typeof record.paneKey === 'string' ? { paneKey: record.paneKey } : {}),
+        ...(typeof record.connectionId === 'string' || record.connectionId === null
+          ? { connectionId: record.connectionId }
+          : {}),
+        ...(typeof record.sessionStartedAt === 'number'
+          ? { sessionStartedAt: record.sessionStartedAt }
+          : {}),
+        ...(typeof record.createdAt === 'string' ? { createdAt: record.createdAt } : {}),
+        ...(expiresAt ? { expiresAt } : {})
       }
     },
     async withWriteLock(projectRoot, action) {
