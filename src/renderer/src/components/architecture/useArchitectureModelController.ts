@@ -20,6 +20,10 @@ import { resolveSourceLocationTarget } from '../../../../shared/scryer/source-ma
 import type { ModelUpdater } from './ArchitectureCanvas'
 import type { SyncStatus } from './SyncBar'
 import {
+  formatCompletionGateMessage,
+  resolveArchitectureSyncFinishOutcome
+} from './architecture-completion-gate-terminal'
+import {
   analyzeExternalModelUpdate,
   isExpandableKind,
   nextKindForParent,
@@ -442,6 +446,7 @@ export function useArchitectureModelController({
   const syncTerminalHadPtyRef = useRef(false)
   const syncTerminalPtyIdsRef = useRef<Set<string>>(new Set())
   const autoFinishingSyncRef = useRef(false)
+  const syncStatusRef = useRef<SyncSessionStatus>('idle')
   const syncResolutionRef = useRef<'cancel' | 'finish' | null>(null)
   const finishSyncRef = useRef<() => Promise<void>>(async () => undefined)
   const activeModelReloadRef = useRef<() => void>(() => {})
@@ -607,6 +612,10 @@ export function useArchitectureModelController({
   }, [syncTerminalTabId])
 
   useEffect(() => {
+    syncStatusRef.current = syncStatus
+  }, [syncStatus])
+
+  useEffect(() => {
     expandedPathRef.current = expandedPath
   }, [expandedPath])
 
@@ -759,14 +768,24 @@ export function useArchitectureModelController({
         setSelectedGroupId((current) =>
           current && (nextModel.groups ?? []).some((group) => group.id === current) ? current : null
         )
-        setImplementing(nextImplementing)
+        // Why: an attention terminal (completion gate blocked folding) leaves main's
+        // sync still open (implementing flag + pre-sync snapshot retained). A watcher
+        // reload must not resurrect the 'running' spinner or relock over that terminal,
+        // which would misread an unresolved sync as still-in-progress.
+        const inAttentionTerminal = syncStatusRef.current === 'attention'
+        if (!inAttentionTerminal) {
+          setImplementing(nextImplementing)
+        }
         setSyncStatus((current) => {
+          if (current === 'attention') {
+            return current
+          }
           if (nextImplementing && hasPreSyncSnapshot) {
             return 'running'
           }
           return current === 'running' ? 'idle' : current
         })
-        if (nextImplementing && hasPreSyncSnapshot) {
+        if (nextImplementing && hasPreSyncSnapshot && !inAttentionTerminal) {
           setSyncLog((current) =>
             current.length > 0 ? current : ['Architecture sync is still in progress']
           )
@@ -2218,15 +2237,33 @@ export function useArchitectureModelController({
       let gate: ScryerCompletionGateResult | null = null
       const agentRunId = await resolveActiveSyncAgentRunId()
       if (agentRunId) {
+        // Why: fold the agent's valid, non-destructive plan into the committed model as
+        // part of completing the edit session. The gate result then reports whether the
+        // sync actually finished (folded / nothing_to_fold) or needs attention.
         gate = await window.api.architecture.completeEditSession({
           projectPath,
-          agentRunId
+          agentRunId,
+          foldPolicy: 'when_gate_passes'
         })
       }
-      await window.api.architecture.finishSync({ projectPath })
       if (gate) {
         setCompletionGate(gate)
       }
+      if (resolveArchitectureSyncFinishOutcome(gate).kind === 'attention' && gate) {
+        // Why: the completion gate blocked folding — do NOT finishSync/markSynced, clear
+        // the pre-sync snapshot, advance the baseline, or report success. Surface the
+        // gate as an actionable attention terminal the user resolves (cancel/re-run).
+        const attentionMessage = formatCompletionGateMessage(gate)
+        setSyncStatus('attention')
+        setImplementing(false)
+        syncTerminalTabIdRef.current = null
+        setSyncTerminalTabId(null)
+        setSyncLog((current) => [...current, attentionMessage])
+        setSyncMessage(attentionMessage)
+        aiRunSession.markRun('sync', 'needs_attention', attentionMessage)
+        return
+      }
+      await window.api.architecture.finishSync({ projectPath })
       setSyncStatus('idle')
       setSyncLog([])
       syncTerminalTabIdRef.current = null
