@@ -16,17 +16,6 @@ export function stripNodeForAgent(
   return rest
 }
 
-export function nextNodeId(model: C4ModelData): string {
-  let max = 0
-  for (const node of model.nodes) {
-    const match = /^node-(\d+)$/.exec(node.id)
-    if (match) {
-      max = Math.max(max, Number(match[1]))
-    }
-  }
-  return `node-${max + 1}`
-}
-
 export function groupMemberIds(group: Group): string[] {
   const legacy = group as Group & { member_ids?: string[] }
   return Array.isArray(group.memberIds) ? group.memberIds : (legacy.member_ids ?? [])
@@ -45,13 +34,4 @@ export function collectDescendantIds(model: C4ModelData, nodeId: string): Set<st
     }
   }
   return ids
-}
-
-export function cleanupReferences(model: C4ModelData, deletedIds: Set<string>): void {
-  for (const id of deletedIds) {
-    delete model.sourceMap?.[id]
-  }
-  model.groups = (model.groups ?? [])
-    .map((group) => ({ ...group, memberIds: group.memberIds.filter((id) => !deletedIds.has(id)) }))
-    .filter((group) => group.memberIds.length > 0)
 }

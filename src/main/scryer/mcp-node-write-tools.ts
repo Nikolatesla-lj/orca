@@ -1,30 +1,27 @@
-import type { C4Node, ScryerToolResult } from '../../shared/scryer/model-types'
 import {
   asString,
   asStringArray,
   defaultScryerEngine,
   fail,
   isRecord,
-  isStrictScryerModel,
   ok,
   readMcpCompatibleModel,
   scryerOperationContext
 } from './mcp-tool-execution'
+import type { ScryerToolResult } from '../../shared/scryer/model-types'
 import {
   isStatus,
   normalizeContract,
   normalizeProperties,
   normalizeSourceLocations,
   normalizeSources,
-  validateIdentifier,
-  validatePropertyLabels,
-  validateTypeName
+  validatePropertyLabels
 } from './mcp-model-values'
-import { validateModelShape } from './mcp-model-validation'
-import { writeModelAndBaseline } from './mcp-model-persistence'
 import { validateVerifiedGate } from './mcp-task-model'
-import { readModel } from './model-store'
 
+// Why: update_nodes is strict-only. It translates the MCP patch into cataloged Engine
+// operations (scryer.node.update + scryer.source.update) that write the planned layer.
+// The verified-status gate is enforced here against the strict 0.3 model view.
 export async function updateNodes(
   projectPath: string,
   args: Record<string, unknown>
@@ -32,104 +29,7 @@ export async function updateNodes(
   if (!Array.isArray(args.nodes)) {
     return fail('update_nodes requires arguments.nodes')
   }
-  if (await isStrictScryerModel(projectPath)) {
-    return strictUpdateNodes(projectPath, args.nodes)
-  }
-  const model = await readModel(projectPath)
-  const sourceMap = { ...model.sourceMap }
-  const updated: string[] = []
-  for (const update of args.nodes) {
-    if (!isRecord(update) || typeof update.node_id !== 'string') {
-      return fail('Each update_nodes item requires node_id')
-    }
-    const node = model.nodes.find((candidate) => candidate.id === update.node_id)
-    if (!node) {
-      return fail(`Node '${update.node_id}' not found`)
-    }
-    const nextContract = normalizeContract(update.contract)
-    if (update.status !== undefined) {
-      if (!isStatus(update.status)) {
-        return fail(`Node '${update.node_id}' has invalid status '${String(update.status)}'`)
-      }
-      const reason = asString(update.reason)?.trim() ?? ''
-      if (!reason) {
-        return fail(`Node '${update.node_id}': reason is required when changing status`)
-      }
-      if (update.status === 'verified') {
-        const unmet = validateVerifiedGate(model, node, nextContract)
-        if (unmet.length > 0) {
-          return fail(
-            `Cannot set '${update.node_id}' to verified. These expect contract items are not yet passed:\n${unmet.join('\n')}`
-          )
-        }
-      }
-      node.data.status = update.status
-      node.data.statusReason = reason
-    }
-    const nextName = asString(update.name)
-    if (nextName !== undefined) {
-      const identifierError =
-        node.data.kind === 'operation'
-          ? validateIdentifier(nextName, `operation '${node.id}'`)
-          : null
-      const typeError =
-        node.data.kind === 'model' ? validateTypeName(nextName, `model '${node.id}'`) : null
-      if (identifierError ?? typeError) {
-        return fail((identifierError ?? typeError)!)
-      }
-      node.data.name = nextName
-    }
-    const nextDescription = asString(update.description)
-    if (nextDescription !== undefined) {
-      node.data.description = nextDescription
-    }
-    const nextTechnology = asString(update.technology)
-    if (nextTechnology !== undefined) {
-      node.data.technology = nextTechnology
-    }
-    if (typeof update.external === 'boolean') {
-      node.data.external = update.external
-    }
-    const nextShape = asString(update.shape)
-    if (nextShape !== undefined) {
-      node.data.shape = nextShape as C4Node['data']['shape']
-    }
-    const sources = normalizeSources(update.sources)
-    if (sources !== undefined) {
-      node.data.sources = sources
-    }
-    if (nextContract !== undefined) {
-      node.data.contract = nextContract
-    }
-    const notes = asStringArray(update.notes)
-    if (notes !== undefined) {
-      node.data.notes = notes
-    }
-    const properties = normalizeProperties(update.properties)
-    if (properties !== undefined) {
-      const error = validatePropertyLabels(properties, `node '${update.node_id}'`)
-      if (error) {
-        return fail(error)
-      }
-      node.data.properties = properties
-    }
-    const locations = normalizeSourceLocations(update.source)
-    if (locations !== undefined) {
-      if (locations.length === 0) {
-        delete sourceMap[node.id]
-      } else {
-        sourceMap[node.id] = locations
-      }
-    }
-    updated.push(update.node_id)
-  }
-  model.sourceMap = sourceMap
-  const errors = validateModelShape(model)
-  if (errors.length > 0) {
-    return fail(errors.join('\n'))
-  }
-  await writeModelAndBaseline(projectPath, model)
-  return ok(`Updated ${updated.length} node(s)`, model)
+  return strictUpdateNodes(projectPath, args.nodes)
 }
 
 async function strictUpdateNodes(

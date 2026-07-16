@@ -1,563 +1,410 @@
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
+import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { getProjectModelPath, readModel } from './model-store'
+import { getProjectModelPath, getProjectScryerDir } from './model-store'
 import { callScryerTool } from './mcp-tools'
 
-describe('callScryerTool', () => {
-  it('sets a model, strips layout-only positions, validates hierarchy, and returns tasks', async () => {
-    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-'))
-    const result = await callScryerTool(projectPath, {
-      toolName: 'set_model',
-      arguments: {
-        data: JSON.stringify({
-          nodes: [
-            {
-              id: 'system',
-              position: { x: 100, y: 100 },
-              data: { name: 'Shop', description: 'Commerce system', kind: 'system' }
-            },
-            {
-              id: 'api',
-              parentId: 'system',
-              position: { x: 120, y: 160 },
-              data: {
-                name: 'API',
-                description: 'HTTP API',
-                kind: 'container',
-                status: 'proposed',
-                contract: { expect: ['Returns JSON'], ask: [], never: [] }
-              }
-            },
-            {
-              id: 'users',
-              parentId: 'api',
-              data: {
-                name: 'Users',
-                description: 'User workflows',
-                kind: 'component',
-                status: 'proposed',
-                notes: ['Owns signup']
-              }
-            }
-          ],
-          edges: [
-            { id: 'edge-api-users', source: 'api', target: 'users', data: { label: 'calls' } }
-          ]
-        })
-      }
-    })
+type Model03 = {
+  version: '0.3'
+  nodes: Record<string, unknown>[]
+  links: Record<string, unknown>[]
+  groups: Record<string, unknown>[]
+  sourceMap: Record<string, unknown>
+  boundaries: Record<string, unknown>
+}
 
-    expect(result.ok).toBe(true)
-    const rawStored = JSON.parse(await readFile(getProjectModelPath(projectPath), 'utf8'))
-    expect(
-      rawStored.nodes.find((node: { id: string }) => node.id === 'api')?.position
-    ).toBeUndefined()
+function model03(overrides: Partial<Model03> = {}): Model03 {
+  return {
+    version: '0.3',
+    nodes: [],
+    links: [],
+    groups: [],
+    sourceMap: {},
+    boundaries: {},
+    ...overrides
+  }
+}
 
-    const task = await callScryerTool(projectPath, {
-      toolName: 'get_task',
-      arguments: {}
-    })
-    expect(task.ok).toBe(true)
-    expect(task.content).toContain('Users')
-    expect(task.content).toContain('Returns JSON')
-    expect(task.content).toContain('Owns signup')
-
-    const update = await callScryerTool(projectPath, {
-      toolName: 'update_nodes',
-      arguments: {
-        nodes: [
-          {
-            node_id: 'users',
-            status: 'implemented',
-            reason: 'Added signup service',
-            source: [{ pattern: 'src/users/**/*.ts' }]
-          }
-        ]
-      }
-    })
-
-    expect(update.ok, JSON.stringify(update)).toBe(true)
-    const updated = await readModel(projectPath)
-    expect(updated.nodes.find((node) => node.id === 'users')?.data.status).toBe('implemented')
-    expect(updated.sourceMap?.users).toEqual([{ pattern: 'src/users/**/*.ts' }])
+async function setModel(projectPath: string, model: Model03) {
+  return callScryerTool(projectPath, {
+    toolName: 'set_model',
+    arguments: { data: JSON.stringify(model) }
   })
+}
 
-  it('mirrors Scryer MCP node, edge, source-map, structure, and change semantics', async () => {
-    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-live-'))
-    await mkdir(join(projectPath, 'src', 'api'), { recursive: true })
-    await writeFile(join(projectPath, 'package.json'), '{"name":"sample"}\n')
-    await writeFile(join(projectPath, 'src', 'api', 'index.ts'), 'export const api = true\n')
+async function readCommitted(projectPath: string): Promise<Record<string, unknown>> {
+  return JSON.parse(await readFile(getProjectModelPath(projectPath), 'utf8'))
+}
 
-    const listModels = await callScryerTool(projectPath, {
-      toolName: 'list_models',
-      arguments: {}
-    })
-    expect(listModels.ok).toBe(true)
-    expect(listModels.content).toContain('.scryer/model.scry')
+async function readPlanned(projectPath: string): Promise<Record<string, unknown>> {
+  return JSON.parse(await readFile(join(getProjectScryerDir(projectPath), 'planned.scry'), 'utf8'))
+}
 
-    await callScryerTool(projectPath, {
-      toolName: 'set_model',
-      arguments: {
-        data: JSON.stringify({
-          nodes: [
-            {
-              id: 'system',
-              data: { name: 'Shop', description: 'Commerce system', kind: 'system' }
-            },
-            {
-              id: 'web',
-              parentId: 'system',
-              data: {
-                name: 'Web',
-                description: 'Web container',
-                kind: 'container',
-                status: 'proposed'
-              }
-            },
-            {
-              id: 'api',
-              parentId: 'system',
-              data: {
-                name: 'API',
-                description: 'API container',
-                kind: 'container',
-                status: 'proposed'
-              }
-            },
-            {
-              id: 'handler',
-              parentId: 'api',
-              data: {
-                name: 'Handler',
-                description: 'HTTP handler',
-                kind: 'component',
-                status: 'proposed'
-              }
-            },
-            {
-              id: 'operation',
-              parentId: 'handler',
-              data: {
-                name: 'listUsers',
-                description: 'List users',
-                kind: 'operation',
-                status: 'proposed'
-              }
-            }
-          ],
-          edges: []
-        })
-      }
-    })
-
-    const addEdge = await callScryerTool(projectPath, {
-      toolName: 'add_edges',
-      arguments: { edges: [{ source: 'web', target: 'api', label: 'calls', method: 'HTTP' }] }
-    })
-    expect(addEdge.ok).toBe(true)
-
-    const updateEdge = await callScryerTool(projectPath, {
-      toolName: 'update_edges',
-      arguments: { edges: [{ edge_id: 'edge-web-api', label: 'requests', method: 'REST' }] }
-    })
-    expect(updateEdge.ok).toBe(true)
-
-    const updateNode = await callScryerTool(projectPath, {
-      toolName: 'update_nodes',
-      arguments: {
+describe('callScryerTool strict retirement', () => {
+  it('writes set_model to the strict 0.3 committed and planned layers, never a legacy C4 document', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-set-'))
+    const result = await setModel(
+      projectPath,
+      model03({
         nodes: [
-          {
-            node_id: 'handler',
-            name: 'User Handler',
-            description: 'Owns user HTTP routes',
-            technology: 'TypeScript',
-            sources: [{ pattern: 'src/api/**/*.ts', comment: 'route handlers' }],
-            contract: { expect: [{ text: 'Has live test', passed: true }], ask: [], never: [] },
-            notes: ['Keep route logic thin'],
-            status: 'implemented',
-            reason: 'Implemented handler and tests',
-            source: [{ pattern: 'src/api/**/*.ts', line: 1 }]
-          }
+          { id: 'system', kind: 'system', name: 'Shop', description: 'Commerce system' },
+          { id: 'api', kind: 'container', name: 'API', parentId: 'system', description: 'HTTP API' }
         ]
-      }
-    })
-    expect(updateNode.ok).toBe(true)
-
-    const sourceMap = await callScryerTool(projectPath, {
-      toolName: 'update_source_map',
-      arguments: {
-        entries: [
-          { node_id: 'operation', locations: [{ pattern: 'src/api/index.ts', line: 1 }] },
-          { node_id: 'operation', locations: [] }
-        ]
-      }
-    })
-    expect(sourceMap.ok).toBe(true)
-
-    const subtree = await callScryerTool(projectPath, {
-      toolName: 'get_node',
-      arguments: { node_id: 'api' }
-    })
-    expect(subtree.ok).toBe(true)
-    expect(subtree.content).toContain('"descendants"')
-    expect(subtree.content).toContain('User Handler')
-    expect(subtree.content).toContain('"external_node_name": "Web"')
-
-    const structure = await callScryerTool(projectPath, {
-      toolName: 'get_structure',
-      arguments: { path: projectPath }
-    })
-    expect(structure.ok).toBe(true)
-    expect(structure.content).toContain('package.json')
-    expect(structure.content).toContain('[manifest]')
-
-    const modelAfterUserEdit = await readModel(projectPath)
-    modelAfterUserEdit.nodes.push({
-      id: 'manual',
-      type: 'c4',
-      data: { name: 'Manual Node', description: 'User-added diagram node', kind: 'system' }
-    })
-    await import('./model-store').then(({ writeModel }) =>
-      writeModel(projectPath, modelAfterUserEdit)
+      })
     )
 
-    const changes = await callScryerTool(projectPath, {
-      toolName: 'get_changes',
-      arguments: {}
-    })
-    expect(changes.ok).toBe(true)
-    expect(changes.content).toContain('Nodes added')
-    expect(changes.content).toContain('Manual Node')
-
-    const deleteNodes = await callScryerTool(projectPath, {
-      toolName: 'delete_nodes',
-      arguments: { node_ids: ['api'] }
-    })
-    expect(deleteNodes.ok).toBe(true)
-    const deleted = await readModel(projectPath)
-    expect(deleted.nodes.map((node) => node.id)).not.toContain('operation')
-    expect(deleted.edges).toEqual([])
-    expect(deleted.sourceMap?.handler).toBeUndefined()
+    expect(result.ok, JSON.stringify(result)).toBe(true)
+    const committed = await readCommitted(projectPath)
+    const planned = await readPlanned(projectPath)
+    expect(committed.version).toBe('0.3')
+    expect(planned.version).toBe('0.3')
+    // Strict 0.3 nodes carry no legacy C4 `data`/`type` envelope.
+    for (const node of committed.nodes as Record<string, unknown>[]) {
+      expect(node.data).toBeUndefined()
+      expect(node.type).toBeUndefined()
+      expect(node.kind).toBeDefined()
+    }
   })
 
-  it('rejects components that are not nested under containers', async () => {
-    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-invalid-'))
+  it('rejects set_model data that is not a strict 0.3 model', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-set-legacy-'))
     const result = await callScryerTool(projectPath, {
       toolName: 'set_model',
       arguments: {
         data: JSON.stringify({
-          nodes: [
-            {
-              id: 'bad-component',
-              data: { name: 'Loose Component', description: 'Invalid', kind: 'component' }
-            }
-          ],
+          nodes: [{ id: 'system', data: { name: 'Shop', kind: 'system' } }],
           edges: []
         })
       }
     })
 
     expect(result.ok).toBe(false)
-    expect(result.content).toMatch(/Component .* must have a container parent/)
   })
 
-  it('prioritizes deployment group scaffolds before individual container work', async () => {
-    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-group-task-'))
-    await callScryerTool(projectPath, {
-      toolName: 'set_model',
-      arguments: {
-        data: JSON.stringify({
-          nodes: [
-            { id: 'system', data: { name: 'Shop', description: 'Commerce', kind: 'system' } },
-            {
-              id: 'web',
-              parentId: 'system',
-              data: {
-                name: 'Website',
-                description: 'Customer storefront',
-                kind: 'container',
-                technology: 'Next.js',
-                status: 'proposed',
-                contract: { expect: ['Serves product pages'], ask: [], never: [] }
-              }
-            },
-            {
-              id: 'cms',
-              parentId: 'system',
-              data: {
-                name: 'CMS Admin',
-                description: 'Editorial admin surface',
-                kind: 'container',
-                technology: 'Payload',
-                status: 'proposed'
-              }
-            }
-          ],
-          edges: [],
-          groups: [
-            {
-              id: 'next-app',
-              name: 'Next App',
-              description: 'Containers deployed in the same runtime',
-              memberIds: ['web', 'cms'],
-              contract: { expect: ['Share one deployment'], ask: [], never: ['Create two repos'] }
-            }
-          ]
-        })
-      }
+  it('reflects planned edits through get_model and get_node while the committed layer lags', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-reads-'))
+    await setModel(
+      projectPath,
+      model03({
+        nodes: [
+          { id: 'system', kind: 'system', name: 'Shop' },
+          { id: 'api', kind: 'container', name: 'API', parentId: 'system' },
+          { id: 'handler', kind: 'component', name: 'Handler', parentId: 'api' }
+        ],
+        links: [{ id: 'edge-handler-api', src: 'handler', dst: 'api', label: 'serves' }]
+      })
+    )
+
+    const update = await callScryerTool(projectPath, {
+      toolName: 'update_nodes',
+      arguments: { nodes: [{ node_id: 'handler', description: 'Owns HTTP routes' }] }
     })
+    expect(update.ok, JSON.stringify(update)).toBe(true)
 
-    const task = await callScryerTool(projectPath, {
-      toolName: 'get_task',
-      arguments: {}
-    })
+    // get_model / get_node read the planned layer, so the edit is visible even though
+    // the committed layer is unchanged.
+    const getModel = await callScryerTool(projectPath, { toolName: 'get_model', arguments: {} })
+    expect(getModel.ok).toBe(true)
+    expect(getModel.content).toContain('Owns HTTP routes')
 
-    expect(task.ok).toBe(true)
-    expect(task.content).toContain('## Scaffold: Next App')
-    expect(task.content).toContain('Website')
-    expect(task.content).toContain('CMS Admin')
-    expect(task.content).toContain('Share one deployment')
-    expect(task.content).toContain('Create two repos')
-    expect(task.content).toContain('update_nodes')
-  })
-
-  it('orders sibling component tasks by dependency edges and reports cycles', async () => {
-    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-component-task-'))
-    await callScryerTool(projectPath, {
-      toolName: 'set_model',
-      arguments: {
-        data: JSON.stringify({
-          nodes: [
-            { id: 'system', data: { name: 'Shop', description: 'Commerce', kind: 'system' } },
-            {
-              id: 'api',
-              parentId: 'system',
-              data: { name: 'API', description: 'HTTP API', kind: 'container', status: 'proposed' }
-            },
-            {
-              id: 'controller',
-              parentId: 'api',
-              data: {
-                name: 'Controller',
-                description: 'HTTP entrypoint',
-                kind: 'component',
-                status: 'proposed'
-              }
-            },
-            {
-              id: 'service',
-              parentId: 'api',
-              data: {
-                name: 'Service',
-                description: 'Business rules',
-                kind: 'component',
-                status: 'proposed'
-              }
-            }
-          ],
-          edges: [
-            {
-              id: 'edge-controller-service',
-              source: 'controller',
-              target: 'service',
-              data: { label: 'uses' }
-            }
-          ]
-        })
-      }
-    })
-
-    const firstTask = await callScryerTool(projectPath, {
-      toolName: 'get_task',
+    const node = await callScryerTool(projectPath, {
+      toolName: 'get_node',
       arguments: { node_id: 'api' }
     })
-    expect(firstTask.ok).toBe(true)
-    expect(firstTask.content).toContain('Build: Service')
-    expect(firstTask.content).not.toContain('Build: Controller')
+    expect(node.ok).toBe(true)
+    expect(node.content).toContain('"descendants"')
+    expect(node.content).toContain('Handler')
 
-    const reverseEdge = await callScryerTool(projectPath, {
-      toolName: 'add_edges',
-      arguments: { edges: [{ source: 'service', target: 'controller', label: 'calls' }] }
-    })
-    expect(reverseEdge.ok).toBe(true)
-
-    const cycle = await callScryerTool(projectPath, {
-      toolName: 'get_task',
-      arguments: { node_id: 'api' }
-    })
-    expect(cycle.ok).toBe(true)
-    expect(cycle.content).toContain('Dependency cycle detected')
-    expect(cycle.content).toContain('Controller')
-    expect(cycle.content).toContain('Service')
+    const committed = await readCommitted(projectPath)
+    expect(
+      (committed.nodes as { id: string; description?: string }[]).find((n) => n.id === 'handler')
+        ?.description
+    ).toBeUndefined()
   })
 
-  it('prompts parent status propagation and proposed member implementation after components finish', async () => {
-    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-parent-task-'))
-    await callScryerTool(projectPath, {
-      toolName: 'set_model',
-      arguments: {
-        data: JSON.stringify({
-          nodes: [
-            {
-              id: 'system',
-              data: { name: 'Shop', description: 'Commerce', kind: 'system', status: 'proposed' }
-            },
-            {
-              id: 'api',
-              parentId: 'system',
-              data: { name: 'API', description: 'HTTP API', kind: 'container', status: 'proposed' }
-            },
-            {
-              id: 'users',
-              parentId: 'api',
-              data: {
-                name: 'Users',
-                description: 'User workflows',
-                kind: 'component',
-                status: 'implemented',
-                statusReason: 'Implemented user workflows'
-              }
-            },
-            {
-              id: 'listUsers',
-              parentId: 'users',
-              data: {
-                name: 'listUsers',
-                description: 'Lists users',
-                kind: 'operation',
-                status: 'proposed'
-              }
-            },
-            {
-              id: 'User',
-              parentId: 'users',
-              data: {
-                name: 'User',
-                description: 'User data',
-                kind: 'model',
-                status: 'proposed',
-                properties: [{ label: 'id', description: 'Unique id' }]
-              }
-            }
-          ],
-          edges: []
-        })
-      }
-    })
+  it('tracks get_changes against the baseline captured by get_model', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-changes-'))
+    await setModel(
+      projectPath,
+      model03({
+        nodes: [
+          { id: 'system', kind: 'system', name: 'Shop' },
+          { id: 'api', kind: 'container', name: 'API', parentId: 'system' },
+          { id: 'handler', kind: 'component', name: 'Handler', parentId: 'api' }
+        ]
+      })
+    )
 
-    const task = await callScryerTool(projectPath, {
-      toolName: 'get_task',
-      arguments: {}
-    })
+    // get_model establishes the change-tracking baseline. No further baseline-writing
+    // read runs before get_changes, so the diff reflects only the update below.
+    const baseline = await callScryerTool(projectPath, { toolName: 'get_model', arguments: {} })
+    expect(baseline.ok).toBe(true)
 
-    expect(task.ok).toBe(true)
-    expect(task.content).toContain('All 1 tasks complete')
-    expect(task.content).toContain('Mark these parent nodes as implemented')
-    expect(task.content).toContain('API')
-    expect(task.content).toContain('These member nodes are still proposed')
-    expect(task.content).toContain('listUsers')
-    expect(task.content).toContain('User')
+    const update = await callScryerTool(projectPath, {
+      toolName: 'update_nodes',
+      arguments: { nodes: [{ node_id: 'handler', name: 'HTTP Handler' }] }
+    })
+    expect(update.ok, JSON.stringify(update)).toBe(true)
+
+    const changes = await callScryerTool(projectPath, { toolName: 'get_changes', arguments: {} })
+    expect(changes.ok).toBe(true)
+    expect(changes.content).toContain('Nodes modified')
+    expect(changes.content).toContain('HTTP Handler')
   })
 
-  it('returns the migrated Scryer modeling rules as the MCP rules source', async () => {
-    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-rules-'))
-    const rules = await callScryerTool(projectPath, {
-      toolName: 'get_rules',
-      arguments: {}
-    })
-
-    expect(rules.ok).toBe(true)
-    expect(rules.content).toContain('One edge per relationship')
-    expect(rules.content).toContain('No cross-container component edges')
-    expect(rules.content).toContain('Implementation loop')
-  })
-
-  it('warns when a node description mentions a sibling without a relationship edge', async () => {
+  it('validates through the engine and surfaces MCP mention warnings', async () => {
     const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-mention-edge-'))
-    await callScryerTool(projectPath, {
-      toolName: 'set_model',
-      arguments: {
-        data: JSON.stringify({
-          nodes: [
-            {
-              id: 'system',
-              data: { name: 'Shop', description: 'Commerce system', kind: 'system' }
-            },
-            {
-              id: 'api',
-              parentId: 'system',
-              data: {
-                name: 'API',
-                description: 'Calls @[Worker]',
-                kind: 'container'
-              }
-            },
-            {
-              id: 'worker',
-              parentId: 'system',
-              data: { name: 'Worker', description: 'Background jobs', kind: 'container' }
-            }
-          ],
-          edges: []
-        })
-      }
-    })
+    await setModel(
+      projectPath,
+      model03({
+        nodes: [
+          { id: 'system', kind: 'system', name: 'Shop', description: 'Commerce system' },
+          {
+            id: 'api',
+            kind: 'container',
+            name: 'API',
+            parentId: 'system',
+            description: 'Calls @[Worker]'
+          },
+          {
+            id: 'worker',
+            kind: 'container',
+            name: 'Worker',
+            parentId: 'system',
+            description: 'Background jobs'
+          }
+        ]
+      })
+    )
 
-    const invalid = await callScryerTool(projectPath, {
-      toolName: 'validate_model',
-      arguments: {}
-    })
+    const invalid = await callScryerTool(projectPath, { toolName: 'validate_model', arguments: {} })
     expect(invalid.ok).toBe(false)
     expect(invalid.content).toContain('API mentions Worker')
 
     const fixed = await callScryerTool(projectPath, {
       toolName: 'add_edges',
-      arguments: {
-        edges: [{ source: 'api', target: 'worker', label: 'calls' }]
-      }
+      arguments: { edges: [{ source: 'api', target: 'worker', label: 'calls' }] }
     })
-    expect(fixed.ok).toBe(true)
+    expect(fixed.ok, JSON.stringify(fixed)).toBe(true)
 
-    const valid = await callScryerTool(projectPath, {
-      toolName: 'validate_model',
-      arguments: {}
-    })
-    expect(valid.ok).toBe(true)
+    const valid = await callScryerTool(projectPath, { toolName: 'validate_model', arguments: {} })
+    expect(valid.ok, JSON.stringify(valid)).toBe(true)
   })
 
-  it('warns when a node description mentions a missing sibling', async () => {
+  it('flags a mention with no matching sibling through validate_model', async () => {
     const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-mention-missing-'))
-    await callScryerTool(projectPath, {
-      toolName: 'set_model',
-      arguments: {
-        data: JSON.stringify({
-          nodes: [
-            {
-              id: 'system',
-              data: { name: 'Shop', description: 'Commerce system', kind: 'system' }
-            },
-            {
-              id: 'api',
-              parentId: 'system',
-              data: {
-                name: 'API',
-                description: 'Calls @[MissingWorker]',
-                kind: 'container'
-              }
-            }
-          ],
-          edges: []
-        })
-      }
-    })
+    await setModel(
+      projectPath,
+      model03({
+        nodes: [
+          { id: 'system', kind: 'system', name: 'Shop', description: 'Commerce system' },
+          {
+            id: 'api',
+            kind: 'container',
+            name: 'API',
+            parentId: 'system',
+            description: 'Calls @[MissingWorker]'
+          }
+        ]
+      })
+    )
 
-    const invalid = await callScryerTool(projectPath, {
+    const invalid = await callScryerTool(projectPath, { toolName: 'validate_model', arguments: {} })
+    expect(invalid.ok).toBe(false)
+    expect(invalid.content).toContain('API mentions MissingWorker but no sibling node matches it')
+  })
+
+  it('surfaces a top-level hierarchy finding through validate_model', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-hierarchy-'))
+    const set = await setModel(
+      projectPath,
+      model03({
+        nodes: [{ id: 'bad-component', kind: 'component', name: 'Loose Component' }]
+      })
+    )
+    // A structurally-valid but hierarchically-suspicious model is accepted by set_model;
+    // the finding surfaces through validate_model rather than a hard legacy reject.
+    expect(set.ok, JSON.stringify(set)).toBe(true)
+
+    const validation = await callScryerTool(projectPath, {
       toolName: 'validate_model',
       arguments: {}
     })
-    expect(invalid.ok).toBe(false)
-    expect(invalid.content).toContain('API mentions MissingWorker but no sibling node matches it')
+    expect(validation.ok).toBe(false)
+    expect(validation.content).toContain('cannot be top-level')
+  })
+
+  it('renders a build task for a proposed component through get_task over the strict model', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-task-'))
+    await setModel(
+      projectPath,
+      model03({
+        nodes: [
+          { id: 'system', kind: 'system', name: 'Shop' },
+          { id: 'api', kind: 'container', name: 'API', parentId: 'system' },
+          {
+            id: 'controller',
+            kind: 'component',
+            name: 'Controller',
+            parentId: 'api',
+            appearance: { status: 'proposed' }
+          },
+          {
+            id: 'service',
+            kind: 'component',
+            name: 'Service',
+            parentId: 'api',
+            appearance: { status: 'proposed' }
+          }
+        ],
+        links: [{ id: 'edge-controller-service', src: 'controller', dst: 'service', label: 'uses' }]
+      })
+    )
+
+    const task = await callScryerTool(projectPath, {
+      toolName: 'get_task',
+      arguments: { node_id: 'api' }
+    })
+    expect(task.ok).toBe(true)
+    // Dependency order: Service has no outgoing dependency edge, so it is built first.
+    expect(task.content).toContain('Build: Service')
+    expect(task.content).not.toContain('Build: Controller')
+  })
+
+  it('returns the migrated Scryer modeling rules as the MCP rules source', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-rules-'))
+    const rules = await callScryerTool(projectPath, { toolName: 'get_rules', arguments: {} })
+
+    expect(rules.ok).toBe(true)
+    expect(rules.content).toContain('One edge per relationship')
+    expect(rules.content).toContain('Implementation loop')
+  })
+
+  it('rejects retired legacy aliases without falling back to legacy mutation (alias matrix)', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-alias-'))
+    await setModel(
+      projectPath,
+      model03({
+        nodes: [
+          { id: 'system', kind: 'system', name: 'Shop' },
+          { id: 'api', kind: 'container', name: 'API', parentId: 'system' }
+        ]
+      })
+    )
+    const plannedBefore = await readPlanned(projectPath)
+
+    const rejected = [
+      { toolName: 'add_nodes', arguments: { nodes: [{ name: 'Legacy', kind: 'system' }] } },
+      {
+        toolName: 'set_node',
+        arguments: { node_id: 'system', data: JSON.stringify({ nodes: [] }) }
+      },
+      { toolName: 'set_flows', arguments: { data: JSON.stringify([]) } },
+      { toolName: 'delete_flow', arguments: { flow_id: 'flow-1' } }
+    ] as const
+
+    for (const call of rejected) {
+      const result = await callScryerTool(projectPath, {
+        toolName: call.toolName,
+        arguments: call.arguments
+      })
+      expect(result.ok, `${call.toolName} should be rejected`).toBe(false)
+      expect(result.content).toContain('is not supported')
+    }
+
+    // No legacy fall-through: the planned layer is untouched by the rejected aliases.
+    expect(await readPlanned(projectPath)).toEqual(plannedBefore)
+  })
+
+  it('rejects repointing a link through update_edges (delete then add instead)', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-repoint-'))
+    await setModel(
+      projectPath,
+      model03({
+        nodes: [
+          { id: 'system', kind: 'system', name: 'Shop' },
+          { id: 'api', kind: 'container', name: 'API', parentId: 'system' },
+          { id: 'worker', kind: 'container', name: 'Worker', parentId: 'system' }
+        ],
+        links: [{ id: 'edge-api-worker', src: 'api', dst: 'worker', label: 'calls' }]
+      })
+    )
+
+    const repoint = await callScryerTool(projectPath, {
+      toolName: 'update_edges',
+      arguments: { edges: [{ edge_id: 'edge-api-worker', source: 'worker', target: 'api' }] }
+    })
+    expect(repoint.ok).toBe(false)
+    expect(repoint.content).toContain('delete and add')
+  })
+
+  it('surfaces an engine write failure as an error without a legacy fallback write', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-no-fallback-'))
+    await setModel(
+      projectPath,
+      model03({ nodes: [{ id: 'system', kind: 'system', name: 'Shop' }] })
+    )
+    const plannedBefore = await readPlanned(projectPath)
+
+    // The engine rejects a link to a non-existent node; the bridge surfaces the failure
+    // and never falls back to a legacy writer.
+    const result = await callScryerTool(projectPath, {
+      toolName: 'add_edges',
+      arguments: { edges: [{ source: 'system', target: 'ghost', label: 'calls' }] }
+    })
+    expect(result.ok).toBe(false)
+    expect(await readPlanned(projectPath)).toEqual(plannedBefore)
+  })
+
+  it('updates edge labels and manages groups through the strict operations', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-tools-matrix-'))
+    await setModel(
+      projectPath,
+      model03({
+        nodes: [
+          { id: 'system', kind: 'system', name: 'Shop' },
+          { id: 'api', kind: 'container', name: 'API', parentId: 'system' },
+          { id: 'worker', kind: 'container', name: 'Worker', parentId: 'system' }
+        ],
+        links: [{ id: 'edge-api-worker', src: 'api', dst: 'worker', label: 'calls' }]
+      })
+    )
+
+    const updateEdge = await callScryerTool(projectPath, {
+      toolName: 'update_edges',
+      arguments: { edges: [{ edge_id: 'edge-api-worker', label: 'requests', method: 'REST' }] }
+    })
+    expect(updateEdge.ok, JSON.stringify(updateEdge)).toBe(true)
+
+    const setGroups = await callScryerTool(projectPath, {
+      toolName: 'set_groups',
+      arguments: {
+        data: JSON.stringify([
+          { id: 'runtime', name: 'Runtime', memberIds: ['api', 'worker'], parentNodeId: 'system' }
+        ])
+      }
+    })
+    expect(setGroups.ok, JSON.stringify(setGroups)).toBe(true)
+    let planned = await readPlanned(projectPath)
+    expect((planned.groups as { id: string }[]).some((g) => g.id === 'runtime')).toBe(true)
+    expect((planned.links as { label: string }[])[0]?.label).toBe('requests')
+
+    const deleteGroup = await callScryerTool(projectPath, {
+      toolName: 'delete_group',
+      arguments: { group_id: 'runtime' }
+    })
+    expect(deleteGroup.ok).toBe(true)
+    planned = await readPlanned(projectPath)
+    expect((planned.groups as { id: string }[]).some((g) => g.id === 'runtime')).toBe(false)
+
+    const deleteEdges = await callScryerTool(projectPath, {
+      toolName: 'delete_edges',
+      arguments: { edge_ids: ['edge-api-worker'] }
+    })
+    expect(deleteEdges.ok).toBe(true)
+    planned = await readPlanned(projectPath)
+    expect(planned.links).toEqual([])
   })
 })

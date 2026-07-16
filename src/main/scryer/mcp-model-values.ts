@@ -66,39 +66,8 @@ export function isStatus(value: unknown): value is Status {
   )
 }
 
-export function isKind(value: unknown): value is C4Kind {
-  return (
-    value === 'person' ||
-    value === 'system' ||
-    value === 'container' ||
-    value === 'component' ||
-    value === 'operation' ||
-    value === 'process' ||
-    value === 'model'
-  )
-}
-
-export function nodeTypeForKind(kind: C4Kind): C4Node['type'] {
-  if (kind === 'operation' || kind === 'process' || kind === 'model') {
-    return kind
-  }
-  return 'c4'
-}
-
 export function kindLabel(kind: C4Kind): string {
   return kind
-}
-
-export function makeEdgeId(source: string, target: string): string {
-  return `edge-${source}-${target}`
-}
-
-export function validateIdentifier(name: string, label: string): string | null {
-  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name) ? null : `${label} must be a valid code identifier`
-}
-
-export function validateTypeName(name: string, label: string): string | null {
-  return /^[A-Z][A-Za-z0-9_$]*$/.test(name) ? null : `${label} must be a valid type name`
 }
 
 export function validatePropertyLabels(properties: ModelProperty[], label: string): string | null {

@@ -100,6 +100,32 @@ describe('Scryer architecture ownership', () => {
     ).toEqual([])
   })
 
+  it('keeps the MCP bridge off legacy model mutation and disk-format probing', async () => {
+    const mcpFiles = [
+      'src/main/scryer/mcp-tools.ts',
+      'src/main/scryer/mcp-model-persistence.ts',
+      'src/main/scryer/mcp-node-write-tools.ts',
+      'src/main/scryer/mcp-strict-operation-adapters.ts',
+      'src/main/scryer/mcp-tool-execution.ts'
+    ]
+    // Retired legacy seams: MCP writes go through cataloged Engine operations only, and
+    // there is no disk-format probing or fallback to a legacy C4 document.
+    const forbidden = [
+      /\bwriteModelAndBaseline\b/,
+      /\bisStrictScryerModel\b/,
+      /\bwriteModel\s*\(/,
+      /\bwriteModelDocument\s*\(/,
+      /\bpatchNodeData\s*\(/
+    ]
+
+    for (const file of mcpFiles) {
+      const source = await readFile(join(ROOT, file), 'utf8')
+      for (const pattern of forbidden) {
+        expect(pattern.test(source), `${file} still references ${pattern.source}`).toBe(false)
+      }
+    }
+  })
+
   it('keeps state-store independent of operations and product adapters', async () => {
     const imports = importsOf(
       await readFile(join(ROOT, 'src/main/scryer/engine/state-store.ts'), 'utf8')
