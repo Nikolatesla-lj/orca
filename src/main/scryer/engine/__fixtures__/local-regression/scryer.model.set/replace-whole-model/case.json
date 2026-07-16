@@ -1,6 +1,7 @@
 {
   "operationId": "scryer.model.set",
-  "upstreamCommit": "0000000",
+  "provenance": "local_regression",
+  "localRegressionReason": "The expected committed/planned state is produced by Orca's own set_model engine (structured operation envelope, baseline refresh). The equivalent upstream Rust result cannot be independently reproduced in this environment, so the fixture is graded as an Orca-only deterministic regression rather than upstream parity.",
   "upstreamAnchors": ["nodes.rs::set_model", "SetModelRequest"],
   "input": {
     "data": {

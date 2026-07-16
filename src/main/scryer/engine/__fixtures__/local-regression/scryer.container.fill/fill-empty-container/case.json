@@ -1,6 +1,7 @@
 {
   "operationId": "scryer.container.fill",
-  "upstreamCommit": "0000000",
+  "provenance": "local_regression",
+  "localRegressionReason": "The expected subtree uses Orca's #69 anchor-corrected generation identity (source-anchored keys and build-edge relationships). This deterministic Orca behavior diverges from the Rust reference and cannot be independently reproduced from an upstream revision in this environment, so it is graded as an Orca-only regression rather than upstream parity.",
   "upstreamAnchors": [
     "generation.rs::fill_container",
     "CommitContainerModelRequest",
