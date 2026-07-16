@@ -19,6 +19,9 @@ export type GeneratedSubtreeIdentity = {
   localIds: Map<string, string>
   symbolNodeByLoc: Map<string, string>
   symbolComponent: Map<string, string>
+  // Source files this generation drew symbols from — the scope for judging which
+  // build-edge endpoints are relevant to the fill.
+  sourceFiles: Set<string>
   sourceEntries: GeneratedSourceEntry[]
   created: ScryerContainerFillCreatedComponent[]
   createdSymbols: ScryerContainerFillCreatedSymbol[]
@@ -59,8 +62,11 @@ function mintSymbol(
     }
     const responsibilityId = ids.responsibility()
     responsibilities.push({ id: responsibilityId, statement })
-    const line = typeof responsibility === 'object' ? responsibility.line : symbol.line
-    const endLine = typeof responsibility === 'object' ? responsibility.endLine : symbol.end_line
+    // A plain-string responsibility anchors to the whole symbol ({pattern, symbol})
+    // with no line range; only a responsibility object may carry an explicit
+    // sub-range. It never inherits the symbol's declared line/end_line.
+    const line = typeof responsibility === 'object' ? responsibility.line : undefined
+    const endLine = typeof responsibility === 'object' ? responsibility.endLine : undefined
     sourceEntries.push({
       key: responsibilityId,
       kind: 'responsibility',
@@ -80,22 +86,21 @@ function mintSymbol(
     ...(property.description !== undefined ? { description: property.description } : {})
   }))
 
-  // Property declarations need a node-level schema anchor in addition to any
-  // responsibility anchors attached to the same symbol.
-  if (properties.length > 0) {
-    sourceEntries.push({
-      key: symbolId,
-      kind: 'node',
-      entry: [
-        {
-          pattern: symbol.source_file,
-          symbol: symbol.name,
-          ...(symbol.line !== undefined ? { line: symbol.line } : {}),
-          ...(symbol.end_line !== undefined ? { endLine: symbol.end_line } : {})
-        }
-      ]
-    })
-  }
+  // Every generated symbol keeps a persistent node-level source anchor — its own
+  // durable code identity — even a thin re-export with no responsibilities or
+  // properties, so it never floats without a location we can re-resolve.
+  sourceEntries.push({
+    key: symbolId,
+    kind: 'node',
+    entry: [
+      {
+        pattern: symbol.source_file,
+        symbol: symbol.name,
+        ...(symbol.line !== undefined ? { line: symbol.line } : {}),
+        ...(symbol.end_line !== undefined ? { endLine: symbol.end_line } : {})
+      }
+    ]
+  })
 
   const node: ScryNode = {
     id: symbolId,
@@ -119,6 +124,7 @@ export function planGeneratedSubtreeIdentity(args: {
   const localIds = new Map<string, string>()
   const symbolNodeByLoc = new Map<string, string>()
   const symbolComponent = new Map<string, string>()
+  const sourceFiles = new Set<string>()
   const sourceEntries: GeneratedSourceEntry[] = []
   const created: ScryerContainerFillCreatedComponent[] = []
   const createdSymbols: ScryerContainerFillCreatedSymbol[] = []
@@ -148,6 +154,7 @@ export function planGeneratedSubtreeIdentity(args: {
       const generatedSymbol = mintSymbol(symbol, componentId, args.ids)
       nodes.push(generatedSymbol.node)
       symbolIds.push(generatedSymbol.node.id)
+      sourceFiles.add(symbol.source_file)
       localIds.set(symbol.key, generatedSymbol.node.id)
       symbolNodeByLoc.set(
         containerGenerationSourceKey(symbol.source_file, symbol.name),
@@ -184,6 +191,7 @@ export function planGeneratedSubtreeIdentity(args: {
     localIds,
     symbolNodeByLoc,
     symbolComponent,
+    sourceFiles,
     sourceEntries,
     created,
     createdSymbols,

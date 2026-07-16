@@ -11,7 +11,7 @@
       "derivedLinks": 0,
       "keptLinks": 0,
       "droppedLinks": 0,
-      "sourceAnchors": 1
+      "sourceAnchors": 2
     },
     "created": {
       "components": [
@@ -31,7 +31,7 @@
           "parentComponentId": "node-1",
           "responsibilityIds": ["resp-1"],
           "propertyLabels": [],
-          "sourceKeys": ["resp-1"]
+          "sourceKeys": ["resp-1", "node-2"]
         }
       ],
       "groups": []

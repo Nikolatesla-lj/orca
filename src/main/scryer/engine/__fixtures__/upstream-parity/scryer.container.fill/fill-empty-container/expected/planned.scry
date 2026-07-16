@@ -15,7 +15,8 @@
   "links": [],
   "groups": [],
   "sourceMap": {
-    "resp-1": [{ "pattern": "src/orders.ts", "symbol": "handleOrder", "line": 10, "endLine": 40 }]
+    "resp-1": [{ "pattern": "src/orders.ts", "symbol": "handleOrder" }],
+    "node-2": [{ "pattern": "src/orders.ts", "symbol": "handleOrder", "line": 10, "endLine": 40 }]
   },
   "boundaries": {}
 }
