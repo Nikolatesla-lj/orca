@@ -90,7 +90,7 @@
       "id": "node-3",
       "kind": "symbol",
       "name": "executeCatalogOperation",
-      "parentId": "node-1",
+      "parentId": "node-34",
       "responsibilities": [
         {
           "id": "resp-4",
@@ -103,7 +103,7 @@
       "id": "node-4",
       "kind": "symbol",
       "name": "createDefaultScryerOperationCatalog",
-      "parentId": "node-1",
+      "parentId": "node-32",
       "responsibilities": [
         {
           "id": "resp-5",
@@ -116,7 +116,7 @@
       "id": "node-5",
       "kind": "symbol",
       "name": "createScryerStateStore",
-      "parentId": "node-1",
+      "parentId": "node-35",
       "responsibilities": [
         {
           "id": "resp-6",
@@ -479,6 +479,356 @@
           "lastTouchedAt": 1784132159
         }
       ]
+    },
+    {
+      "id": "node-31",
+      "kind": "component",
+      "name": "Engine Operation Contracts",
+      "parentId": "orca-desktop",
+      "description": "Canonical architecture operation contracts",
+      "responsibilities": [
+        {
+          "id": "resp-35",
+          "statement": "Defines accepted requests, results, and policy metadata for architecture operations",
+          "lastTouchedAt": 1784132280
+        }
+      ]
+    },
+    {
+      "id": "node-32",
+      "kind": "component",
+      "name": "Operation Catalog",
+      "parentId": "orca-desktop",
+      "description": "Architecture operation registry",
+      "responsibilities": [
+        {
+          "id": "resp-36",
+          "statement": "Associates architecture operation identities with executable contracts and policies",
+          "lastTouchedAt": 1784132280
+        }
+      ]
+    },
+    {
+      "id": "node-33",
+      "kind": "component",
+      "name": "Operation Schemas",
+      "parentId": "orca-desktop",
+      "description": "Architecture operation validation schemas",
+      "responsibilities": [
+        {
+          "id": "resp-37",
+          "statement": "Validates architecture operation requests and observable results",
+          "lastTouchedAt": 1784132280
+        }
+      ]
+    },
+    {
+      "id": "node-34",
+      "kind": "component",
+      "name": "Operation Pipeline",
+      "parentId": "orca-desktop",
+      "description": "Shared architecture operation execution policy",
+      "responsibilities": [
+        {
+          "id": "resp-38",
+          "statement": "Enforces shared safety rules for architecture operation execution",
+          "lastTouchedAt": 1784132280
+        }
+      ]
+    },
+    {
+      "id": "node-35",
+      "kind": "component",
+      "name": "State Transaction Store",
+      "parentId": "orca-desktop",
+      "description": "Architecture state transaction boundary",
+      "responsibilities": [
+        {
+          "id": "resp-39",
+          "statement": "Commits primary architecture state atomically",
+          "lastTouchedAt": 1784132280
+        },
+        {
+          "id": "resp-40",
+          "statement": "Reports maintenance sidecar outcomes separately from primary state",
+          "lastTouchedAt": 1784132280
+        }
+      ]
+    },
+    {
+      "id": "node-36",
+      "kind": "component",
+      "name": "Plan Difference Contracts",
+      "parentId": "orca-desktop",
+      "description": "Committed-to-planned change contracts",
+      "responsibilities": [
+        {
+          "id": "resp-41",
+          "statement": "Describes outstanding changes between committed and planned architecture state",
+          "lastTouchedAt": 1784132280
+        }
+      ]
+    },
+    {
+      "id": "node-37",
+      "kind": "symbol",
+      "name": "ScryerOperationResult",
+      "parentId": "node-31",
+      "properties": [
+        {
+          "label": "ok",
+          "description": "Whether the operation succeeded",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "operationId",
+          "description": "The invoked operation identity",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "requestId",
+          "description": "The request correlation identity",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "result",
+          "description": "The successful operation payload",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "error",
+          "description": "The structured operation failure",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "meta",
+          "description": "Supplementary operation evidence",
+          "lastTouchedAt": 1784132324
+        }
+      ]
+    },
+    {
+      "id": "node-38",
+      "kind": "symbol",
+      "name": "ScryerOperationContract",
+      "parentId": "node-31",
+      "properties": [
+        {
+          "label": "id",
+          "description": "The operation identity",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "inputSchema",
+          "description": "The accepted request shape",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "successSchema",
+          "description": "The successful result shape",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "errorCodes",
+          "description": "The permitted failure categories",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "errorDetailSchemas",
+          "description": "The permitted structured failure details",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "capability",
+          "description": "The operation capability class",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "policy",
+          "description": "The state and authorization policy",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "upstreamParity",
+          "description": "The semantic reference evidence",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "transports",
+          "description": "The supported adapter mappings",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "execute",
+          "description": "The operation implementation",
+          "lastTouchedAt": 1784132324
+        }
+      ]
+    },
+    {
+      "id": "node-39",
+      "kind": "symbol",
+      "name": "operationSchemas",
+      "parentId": "node-33",
+      "responsibilities": [
+        {
+          "id": "resp-42",
+          "statement": "Associates each catalog operation with strict request and result validation",
+          "lastTouchedAt": 1784132324
+        }
+      ]
+    },
+    {
+      "id": "node-40",
+      "kind": "symbol",
+      "name": "containerFillInputSchema",
+      "parentId": "node-33",
+      "responsibilities": [
+        {
+          "id": "resp-43",
+          "statement": "Validates a complete container generation proposal",
+          "lastTouchedAt": 1784132324
+        }
+      ]
+    },
+    {
+      "id": "node-41",
+      "kind": "symbol",
+      "name": "containerFillSuccessSchema",
+      "parentId": "node-33",
+      "responsibilities": [
+        {
+          "id": "resp-44",
+          "statement": "Validates the compact container generation result",
+          "lastTouchedAt": 1784132324
+        }
+      ]
+    },
+    {
+      "id": "node-42",
+      "kind": "symbol",
+      "name": "PendingChange",
+      "parentId": "node-36",
+      "properties": [
+        {
+          "label": "kind",
+          "description": "The changed architecture element kind",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "id",
+          "description": "The changed element identity",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "ownerId",
+          "description": "The owning architecture element identity",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "label",
+          "description": "The review label for the change",
+          "lastTouchedAt": 1784132324
+        },
+        {
+          "label": "changes",
+          "description": "The field or structural changes",
+          "lastTouchedAt": 1784132324
+        }
+      ]
+    },
+    {
+      "id": "node-43",
+      "kind": "symbol",
+      "name": "validateContainerGenerationProposal",
+      "parentId": "node-6",
+      "responsibilities": [
+        {
+          "id": "resp-45",
+          "statement": "Rejects incomplete or structurally invalid container generation proposals",
+          "lastTouchedAt": 1784132324
+        }
+      ]
+    },
+    {
+      "id": "node-44",
+      "kind": "symbol",
+      "name": "planGeneratedSubtreeIdentity",
+      "parentId": "node-6",
+      "responsibilities": [
+        {
+          "id": "resp-46",
+          "statement": "Assigns stable identities to generated components, symbols, groups, and responsibilities",
+          "lastTouchedAt": 1784132324
+        }
+      ]
+    },
+    {
+      "id": "node-45",
+      "kind": "symbol",
+      "name": "planGeneratedSourceAnchors",
+      "parentId": "node-6",
+      "responsibilities": [
+        {
+          "id": "resp-47",
+          "statement": "Preserves source identity for generated symbols and responsibilities",
+          "lastTouchedAt": 1784132324
+        }
+      ]
+    },
+    {
+      "id": "node-46",
+      "kind": "symbol",
+      "name": "planGeneratedRelationships",
+      "parentId": "node-6",
+      "responsibilities": [
+        {
+          "id": "resp-48",
+          "statement": "Builds legal generated groups and links from available evidence",
+          "lastTouchedAt": 1784132324
+        }
+      ]
+    },
+    {
+      "id": "node-47",
+      "kind": "symbol",
+      "name": "planContainerGenerationResult",
+      "parentId": "node-6",
+      "responsibilities": [
+        {
+          "id": "resp-49",
+          "statement": "Summarizes generated elements, dropped relationships, and evidence status",
+          "lastTouchedAt": 1784132324
+        }
+      ]
+    },
+    {
+      "id": "node-48",
+      "kind": "component",
+      "name": "Scryer Compatibility Tool Adapter",
+      "parentId": "orca-desktop",
+      "description": "Compatibility tool-name adapter",
+      "responsibilities": [
+        {
+          "id": "resp-50",
+          "statement": "Translates supported compatibility tool names into architecture operation intents",
+          "lastTouchedAt": 1784134939
+        }
+      ]
+    },
+    {
+      "id": "node-49",
+      "kind": "component",
+      "name": "Named Model File Adapter",
+      "parentId": "orca-desktop",
+      "description": "Non-default architecture model file adapter",
+      "responsibilities": [
+        {
+          "id": "resp-51",
+          "statement": "Supports named model file workflows without owning default architecture semantics",
+          "lastTouchedAt": 1784134939
+        }
+      ]
     }
   ],
   "links": [
@@ -552,24 +902,6 @@
       "method": "in-process"
     },
     {
-      "id": "link-node-2-node-4",
-      "src": "node-2",
-      "dst": "node-4",
-      "label": "loads catalog"
-    },
-    {
-      "id": "link-node-2-node-3",
-      "src": "node-2",
-      "dst": "node-3",
-      "label": "dispatches operations"
-    },
-    {
-      "id": "link-node-3-node-5",
-      "src": "node-3",
-      "dst": "node-5",
-      "label": "commits state"
-    },
-    {
       "id": "link-node-9-node-10",
       "src": "node-9",
       "dst": "node-10",
@@ -600,14 +932,122 @@
       "dst": "node-28",
       "label": "requests automation",
       "method": "native IPC"
+    },
+    {
+      "id": "link-node-1-node-32",
+      "src": "node-1",
+      "dst": "node-32",
+      "label": "loads catalog"
+    },
+    {
+      "id": "link-node-1-node-34",
+      "src": "node-1",
+      "dst": "node-34",
+      "label": "dispatches operations"
+    },
+    {
+      "id": "link-node-34-node-35",
+      "src": "node-34",
+      "dst": "node-35",
+      "label": "commits state"
+    },
+    {
+      "id": "link-node-32-node-31",
+      "src": "node-32",
+      "dst": "node-31",
+      "label": "uses contracts"
+    },
+    {
+      "id": "link-node-32-node-33",
+      "src": "node-32",
+      "dst": "node-33",
+      "label": "uses schemas"
+    },
+    {
+      "id": "link-node-34-node-31",
+      "src": "node-34",
+      "dst": "node-31",
+      "label": "enforces contracts"
+    },
+    {
+      "id": "link-node-6-node-31",
+      "src": "node-6",
+      "dst": "node-31",
+      "label": "uses generation contracts"
+    },
+    {
+      "id": "link-node-34-node-36",
+      "src": "node-34",
+      "dst": "node-36",
+      "label": "reads pending changes"
+    },
+    {
+      "id": "link-node-48-node-1",
+      "src": "node-48",
+      "dst": "node-1",
+      "label": "executes operations"
+    },
+    {
+      "id": "link-node-12-node-49",
+      "src": "node-12",
+      "dst": "node-49",
+      "label": "manages named models"
+    },
+    {
+      "id": "link-node-7-node-43",
+      "src": "node-7",
+      "dst": "node-43",
+      "label": "validates proposal"
+    },
+    {
+      "id": "link-node-7-node-44",
+      "src": "node-7",
+      "dst": "node-44",
+      "label": "mints identities"
+    },
+    {
+      "id": "link-node-44-node-45",
+      "src": "node-44",
+      "dst": "node-45",
+      "label": "anchors sources"
+    },
+    {
+      "id": "link-node-44-node-46",
+      "src": "node-44",
+      "dst": "node-46",
+      "label": "builds relationships"
+    },
+    {
+      "id": "link-node-7-node-47",
+      "src": "node-7",
+      "dst": "node-47",
+      "label": "summarizes result"
+    },
+    {
+      "id": "link-node-39-node-40",
+      "src": "node-39",
+      "dst": "node-40",
+      "label": "registers input schema"
+    },
+    {
+      "id": "link-node-39-node-41",
+      "src": "node-39",
+      "dst": "node-41",
+      "label": "registers success schema"
+    },
+    {
+      "id": "link-node-38-node-37",
+      "src": "node-38",
+      "dst": "node-37",
+      "label": "returns result"
     }
   ],
   "groups": [],
   "sourceMap": {
-    "resp-30": [
+    "resp-16": [
       {
-        "pattern": "src/cli/handlers/scryer.ts",
-        "symbol": "SCRYER_HANDLERS"
+        "pattern": "src/main/ipc/architecture.ts",
+        "symbol": "registerArchitectureHandlers"
       }
     ],
     "resp-22": [
@@ -616,22 +1056,28 @@
         "symbol": "useArchitectureModelController"
       }
     ],
+    "resp-6": [
+      {
+        "pattern": "src/main/scryer/engine/state-store.ts",
+        "symbol": "createScryerStateStore"
+      }
+    ],
     "resp-29": [
       {
         "pattern": "src/cli/specs/scryer.ts",
         "symbol": "SCRYER_COMMAND_SPECS"
       }
     ],
-    "resp-24": [
+    "resp-43": [
       {
-        "pattern": "src/renderer/src/components/architecture/ArchitectureCanvas.tsx",
-        "symbol": "ArchitectureCanvas"
+        "pattern": "src/main/scryer/engine/container-generation-schemas.ts",
+        "symbol": "containerFillInputSchema"
       }
     ],
-    "resp-4": [
+    "resp-45": [
       {
-        "pattern": "src/main/scryer/engine/pipeline.ts",
-        "symbol": "executeCatalogOperation"
+        "pattern": "src/main/scryer/engine/container-generation-proposal.ts",
+        "symbol": "validateContainerGenerationProposal"
       }
     ],
     "resp-8": [
@@ -640,28 +1086,54 @@
         "symbol": "ScryerContainerGenerationPlanner"
       }
     ],
-    "resp-12": [
+    "resp-30": [
       {
-        "pattern": "src/main/scryer/edit-session-gate.ts",
-        "symbol": "evaluateCompletionGate"
+        "pattern": "src/cli/handlers/scryer.ts",
+        "symbol": "SCRYER_HANDLERS"
       }
     ],
-    "resp-20": [
+    "node-38": [
       {
-        "pattern": "src/shared/scryer/prompts.ts",
-        "symbol": "nodeFillPrompt"
+        "pattern": "src/main/scryer/engine/operation-contracts.ts",
+        "symbol": "ScryerOperationContract"
       }
     ],
-    "resp-6": [
+    "resp-42": [
       {
-        "pattern": "src/main/scryer/engine/state-store.ts",
-        "symbol": "createScryerStateStore"
+        "pattern": "src/main/scryer/engine/schemas.ts",
+        "symbol": "operationSchemas"
       }
     ],
-    "resp-11": [
+    "resp-44": [
       {
-        "pattern": "src/main/scryer/edit-session-controller.ts",
-        "symbol": "createScryerEditSessionController"
+        "pattern": "src/main/scryer/engine/container-generation-schemas.ts",
+        "symbol": "containerFillSuccessSchema"
+      }
+    ],
+    "resp-4": [
+      {
+        "pattern": "src/main/scryer/engine/pipeline.ts",
+        "symbol": "executeCatalogOperation"
+      }
+    ],
+    "node-37": [
+      {
+        "pattern": "src/main/scryer/engine/operation-results.ts",
+        "symbol": "ScryerOperationResult"
+      }
+    ],
+    "resp-18": [
+      {
+        "pattern": "src/main/scryer/architecture-view-adapter.ts",
+        "symbol": "createArchitectureViewAdapter"
+      }
+    ],
+    "resp-26": [
+      {
+        "pattern": "src/preload/index.ts",
+        "symbol": "api",
+        "line": 1799,
+        "endLine": 1907
       }
     ],
     "resp-13": [
@@ -676,30 +1148,64 @@
         "symbol": "createDefaultScryerOperationCatalog"
       }
     ],
-    "resp-26": [
+    "resp-24": [
       {
-        "pattern": "src/preload/index.ts",
-        "symbol": "api",
-        "line": 1799,
-        "endLine": 1907
+        "pattern": "src/renderer/src/components/architecture/ArchitectureCanvas.tsx",
+        "symbol": "ArchitectureCanvas"
       }
     ],
-    "resp-18": [
+    "resp-46": [
       {
-        "pattern": "src/main/scryer/architecture-view-adapter.ts",
-        "symbol": "createArchitectureViewAdapter"
+        "pattern": "src/main/scryer/engine/container-generation-identity.ts",
+        "symbol": "planGeneratedSubtreeIdentity"
       }
     ],
-    "resp-16": [
+    "resp-47": [
       {
-        "pattern": "src/main/ipc/architecture.ts",
-        "symbol": "registerArchitectureHandlers"
+        "pattern": "src/main/scryer/engine/container-generation-source-anchors.ts",
+        "symbol": "planGeneratedSourceAnchors"
+      }
+    ],
+    "resp-20": [
+      {
+        "pattern": "src/shared/scryer/prompts.ts",
+        "symbol": "nodeFillPrompt"
+      }
+    ],
+    "node-42": [
+      {
+        "pattern": "src/main/scryer/engine/pending-contracts.ts",
+        "symbol": "PendingChange"
+      }
+    ],
+    "resp-11": [
+      {
+        "pattern": "src/main/scryer/edit-session-controller.ts",
+        "symbol": "createScryerEditSessionController"
       }
     ],
     "resp-34": [
       {
         "pattern": "mobile/packages/expo-two-way-audio/android/src/main/java/expo/modules/twowayaudio/ExpoTwoWayAudioModule.kt",
         "symbol": "ExpoTwoWayAudioModule"
+      }
+    ],
+    "resp-48": [
+      {
+        "pattern": "src/main/scryer/engine/container-generation-relationships.ts",
+        "symbol": "planGeneratedRelationships"
+      }
+    ],
+    "resp-12": [
+      {
+        "pattern": "src/main/scryer/edit-session-gate.ts",
+        "symbol": "evaluateCompletionGate"
+      }
+    ],
+    "resp-49": [
+      {
+        "pattern": "src/main/scryer/engine/container-generation-result.ts",
+        "symbol": "planContainerGenerationResult"
       }
     ]
   },
@@ -709,15 +1215,15 @@
         "pattern": "mobile/**/*"
       }
     ],
-    "node-28": [
-      {
-        "pattern": "native/computer-use-macos/**/*"
-      }
-    ],
     "node-29": [
       {
         "pattern": "mobile/packages/expo-two-way-audio/**/*",
         "comment": "Expo native audio package"
+      }
+    ],
+    "node-28": [
+      {
+        "pattern": "native/computer-use-macos/**/*"
       }
     ]
   }
