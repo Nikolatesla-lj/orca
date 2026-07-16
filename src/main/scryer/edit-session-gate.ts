@@ -156,62 +156,8 @@ function leaseBlocker(input: EvaluateCompletionGateInput): CompletionGateBlocker
   return null
 }
 
-function compactFoldInput(input: ScryerPlanFoldInput): ScryerPlanFoldInput | null {
-  const compacted: ScryerPlanFoldInput = { mode: 'agent_completion' }
-  if (input.node_id) {
-    compacted.node_id = input.node_id
-  }
-  if (input.responsibility_ids && input.responsibility_ids.length > 0) {
-    compacted.responsibility_ids = input.responsibility_ids
-  }
-  if (input.properties && input.properties.length > 0) {
-    compacted.properties = input.properties
-  }
-  if (input.link_ids && input.link_ids.length > 0) {
-    compacted.link_ids = input.link_ids
-  }
-  if (input.group_ids && input.group_ids.length > 0) {
-    compacted.group_ids = input.group_ids
-  }
-  return Object.keys(compacted).length > 1 ? compacted : null
-}
-
 export function foldInputFor(changes: PendingChange[]): ScryerPlanFoldInput | null {
   return changes.length > 0 ? { mode: 'agent_completion', all: true } : null
-}
-
-export function foldInputsFor(changes: PendingChange[]): ScryerPlanFoldInput[] {
-  const inputs: ScryerPlanFoldInput[] = []
-  const shared: ScryerPlanFoldInput = {
-    mode: 'agent_completion',
-    responsibility_ids: [],
-    properties: [],
-    link_ids: [],
-    group_ids: []
-  }
-  for (const change of changes) {
-    switch (change.kind) {
-      case 'node':
-        inputs.push({ mode: 'agent_completion', node_id: change.id })
-        break
-      case 'responsibility':
-        shared.responsibility_ids?.push(change.id)
-        break
-      case 'property':
-        if (change.ownerId) {
-          shared.properties?.push({ node_id: change.ownerId, label: change.id })
-        }
-        break
-      case 'link':
-        shared.link_ids?.push(change.id)
-        break
-      case 'group':
-        shared.group_ids?.push(change.id)
-        break
-    }
-  }
-  const sharedInput = compactFoldInput(shared)
-  return sharedInput ? [...inputs, sharedInput] : inputs
 }
 
 export function evaluateCompletionGate(input: EvaluateCompletionGateInput): CompletionGateResult {

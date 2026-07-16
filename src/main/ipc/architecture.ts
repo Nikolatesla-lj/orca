@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- Why: this IPC registrar remains a compatibility facade for Scryer model, drift, sync, MCP, and prompt handlers while the backing services are split behind injectable deps. */
-import { watch, type FSWatcher } from 'fs'
-import { mkdir } from 'fs/promises'
+import { watch, type FSWatcher } from 'node:fs'
+import { mkdir } from 'node:fs/promises'
 import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import {
   createProjectModel,
@@ -857,8 +857,8 @@ export function registerArchitectureHandlers(
 
   registrar.handle(
     'architecture:beginEditSession',
-    (_event, args: { projectPath: string; agentRunId: string }) => {
-      deps.scryerAgentRunRuntime?.setRunStatus(args.agentRunId, 'running', { emit: false })
+    async (_event, args: { projectPath: string; agentRunId: string }) => {
+      await deps.scryerAgentRunRuntime?.setRunStatus(args.agentRunId, 'running', { emit: false })
       return requireEditSessionController(deps).beginAgentEditSession(args)
     }
   )
@@ -873,7 +873,7 @@ export function registerArchitectureHandlers(
         foldPolicy?: 'never' | 'when_gate_passes'
       }
     ) => {
-      deps.scryerAgentRunRuntime?.setRunStatus(args.agentRunId, 'done', { emit: false })
+      await deps.scryerAgentRunRuntime?.setRunStatus(args.agentRunId, 'done', { emit: false })
       const result = await requireEditSessionController(deps).completeAgentEditSession(args)
       deps.scryerAgentRunRuntime?.clearRun(args.agentRunId)
       if (args.foldPolicy === 'when_gate_passes' && result.foldAllowed) {
@@ -886,7 +886,7 @@ export function registerArchitectureHandlers(
   registrar.handle(
     'architecture:cancelEditSession',
     async (_event, args: { projectPath: string; agentRunId: string }) => {
-      deps.scryerAgentRunRuntime?.setRunStatus(args.agentRunId, 'cancelled', { emit: false })
+      await deps.scryerAgentRunRuntime?.setRunStatus(args.agentRunId, 'cancelled', { emit: false })
       await requireEditSessionController(deps).cancelAgentEditSession(args)
       deps.scryerAgentRunRuntime?.clearRun(args.agentRunId)
     }
