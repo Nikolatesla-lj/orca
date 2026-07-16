@@ -37,6 +37,7 @@ export function planContainerGenerationResult(args: {
       droppedLinks: args.links.dropped,
       edgeGraphStatus: args.links.edgeGraphStatus,
       thinSymbolCount: args.build.thinSymbolCount,
+      warningCount: args.findings.filter((finding) => finding.severity === 'warning').length,
       findings: args.findings
     },
     recommendedNextReads: [

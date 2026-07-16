@@ -153,6 +153,7 @@ export const containerFillSuccessSchema = z
         droppedLinks: z.array(droppedLinkSchema),
         edgeGraphStatus: edgeGraphStatusSchema,
         thinSymbolCount: z.number().int().nonnegative(),
+        warningCount: z.number().int().nonnegative(),
         findings: z.array(validationFindingSchema)
       })
       .strict(),

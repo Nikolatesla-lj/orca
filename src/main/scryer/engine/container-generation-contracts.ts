@@ -133,6 +133,8 @@ export type ScryerContainerFillResult = {
     droppedLinks: ScryerDroppedLink[]
     edgeGraphStatus: ScryerEdgeGraphStatus
     thinSymbolCount: number
+    // Count of warning-severity snapshot findings surfaced with this generation.
+    warningCount: number
     findings: ScryerValidationFinding[]
   }
   recommendedNextReads: ScryerRecommendedRead[]
