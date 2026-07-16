@@ -96,9 +96,10 @@ export function validateContainerGenerationProposal(args: {
     return invalidContainerGenerationProposal('container.fill target is not a container', findings)
   }
 
-  // Keep the current committed-layer precondition intact; effective-state
-  // emptiness is a separate semantic change owned by the next issue slice.
-  const hasComponentChild = args.committed.nodes.some(
+  // Effective-state emptiness spans both durable layers: a container is "non-empty"
+  // if either the committed model or the planned draft already holds a direct
+  // component child, so a planned-only child from a concurrent session still blocks.
+  const hasComponentChild = [...args.committed.nodes, ...args.planned.nodes].some(
     (node) => node.parentId === args.container.id && node.kind === 'component'
   )
   if (hasComponentChild) {
