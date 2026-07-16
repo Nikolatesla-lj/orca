@@ -38,7 +38,9 @@ export function isUnimplementedExecutor(
   )
 }
 
-function unimplemented(operationId: ScryerOperationId): ScryerOperationExecutor<unknown, unknown> {
+export function createUnimplementedExecutor(
+  operationId: ScryerOperationId
+): ScryerOperationExecutor<unknown, unknown> {
   const executor: ScryerOperationExecutor<unknown, unknown> = () =>
     failure('internal_error', `${operationId} is registered but not implemented in this slice`, {
       reason: 'unexpected_exception',
@@ -67,7 +69,7 @@ export function createDefaultScryerOperationCatalog(): ScryerOperationCatalog {
       upstream: row.upstream,
       transports: metadataFor(row.id, row.policy),
       support: SCRYER_OPERATION_SUPPORT[row.id],
-      execute: row.execute ?? unimplemented(row.id)
+      execute: row.execute ?? createUnimplementedExecutor(row.id)
     }
     catalog.registerOperation(contract)
   }
