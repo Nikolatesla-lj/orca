@@ -20,7 +20,7 @@ import {
 } from '../scryer/model-store'
 import { callScryerTool } from '../scryer/mcp-tools'
 import { writeArchitectureMcpConfig } from '../scryer/mcp-config'
-import { beginSync, cancelSync, finishSync } from '../scryer/sync'
+import { beginSync, cancelSync, finishSync, recordSyncCompletionGate } from '../scryer/sync'
 import {
   createArchitectureViewAdapter,
   type ArchitectureViewAdapter
@@ -142,6 +142,7 @@ export type ArchitectureHandlerDeps = {
   beginSync: typeof beginSync
   cancelSync: typeof cancelSync
   finishSync: typeof finishSync
+  recordSyncCompletionGate: typeof recordSyncCompletionGate
   scryerEditSessionController?: ScryerEditSessionController
 }
 
@@ -162,7 +163,8 @@ export function createArchitectureEditSessionControllerForAgentRuntime(
   return createScryerEditSessionController({
     engine: defaultScryerEngine,
     leaseStore: createScryerEditLeaseStore(),
-    agentRuntime
+    agentRuntime,
+    onCompletionGate: (input, result) => recordSyncCompletionGate(input.projectPath, result)
   })
 }
 
@@ -188,6 +190,7 @@ export const defaultArchitectureDeps: ArchitectureHandlerDeps = {
   beginSync,
   cancelSync,
   finishSync,
+  recordSyncCompletionGate,
   scryerEditSessionController: createArchitectureEditSessionControllerForAgentRuntime(
     unavailableAgentRunRuntime
   )
@@ -880,6 +883,7 @@ export function registerArchitectureHandlers(
   registrar.handle('architecture:completeEditSession', async (event, rawArgs: unknown) => {
     const args = parseArchitectureCompleteEditSessionRequest(rawArgs)
     const result = await requireEditSessionController(deps).completeAgentEditSession(args)
+    deps.recordSyncCompletionGate(args.projectPath, result)
     if (result.outcome === 'folded') {
       notifyModelChanged(event, args.projectPath, undefined, deps)
     }

@@ -13,6 +13,7 @@ import {
   type CompletionGateLeaseDisposition,
   type CompletionGateResult
 } from './edit-session-gate'
+import { reportEditSessionCompletion } from './edit-session-completion-observer'
 
 export type BeginAgentEditSessionInput = {
   projectPath: string
@@ -77,6 +78,7 @@ export type CreateScryerEditSessionControllerOptions = {
   engine: ScryerEngine
   leaseStore: ScryerEditLeaseStore
   agentRuntime: ScryerAgentRunRuntime
+  onCompletionGate?: (input: CompleteAgentEditSessionInput, result: CompletionGateResult) => void
 }
 
 function unwrapOperationResult<T>(result: ScryerOperationResult<T>): T {
@@ -283,20 +285,20 @@ export function createScryerEditSessionController(
           }
         }
         if (gate.outcome === 'folded' || gate.outcome === 'nothing_to_fold') {
-          return {
+          return reportEditSessionCompletion(options.onCompletionGate, input, {
             ...gate,
             leaseDisposition: await releaseCompletedSession(
               input.projectPath,
               input.agentRunId,
               currentLease
             )
-          }
+          })
         }
         unsubscribeSession(input.projectPath, input.agentRunId)
-        return {
+        return reportEditSessionCompletion(options.onCompletionGate, input, {
           ...gate,
           leaseDisposition: retainedDisposition(currentLease, input.agentRunId)
-        }
+        })
       } catch (error) {
         // Completion failures keep the candidate and lease available for explicit recovery.
         unsubscribeSession(input.projectPath, input.agentRunId)

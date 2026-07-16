@@ -1,6 +1,12 @@
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { AgentHookServer } from '../agent-hooks/server'
 import { OrcaRuntimeService } from '../runtime/orca-runtime'
+import { createScryerEditLeaseStore } from './edit-lease-store'
+import { createScryerEditSessionController } from './edit-session-controller'
+import { createScryerEngine } from './engine'
 import { createNativeScryerAgentRunRuntime } from './native-agent-run-runtime'
 
 const LEAF_ID = '11111111-1111-4111-8111-111111111111'
@@ -81,6 +87,53 @@ describe('native Scryer agent run source wiring', () => {
     runtimeService.onPtyExit('pty-native-source', 0)
 
     expect(finished).toHaveBeenCalledWith({ agentRunId: AGENT_RUN_ID, status: 'crashed' })
+    runtime.dispose()
+    agentHookServer.stop()
+  })
+
+  it('releases the active edit lease when native done is interrupted', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-native-interrupted-'))
+    const { agentHookServer, runtimeService } = createNativeSources()
+    const runtime = createRuntime(agentHookServer, runtimeService)
+    const leaseStore = createScryerEditLeaseStore()
+    const controller = createScryerEditSessionController({
+      engine: createScryerEngine(),
+      leaseStore,
+      agentRuntime: runtime
+    })
+    await controller.beginAgentEditSession({ projectPath, agentRunId: AGENT_RUN_ID })
+
+    agentHookServer.ingestTerminalStatus({
+      paneKey: PANE_KEY,
+      tabId: AGENT_RUN_ID,
+      connectionId: null,
+      payload: { state: 'done', prompt: '', interrupted: true }
+    })
+
+    await vi.waitFor(async () => {
+      await expect(leaseStore.read({ projectPath })).resolves.toBeNull()
+    })
+    runtime.dispose()
+    agentHookServer.stop()
+  })
+
+  it('releases the active edit lease when the native PTY exits nonzero', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-native-crashed-'))
+    const { agentHookServer, runtimeService } = createNativeSources()
+    const runtime = createRuntime(agentHookServer, runtimeService)
+    const leaseStore = createScryerEditLeaseStore()
+    const controller = createScryerEditSessionController({
+      engine: createScryerEngine(),
+      leaseStore,
+      agentRuntime: runtime
+    })
+    await controller.beginAgentEditSession({ projectPath, agentRunId: AGENT_RUN_ID })
+
+    runtimeService.onPtyExit('pty-native-source', 9)
+
+    await vi.waitFor(async () => {
+      await expect(leaseStore.read({ projectPath })).resolves.toBeNull()
+    })
     runtime.dispose()
     agentHookServer.stop()
   })

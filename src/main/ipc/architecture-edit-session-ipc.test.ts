@@ -72,9 +72,11 @@ describe('Architecture edit-session IPC handlers', () => {
       }))
     }
     const finishSync = vi.fn(defaultArchitectureDeps.finishSync)
+    const recordSyncCompletionGate = vi.fn()
     registerArchitectureHandlers(registrar(), {
       ...defaultArchitectureDeps,
       finishSync,
+      recordSyncCompletionGate,
       scryerEditSessionController: controller
     })
 
@@ -112,6 +114,10 @@ describe('Architecture edit-session IPC handlers', () => {
       agentRunId: 'run-1'
     })
     expect(finishSync).not.toHaveBeenCalled()
+    expect(recordSyncCompletionGate).toHaveBeenCalledWith(
+      projectPath,
+      expect.objectContaining({ outcome: 'folded', leaseDisposition: 'released_after_completion' })
+    )
     expect(sender.send).toHaveBeenCalledWith('architecture:modelChanged', {
       projectPath,
       fileName: 'model.scry'

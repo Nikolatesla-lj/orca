@@ -3,7 +3,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { createScryerEditLeaseStore } from './edit-lease-store'
-import { createScryerEditSessionController } from './edit-session-controller'
+import {
+  createScryerEditSessionController,
+  type CompleteAgentEditSessionInput
+} from './edit-session-controller'
+import type { CompletionGateResult } from './edit-session-gate'
 import { createScryerMutableAgentRunRuntime } from './edit-session-runtime'
 import { createScryerEngine, type ScryerEngine, type ScryerOperationResult } from './engine'
 
@@ -23,7 +27,10 @@ function model(name = 'API') {
   }
 }
 
-function controllerHarness(engine: ScryerEngine = createScryerEngine()) {
+function controllerHarness(
+  engine: ScryerEngine = createScryerEngine(),
+  onCompletionGate?: (input: CompleteAgentEditSessionInput, result: CompletionGateResult) => void
+) {
   const leaseStore = createScryerEditLeaseStore({
     tokens: { next: () => 'scryer-edit-controller-secret' }
   })
@@ -39,7 +46,8 @@ function controllerHarness(engine: ScryerEngine = createScryerEngine()) {
   const controller = createScryerEditSessionController({
     engine: instrumentedEngine,
     leaseStore,
-    agentRuntime: runtime
+    agentRuntime: runtime,
+    onCompletionGate
   })
   return { controller, operationCalls, leaseStore, runtime }
 }
@@ -68,7 +76,11 @@ describe('Scryer edit session controller', () => {
   it('awaits runtime completion and releases a nothing-to-fold session', async () => {
     const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-controller-empty-'))
     await writeScryerFile(projectPath, 'model.scry', model())
-    const { controller, leaseStore, operationCalls, runtime } = controllerHarness()
+    const onCompletionGate = vi.fn()
+    const { controller, leaseStore, operationCalls, runtime } = controllerHarness(
+      createScryerEngine(),
+      onCompletionGate
+    )
     const agentRunId = 'run-empty'
     await beginSession({ projectPath, agentRunId, controller, runtime })
 
@@ -79,6 +91,13 @@ describe('Scryer edit session controller', () => {
       'scryer.plan.pending',
       'scryer.model.validate'
     ])
+    expect(onCompletionGate).toHaveBeenCalledWith(
+      { projectPath, agentRunId, foldPolicy: 'when_gate_passes' },
+      expect.objectContaining({
+        outcome: 'nothing_to_fold',
+        leaseDisposition: 'released_after_completion'
+      })
+    )
   })
 
   it('auto folds warnings-only candidate work in one operation and rereads terminal state', async () => {
