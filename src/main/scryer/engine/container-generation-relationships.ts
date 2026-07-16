@@ -1,4 +1,4 @@
-import { splitSymbolKey } from './build-edge-cache'
+import { classifyBuildEdgeStatus, splitSymbolKey } from './build-edge-cache'
 import type {
   ScryerBuildEdgeGraph,
   ScryerContainerFillCreatedGroup,
@@ -58,6 +58,7 @@ function violationReason(reason: string, src: string, dst: string): string {
 export function planGeneratedGroups(args: {
   proposals: ScryerProposedGroup[]
   componentIdByKey: Map<string, string>
+  containerId: string
   ids: ScryerIdMinter
 }): { ok: true; value: GeneratedGroups } | { ok: false; failure: ScryerExecutorResult<never> } {
   const groups: ScryGroup[] = []
@@ -89,6 +90,9 @@ export function planGeneratedGroups(args: {
       id: args.ids.group(),
       name: proposal.name,
       memberIds,
+      // A generated group is owned by the target container and spans only that
+      // container's directly generated component children.
+      parentNodeId: args.containerId,
       ...(proposal.description !== undefined ? { description: proposal.description } : {}),
       ...(responsibilities.length > 0 ? { responsibilities } : {})
     }
@@ -112,16 +116,6 @@ export function planGeneratedGroups(args: {
     : { ok: true, value: { groups, created } }
 }
 
-function edgeGraphStatus(buildEdges: ScryerBuildEdgeGraph | null): ScryerEdgeGraphStatus {
-  if (!buildEdges) {
-    return 'missing'
-  }
-  if (buildEdges.symbolEdges.length === 0) {
-    return 'empty'
-  }
-  return 'available'
-}
-
 export function planGeneratedRelationships(args: {
   proposals: ScryerProposedLink[]
   committed: ScryModel
@@ -129,6 +123,7 @@ export function planGeneratedRelationships(args: {
   localIds: Map<string, string>
   symbolNodeByLoc: Map<string, string>
   symbolComponent: Map<string, string>
+  sourceFiles: Set<string>
   buildEdges: ScryerBuildEdgeGraph | null
   ids: ScryerIdMinter
   validators: ScryerValidatorSet
@@ -210,7 +205,12 @@ export function planGeneratedRelationships(args: {
     derivedCount,
     keptAgentCount: agentKept.length,
     dropped,
-    edgeGraphStatus: edgeGraphStatus(args.buildEdges)
+    edgeGraphStatus: classifyBuildEdgeStatus({
+      buildEdges: args.buildEdges,
+      isGeneratedSourceFile: (path) => args.sourceFiles.has(path),
+      resolvesToGeneratedSymbol: (path, name) =>
+        args.symbolNodeByLoc.has(containerGenerationSourceKey(path, name))
+    })
   }
 }
 

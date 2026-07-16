@@ -1,6 +1,6 @@
-import { readFile } from 'fs/promises'
+import { readFile } from 'node:fs/promises'
 import { scryerPaths } from './paths'
-import type { ScryerBuildEdge, ScryerBuildEdgeGraph } from './types'
+import type { ScryerBuildEdge, ScryerBuildEdgeGraph, ScryerEdgeGraphStatus } from './types'
 
 // Reads the extractor's cached dependency graph at `.scryer/.build_edges.json`.
 // A missing or unparsable cache means the fill wires no automatic links — it is
@@ -44,6 +44,46 @@ export function normalizeBuildEdgeGraph(parsed: unknown): ScryerBuildEdgeGraph |
     }
   }
   return { symbolEdges: edges }
+}
+
+// Classify how much the cached dependency graph could be applied to this fill.
+// Relevance is scoped to the generation's own source files: an edge is relevant
+// only when at least one endpoint lives in a file we drew symbols from. Edges
+// wholly outside that scope are the global cache's business and are ignored, so
+// they never masquerade as a `partially_unresolved` gap. Within scope, an
+// in-scope endpoint that fails to resolve to a generated symbol means the
+// derived-link set is incomplete — `partially_unresolved` rather than a guess.
+export function classifyBuildEdgeStatus(args: {
+  buildEdges: ScryerBuildEdgeGraph | null
+  isGeneratedSourceFile: (path: string) => boolean
+  resolvesToGeneratedSymbol: (path: string, name: string) => boolean
+}): ScryerEdgeGraphStatus {
+  if (!args.buildEdges) {
+    return 'missing'
+  }
+  if (args.buildEdges.symbolEdges.length === 0) {
+    return 'empty'
+  }
+  let sawRelevantUnresolved = false
+  for (const edge of args.buildEdges.symbolEdges) {
+    const from = splitSymbolKey(edge.src)
+    const to = splitSymbolKey(edge.dst)
+    if (!from || !to) {
+      continue
+    }
+    const fromInScope = args.isGeneratedSourceFile(from.path)
+    const toInScope = args.isGeneratedSourceFile(to.path)
+    if (!fromInScope && !toInScope) {
+      continue
+    }
+    if (fromInScope && !args.resolvesToGeneratedSymbol(from.path, from.name)) {
+      sawRelevantUnresolved = true
+    }
+    if (toInScope && !args.resolvesToGeneratedSymbol(to.path, to.name)) {
+      sawRelevantUnresolved = true
+    }
+  }
+  return sawRelevantUnresolved ? 'partially_unresolved' : 'available'
 }
 
 // Parse one extractor symbol key (`path#name@line`) into `(path, name)`. The

@@ -84,6 +84,7 @@ export class ScryerContainerGenerationPlanner {
     const groupPlan = planGeneratedGroups({
       proposals: input.groups ?? [],
       componentIdByKey: build.componentIdByKey,
+      containerId: container.id,
       ids: this.services.ids
     })
     if (!groupPlan.ok) {
@@ -108,6 +109,7 @@ export class ScryerContainerGenerationPlanner {
       localIds: build.localIds,
       symbolNodeByLoc: build.symbolNodeByLoc,
       symbolComponent: build.symbolComponent,
+      sourceFiles: build.sourceFiles,
       buildEdges: this.buildEdges,
       ids: this.services.ids,
       validators: this.services.validators
