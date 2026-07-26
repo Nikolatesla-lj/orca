@@ -210,3 +210,55 @@ function clearStaleStartupRecheck(key: string): void {
   globalThis.clearTimeout(timer)
   staleStartupRecheckTimers.delete(key)
 }
+
+// Why: TerminalPane reads `pendingStartupByTabId[tabId]` exactly once, on first
+// render. A launch that queues its startup command after an async onBeforeStartup
+// hook (the edit-session lease acquisition) can land after that render: the pane
+// has already spawned a bare shell and the queued command would sit unconsumed
+// forever — the visible symptom is an agent tab that never starts its agent.
+// This fallback detects that exact state — queue entry still unconsumed while the
+// tab's PTY is live and settled — consumes the entry itself, and delivers the
+// launch command as keystrokes into the live shell (the same delivery SSH
+// shell-ready startup uses). The launch-config/paste bookkeeping of the queued
+// path is intentionally not replayed: the pane env (paneKey/tabId/hook
+// coordinates) was injected at spawn, which is what agent identity and hook
+// routing key on.
+export async function deliverStartupToAlreadyMountedPane(
+  tabId: string,
+  launchCommand: string
+): Promise<void> {
+  const settleProbes = 2
+  let probesWithLivePty = 0
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (attempt > 0) {
+      await new Promise((resolve) => globalThis.setTimeout(resolve, 250))
+    }
+    const state = useAppStore.getState()
+    if (state.pendingStartupByTabId?.[tabId] === undefined) {
+      // Consumed: the pane mounted after the queue landed and owns the launch.
+      return
+    }
+    const tabStillExists = Object.values(state.tabsByWorktree ?? {}).some((tabs) =>
+      tabs.some((entry) => entry.id === tabId)
+    )
+    if (!tabStillExists) {
+      return
+    }
+    const ptyId = state.ptyIdsByTabId?.[tabId]?.[0]
+    if (!ptyId) {
+      probesWithLivePty = 0
+      continue
+    }
+    // Why: a live PTY with the queue entry still present usually means the pane
+    // spawned bare, but the pane's consume effect runs a frame after capture.
+    // Require the state to hold across consecutive probes so we never type into
+    // a pane that is about to consume the queue and launch the agent itself.
+    probesWithLivePty += 1
+    if (probesWithLivePty <= settleProbes) {
+      continue
+    }
+    state.consumeTabStartupCommand(tabId)
+    window.api.pty.write(ptyId, `${launchCommand}\r`)
+    return
+  }
+}

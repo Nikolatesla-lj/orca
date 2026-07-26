@@ -10,6 +10,7 @@ import { getAgentLaunchPlatformForRepo } from '@/lib/agent-launch-platform'
 import { reconcileTabOrder } from '@/components/tab-bar/reconcile-order'
 import { tuiAgentToAgentKind } from '@/lib/telemetry'
 import { scheduleAgentStartupPaste } from '@/lib/schedule-agent-startup-paste'
+import { deliverStartupToAlreadyMountedPane } from '@/lib/agent-startup-delayed-delivery'
 import { initialAgentTabViewModeProps } from '@/lib/native-chat-initial-view-mode'
 import { getRuntimeEnvironmentIdForWorktree } from '@/lib/worktree-runtime-owner'
 import { getLocalProjectExecutionRuntimeContext } from '@/lib/local-preflight-context'
@@ -325,7 +326,15 @@ export function launchAgentInNewTab(args: LaunchAgentInNewTabArgs): LaunchAgentI
     // failure the startup command is never queued (the agent never launches); the
     // hook owns user-facing failure surfacing. Keep the log token-free.
     void Promise.resolve(onBeforeStartup(tab.id))
-      .then(deliverStartupCommand)
+      .then(() => {
+        deliverStartupCommand()
+        // Why: deferring the queue behind an async hook can lose the mount race —
+        // TerminalPane captures its startup command once, on first render, so a
+        // pane that mounted during the hook spawned a bare shell and will never
+        // consume the queue. Recover by typing the launch command into that live
+        // pane; the agent still starts strictly after the lease is held.
+        void deliverStartupToAlreadyMountedPane(tab.id, startupPlan.launchCommand)
+      })
       .catch(() => {
         console.error('[launch-agent] onBeforeStartup rejected; startup command not queued')
       })
