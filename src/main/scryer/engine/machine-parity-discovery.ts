@@ -1,11 +1,11 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename as pathBasename, join } from 'node:path'
 import { loadParityFixture } from './parity-fixtures'
 import type { ScryerOperationId } from './operation-identifiers'
 
 // Declaration sites (catalog authoring + schema tables) legitimately name every id;
 // counting them as call-sites would let the catalog prove itself. The gate's own
-// source is excluded for the same reason ("排除 gate 自身源文件避免自证").
+// source is excluded for the same reason.
 const EXCLUDED_CALLSITE_BASENAMES = new Set([
   'catalog.ts',
   'catalog-policy.ts',
@@ -22,7 +22,9 @@ const EXCLUDED_CALLSITE_BASENAMES = new Set([
 ])
 
 function isExcludedCallsiteFile(path: string): boolean {
-  const basename = path.slice(path.lastIndexOf('/') + 1)
+  // Why: paths come from join(), so the separator is platform-dependent; a
+  // hand-rolled '/' split would break the exclusion list on Windows.
+  const basename = pathBasename(path)
   if (basename.includes('machine-parity')) {
     return true
   }
