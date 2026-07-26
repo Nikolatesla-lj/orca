@@ -4,9 +4,9 @@ import type { MachineParityInputs, MachineParityReport } from './machine-parity-
 import { collectDefaultMachineParityInputs } from './machine-parity-inputs'
 import { deriveMachineParityReport } from './machine-parity-report'
 
-// The 12 operations with a genuine product entry (11 canvas write ops + the read path
-// that backs the whole Architecture view). Everything else is honestly UI-waived or,
-// for scryer.container.fill, tracked as planned (#73).
+// The 13 operations with a genuine product entry (11 canvas write ops, the read path
+// that backs the whole Architecture view, and the #73 Fill with AI container
+// generation run). Everything else is honestly UI-waived.
 const PRODUCT_INTEGRATED_IDS = new Set([
   'scryer.model.read',
   'scryer.node.update',
@@ -19,7 +19,8 @@ const PRODUCT_INTEGRATED_IDS = new Set([
   'scryer.group.delete',
   'scryer.group.add',
   'scryer.symbol.add',
-  'scryer.source.update'
+  'scryer.source.update',
+  'scryer.container.fill'
 ])
 
 describe('Scryer 33-operation machine-parity gate', () => {
@@ -62,16 +63,16 @@ describe('Scryer 33-operation machine-parity gate', () => {
     }
   })
 
-  it('honestly reports scryer.container.fill as engine-executable/adapter-verified but NOT product-integrated', () => {
+  it('reports scryer.container.fill as product-integrated through the #73 Fill with AI entry', () => {
     const fill = report.rows.find((row) => row.operationId === 'scryer.container.fill')
     expect(fill).toBeDefined()
     expect(fill!.maturity.engine_executable).toBe(true)
     expect(fill!.maturity.adapter_verified).toBe(true)
-    expect(fill!.maturity.product_integrated).toBe(false)
-    expect(fill!.highestMaturity).toBe('adapter_verified')
+    expect(fill!.maturity.product_integrated).toBe(true)
+    expect(fill!.highestMaturity).toBe('product_integrated')
     const productEntry = fill!.evidence.find((item) => item.category === 'product_entry')
-    expect(productEntry!.present).toBe(false)
-    expect(productEntry!.detail).toContain('planned')
+    expect(productEntry!.present).toBe(true)
+    expect(productEntry!.detail).toContain('product_integrated')
   })
 
   it('never marks any operation as landed on a local branch', () => {

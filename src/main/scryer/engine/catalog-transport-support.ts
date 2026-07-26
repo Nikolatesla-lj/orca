@@ -88,15 +88,18 @@ export const SCRYER_OPERATION_SUPPORT = {
   'scryer.model.set': uiWaived(
     'Reached via architecture:createModel IPC seeding; no direct canvas op dispatch'
   ),
-  // #73 will wire the Fill Container product entry. Engine-executable and
-  // adapter-verified today, but deliberately NOT product-integrated yet.
+  // #73 product entry: the visible "Fill with AI" run — edit-session lease before
+  // agent launch, the agent's single `orca scryer container fill` through the Engine
+  // seam, and the token-free Completion Gate driving the visible terminal. Proven by
+  // the release-critical Electron E2E (architecture-container-fill.spec.ts), including
+  // the success terminal driven through the production agent Stop-hook protocol.
   'scryer.container.fill': {
-    transports: machineTransports(),
+    transports: withUi(machineTransports()),
     ipc: { supported: true, channel: GENERIC_IPC_CHANNEL },
     ui: {
-      status: 'planned',
-      reason:
-        'Container generation is engine-executable and adapter-verified (CLI + generic IPC), but the product entry is deferred to #73; not product-integrated yet'
+      status: 'product_integrated',
+      surface: 'architecture-canvas',
+      productEntry: 'src/renderer/src/components/architecture/useArchitectureContainerFillRun.ts'
     }
   },
   'scryer.node.descope': uiWaived('CLI/agent model correction; no direct canvas op dispatch'),
