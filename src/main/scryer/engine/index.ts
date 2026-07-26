@@ -1,4 +1,4 @@
-import { randomUUID } from 'crypto'
+import { randomUUID } from 'node:crypto'
 import { createDefaultScryerOperationCatalog } from './catalog'
 import { createScryerErrorMapper } from './error-mapper'
 import { executeCatalogOperation } from './pipeline'
@@ -40,6 +40,22 @@ function defaultRequestIds() {
   }
 }
 
+function defaultTrustedRuntimeIdentity() {
+  return {
+    read() {
+      const agentRunId = process.env.ORCA_TAB_ID?.trim()
+      const paneKey = process.env.ORCA_PANE_KEY?.trim()
+      if (!agentRunId && !paneKey) {
+        return null
+      }
+      return {
+        ...(agentRunId ? { agentRunId } : {}),
+        ...(paneKey ? { paneKey } : {})
+      }
+    }
+  }
+}
+
 export function createScryerEngine(options: CreateScryerEngineOptions = {}): ScryerEngine {
   const catalog = options.catalog ?? createDefaultScryerOperationCatalog()
   const validation = catalog.validateCatalog({
@@ -56,6 +72,7 @@ export function createScryerEngine(options: CreateScryerEngineOptions = {}): Scr
   const errorMapper = options.errorMapper ?? createScryerErrorMapper()
   const clock = options.clock ?? defaultClock()
   const requestIds = options.requestIds ?? defaultRequestIds()
+  const trustedRuntimeIdentity = options.trustedRuntimeIdentity ?? defaultTrustedRuntimeIdentity()
   return {
     executeOperation<T = unknown>(
       id: ScryerOperationId | string,
@@ -68,6 +85,7 @@ export function createScryerEngine(options: CreateScryerEngineOptions = {}): Scr
         errorMapper,
         clock,
         requestIds,
+        trustedRuntimeIdentity,
         allowTestTransport: options.test?.allowTestTransport ?? false
       }) as Promise<ScryerOperationResult<T>>
     },

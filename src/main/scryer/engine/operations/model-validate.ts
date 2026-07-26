@@ -8,14 +8,16 @@ import { failure, success } from './operation-result'
 export const modelValidateOperation: ScryerOperationExecutor<
   ScryerModelValidateInput,
   ScryerModelValidateResult
-> = ({ state, services }) => {
-  if (!state.committed) {
-    return failure('internal_error', 'Committed state was not loaded for validation', {
+> = ({ input, state, services }) => {
+  const layer = input.layer ?? 'committed'
+  const candidate = layer === 'plan' ? state.planned : state.committed
+  if (!candidate) {
+    return failure('internal_error', `Declared ${layer} state was not loaded for validation`, {
       reason: 'policy_violation',
       contractOperationId: 'scryer.model.validate'
     })
   }
-  const findings = services.validators.validateModel(state.committed)
+  const findings = services.validators.validateModel(candidate)
   return success({
     result: {
       findings,

@@ -1,0 +1,37 @@
+import type { C4ModelData, C4Node, Group } from '../../shared/scryer/model-types'
+
+export function stripPositions(model: C4ModelData): C4ModelData {
+  return {
+    ...model,
+    nodes: model.nodes.map(
+      ({ position: _position, selected: _selected, measured: _measured, ...node }) => node
+    )
+  }
+}
+
+export function stripNodeForAgent(
+  node: C4Node
+): Omit<C4Node, 'position' | 'selected' | 'measured'> {
+  const { position: _position, selected: _selected, measured: _measured, ...rest } = node
+  return rest
+}
+
+export function groupMemberIds(group: Group): string[] {
+  const legacy = group as Group & { member_ids?: string[] }
+  return Array.isArray(group.memberIds) ? group.memberIds : (legacy.member_ids ?? [])
+}
+
+export function collectDescendantIds(model: C4ModelData, nodeId: string): Set<string> {
+  const ids = new Set<string>([nodeId])
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const node of model.nodes) {
+      if (node.parentId && ids.has(node.parentId) && !ids.has(node.id)) {
+        ids.add(node.id)
+        changed = true
+      }
+    }
+  }
+  return ids
+}

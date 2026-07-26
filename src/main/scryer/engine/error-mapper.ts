@@ -6,6 +6,7 @@ import type {
   ScryerOperationErrorCode,
   ScryerOperationResult
 } from './types'
+import { sanitizeScryerOperationResult } from './operation-error-redaction'
 
 type ErrorArgs = {
   code: ScryerOperationErrorCode
@@ -62,10 +63,8 @@ export function createScryerErrorMapper(): ScryerErrorMapper {
     mapUnexpectedException(args) {
       return operationError({
         code: 'internal_error',
-        message:
-          args.error instanceof Error
-            ? args.error.message
-            : `Unexpected Scryer engine error: ${String(args.error)}`,
+        // Why: unexpected exceptions may embed credentials in their message.
+        message: 'Unexpected Scryer engine error',
         details: {
           reason: 'unexpected_exception',
           ...(args.contractOperationId ? { contractOperationId: args.contractOperationId } : {})
@@ -89,7 +88,7 @@ export function createScryerErrorMapper(): ScryerErrorMapper {
             meta?: ScryerOperationResult<TResult>['meta']
           }
     ): ScryerOperationResult<TResult> {
-      return args
+      return sanitizeScryerOperationResult(args)
     }
   }
 }

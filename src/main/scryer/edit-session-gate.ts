@@ -15,6 +15,14 @@ export type CompletionGateNextAction =
   | 'manual_review'
   | 'blocked_by_lease'
 
+export type CompletionGateOutcome = 'folded' | 'nothing_to_fold' | 'needs_attention'
+
+export type CompletionGateLeaseDisposition =
+  | 'retained'
+  | 'retained_for_review'
+  | 'retained_by_other_owner'
+  | 'released_after_completion'
+
 export type CompletionGateBlocker = {
   code: 'validation_error' | 'unknown_pending_kind' | 'unknown_pending_change' | 'lease_conflict'
   message: string
@@ -32,6 +40,9 @@ export type CompletionGateRisk = {
 export type CompletionGateResult = {
   ok: boolean
   foldAllowed: boolean
+  autoFoldAllowed: boolean
+  outcome: CompletionGateOutcome
+  leaseDisposition: CompletionGateLeaseDisposition
   nextAction: CompletionGateNextAction
   pending: {
     total: number
@@ -60,6 +71,7 @@ export type EvaluateCompletionGateInput = {
   validation: ScryerModelValidateResult
   activeLease?: ModelEditLease | null
   agentRunId?: string
+  requireActiveLease?: boolean
 }
 
 const KNOWN_PENDING_KINDS = new Set(['node', 'link', 'responsibility', 'property', 'group'])
@@ -126,7 +138,13 @@ function pendingRisks(changes: PendingChange[]): CompletionGateRisk[] {
 function leaseBlocker(input: EvaluateCompletionGateInput): CompletionGateBlocker | null {
   const lease = input.activeLease
   if (!lease) {
-    return null
+    return input.requireActiveLease
+      ? {
+          code: 'lease_conflict',
+          message: 'Scryer completion requires an active agent edit lease',
+          details: { agentRunId: input.agentRunId }
+        }
+      : null
   }
   if (lease.owner && lease.owner !== 'agent') {
     return {
@@ -145,58 +163,8 @@ function leaseBlocker(input: EvaluateCompletionGateInput): CompletionGateBlocker
   return null
 }
 
-function compactFoldInput(input: ScryerPlanFoldInput): ScryerPlanFoldInput | null {
-  const compacted: ScryerPlanFoldInput = { mode: 'agent_completion' }
-  if (input.node_id) {
-    compacted.node_id = input.node_id
-  }
-  if (input.responsibility_ids && input.responsibility_ids.length > 0) {
-    compacted.responsibility_ids = input.responsibility_ids
-  }
-  if (input.properties && input.properties.length > 0) {
-    compacted.properties = input.properties
-  }
-  if (input.link_ids && input.link_ids.length > 0) {
-    compacted.link_ids = input.link_ids
-  }
-  if (input.group_ids && input.group_ids.length > 0) {
-    compacted.group_ids = input.group_ids
-  }
-  return Object.keys(compacted).length > 1 ? compacted : null
-}
-
-export function foldInputsFor(changes: PendingChange[]): ScryerPlanFoldInput[] {
-  const inputs: ScryerPlanFoldInput[] = []
-  const shared: ScryerPlanFoldInput = {
-    mode: 'agent_completion',
-    responsibility_ids: [],
-    properties: [],
-    link_ids: [],
-    group_ids: []
-  }
-  for (const change of changes) {
-    switch (change.kind) {
-      case 'node':
-        inputs.push({ mode: 'agent_completion', node_id: change.id })
-        break
-      case 'responsibility':
-        shared.responsibility_ids?.push(change.id)
-        break
-      case 'property':
-        if (change.ownerId) {
-          shared.properties?.push({ node_id: change.ownerId, label: change.id })
-        }
-        break
-      case 'link':
-        shared.link_ids?.push(change.id)
-        break
-      case 'group':
-        shared.group_ids?.push(change.id)
-        break
-    }
-  }
-  const sharedInput = compactFoldInput(shared)
-  return sharedInput ? [...inputs, sharedInput] : inputs
+export function foldInputFor(changes: PendingChange[]): ScryerPlanFoldInput | null {
+  return changes.length > 0 ? { mode: 'agent_completion', all: true } : null
 }
 
 export function evaluateCompletionGate(input: EvaluateCompletionGateInput): CompletionGateResult {
@@ -219,18 +187,26 @@ export function evaluateCompletionGate(input: EvaluateCompletionGateInput): Comp
   ]
   const foldable = blockers.length === 0
   const hasChanges = input.pending.summary.total > 0
+  const hasDestructiveRisk = risks.some((risk) => risk.code === 'destructive_change')
+  const foldAllowed = foldable && hasChanges
+  const autoFoldAllowed = foldAllowed && !hasDestructiveRisk
   const nextAction: CompletionGateNextAction = leaseGateBlocker
     ? 'blocked_by_lease'
     : validationGateBlockers.length > 0
       ? 'fix_validation'
       : pendingGateBlockers.length > 0
         ? 'manual_review'
-        : hasChanges
-          ? 'fold_allowed'
-          : 'nothing_to_fold'
+        : hasDestructiveRisk
+          ? 'manual_review'
+          : hasChanges
+            ? 'fold_allowed'
+            : 'nothing_to_fold'
   return {
     ok: blockers.length === 0,
-    foldAllowed: foldable && hasChanges,
+    foldAllowed,
+    autoFoldAllowed,
+    outcome: hasChanges || blockers.length > 0 ? 'needs_attention' : 'nothing_to_fold',
+    leaseDisposition: 'retained',
     nextAction,
     pending: {
       total: input.pending.summary.total,

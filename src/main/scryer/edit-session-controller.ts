@@ -9,9 +9,11 @@ import type {
 } from './engine'
 import {
   evaluateCompletionGate,
-  foldInputsFor,
+  foldInputFor,
+  type CompletionGateLeaseDisposition,
   type CompletionGateResult
 } from './edit-session-gate'
+import { reportEditSessionCompletion } from './edit-session-completion-observer'
 
 export type BeginAgentEditSessionInput = {
   projectPath: string
@@ -69,13 +71,14 @@ export type ScryerAgentRunRuntime = {
   onRunFinished(
     agentRunId: string,
     callback: (event: ScryerAgentRunFinishedEvent) => void | Promise<void>
-  ): () => void
+  ): Promise<() => void>
 }
 
 export type CreateScryerEditSessionControllerOptions = {
   engine: ScryerEngine
   leaseStore: ScryerEditLeaseStore
   agentRuntime: ScryerAgentRunRuntime
+  onCompletionGate?: (input: CompleteAgentEditSessionInput, result: CompletionGateResult) => void
 }
 
 function unwrapOperationResult<T>(result: ScryerOperationResult<T>): T {
@@ -112,6 +115,45 @@ function toLeaseStatus(lease: ModelEditLease | null): EditSessionLeaseStatus | n
   }
 }
 
+function ownAgentLease(
+  activeLease: ModelEditLease | null,
+  agentRunId: string
+): ModelEditLease | null {
+  return activeLease?.owner === 'agent' && activeLease.agentRunId === agentRunId
+    ? activeLease
+    : null
+}
+
+async function readCompletionGate(input: {
+  engine: ScryerEngine
+  projectPath: string
+  agentRunId: string
+  activeLease: ModelEditLease | null
+}): Promise<CompletionGateResult> {
+  const context = operationContext(
+    input.projectPath,
+    input.agentRunId,
+    ownAgentLease(input.activeLease, input.agentRunId)?.token
+  )
+  const pending = unwrapOperationResult(
+    await input.engine.executeOperation<ScryerPlanPendingResult>('scryer.plan.pending', {}, context)
+  )
+  const validation = unwrapOperationResult(
+    await input.engine.executeOperation<ScryerModelValidateResult>(
+      'scryer.model.validate',
+      { layer: 'plan' },
+      context
+    )
+  )
+  return evaluateCompletionGate({
+    pending,
+    validation,
+    activeLease: input.activeLease,
+    agentRunId: input.agentRunId,
+    requireActiveLease: true
+  })
+}
+
 export function createScryerEditSessionController(
   options: CreateScryerEditSessionControllerOptions
 ): ScryerEditSessionController {
@@ -121,11 +163,40 @@ export function createScryerEditSessionController(
     return `${projectPath}\u0000${agentRunId}`
   }
 
-  async function cleanupSession(projectPath: string, agentRunId: string): Promise<void> {
-    await options.leaseStore.release({ projectPath, agentRunId })
+  function unsubscribeSession(projectPath: string, agentRunId: string): void {
     const key = sessionKey(projectPath, agentRunId)
     subscriptions.get(key)?.()
     subscriptions.delete(key)
+  }
+
+  async function releaseCompletedSession(
+    projectPath: string,
+    agentRunId: string,
+    activeLease: ModelEditLease | null
+  ): Promise<CompletionGateLeaseDisposition> {
+    const ownLease = ownAgentLease(activeLease, agentRunId)
+    const released = await options.leaseStore.release({
+      projectPath,
+      agentRunId,
+      ...(ownLease ? { token: ownLease.token } : {})
+    })
+    unsubscribeSession(projectPath, agentRunId)
+    return released.ok ? 'released_after_completion' : 'retained_by_other_owner'
+  }
+
+  function retainedDisposition(
+    activeLease: ModelEditLease | null,
+    agentRunId: string
+  ): CompletionGateLeaseDisposition {
+    if (ownAgentLease(activeLease, agentRunId)) {
+      return 'retained_for_review'
+    }
+    return activeLease ? 'retained_by_other_owner' : 'retained'
+  }
+
+  async function cancelSession(projectPath: string, agentRunId: string): Promise<void> {
+    await options.leaseStore.release({ projectPath, agentRunId })
+    unsubscribeSession(projectPath, agentRunId)
   }
 
   const controller: ScryerEditSessionController = {
@@ -147,14 +218,15 @@ export function createScryerEditSessionController(
         )
       }
       const key = sessionKey(input.projectPath, input.agentRunId)
-      subscriptions.get(key)?.()
-      subscriptions.set(
-        key,
-        options.agentRuntime.onRunFinished(input.agentRunId, async (event) => {
+      unsubscribeSession(input.projectPath, input.agentRunId)
+      const unsubscribe = await options.agentRuntime.onRunFinished(
+        input.agentRunId,
+        async (event) => {
           if (event.status === 'done') {
             await controller.completeAgentEditSession({
               projectPath: input.projectPath,
-              agentRunId: input.agentRunId
+              agentRunId: input.agentRunId,
+              foldPolicy: 'when_gate_passes'
             })
             return
           }
@@ -162,8 +234,13 @@ export function createScryerEditSessionController(
             projectPath: input.projectPath,
             agentRunId: input.agentRunId
           })
-        })
+        }
       )
+      if ((await options.agentRuntime.getRunStatus(input.agentRunId)) === 'running') {
+        subscriptions.set(key, unsubscribe)
+      } else {
+        unsubscribe()
+      }
       return {
         projectPath: input.projectPath,
         agentRunId: input.agentRunId
@@ -175,42 +252,61 @@ export function createScryerEditSessionController(
         throw new Error(`Cannot complete Scryer edit session for agent run in '${status}' state`)
       }
       const activeLease = await options.leaseStore.read({ projectPath: input.projectPath })
-      const context = operationContext(input.projectPath, input.agentRunId, activeLease?.token)
       try {
-        const pending = unwrapOperationResult(
-          await options.engine.executeOperation<ScryerPlanPendingResult>(
-            'scryer.plan.pending',
-            {},
-            context
-          )
-        )
-        const validation = unwrapOperationResult(
-          await options.engine.executeOperation<ScryerModelValidateResult>(
-            'scryer.model.validate',
-            {},
-            context
-          )
-        )
-        const gate = evaluateCompletionGate({
-          pending,
-          validation,
-          activeLease,
-          agentRunId: input.agentRunId
-        })
-        if (input.foldPolicy === 'when_gate_passes' && gate.foldAllowed) {
-          for (const foldInput of foldInputsFor(gate.pending.changes)) {
+        let gate = await readCompletionGate({ ...input, engine: options.engine, activeLease })
+        let currentLease = activeLease
+        if (input.foldPolicy === 'when_gate_passes' && gate.autoFoldAllowed) {
+          const foldInput = foldInputFor(gate.pending.changes)
+          if (foldInput) {
             unwrapOperationResult(
-              await options.engine.executeOperation('scryer.plan.fold', foldInput, context)
+              await options.engine.executeOperation(
+                'scryer.plan.fold',
+                foldInput,
+                operationContext(
+                  input.projectPath,
+                  input.agentRunId,
+                  ownAgentLease(currentLease, input.agentRunId)?.token
+                )
+              )
             )
           }
+          currentLease = await options.leaseStore.read({ projectPath: input.projectPath })
+          const refreshedGate = await readCompletionGate({
+            ...input,
+            engine: options.engine,
+            activeLease: currentLease
+          })
+          gate = {
+            ...refreshedGate,
+            outcome:
+              refreshedGate.pending.total === 0 && refreshedGate.validation.blockingCount === 0
+                ? 'folded'
+                : 'needs_attention'
+          }
         }
-        return gate
-      } finally {
-        await cleanupSession(input.projectPath, input.agentRunId)
+        if (gate.outcome === 'folded' || gate.outcome === 'nothing_to_fold') {
+          return reportEditSessionCompletion(options.onCompletionGate, input, {
+            ...gate,
+            leaseDisposition: await releaseCompletedSession(
+              input.projectPath,
+              input.agentRunId,
+              currentLease
+            )
+          })
+        }
+        unsubscribeSession(input.projectPath, input.agentRunId)
+        return reportEditSessionCompletion(options.onCompletionGate, input, {
+          ...gate,
+          leaseDisposition: retainedDisposition(currentLease, input.agentRunId)
+        })
+      } catch (error) {
+        // Completion failures keep the candidate and lease available for explicit recovery.
+        unsubscribeSession(input.projectPath, input.agentRunId)
+        throw error
       }
     },
     async cancelAgentEditSession(input) {
-      await cleanupSession(input.projectPath, input.agentRunId)
+      await cancelSession(input.projectPath, input.agentRunId)
     },
     async readEditSession(input) {
       return {
