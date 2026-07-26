@@ -12,12 +12,16 @@
  * lease on disk) — exactly how the product's agent path is authorized, with NO lease
  * token passed as an argument — so the file effects are genuine, not simulated.
  *
- * ENVIRONMENT NOTE: the visible SUCCESS terminal is gated on the main-side Completion
- * Gate, which the edit-session controller fires only when its native agent-run runtime
- * observes the run as `done` — a signal fed exclusively by the agent-hook server over
- * real agent Stop-hook HTTP callbacks. A synthetic headless agent emits no such hook, so
- * that one terminal is kept as a `test.fixme` (see below) to run against a real agent
- * runtime; every other lifecycle guarantee is asserted and passes here.
+ * SUCCESS-TERMINAL NOTE: the visible SUCCESS terminal is gated on the main-side
+ * Completion Gate, which the edit-session controller fires only when its native
+ * agent-run runtime observes the run as `done` — a signal fed exclusively by the
+ * agent-hook server over agent Stop-hook HTTP callbacks. The success-terminal test
+ * drives that signal through the production protocol itself: the launched agent pane
+ * runs a stub whose ONLY job is to emit the same authenticated Stop-hook POST the
+ * managed claude hook script sends, using the hook coordinates and pane identity that
+ * main injected into the pane env at spawn. Everything past the agent binary — HTTP
+ * transport, token auth, payload normalization, status ingest, native runtime,
+ * Completion Gate, lease release, and the visible terminal — is production code.
  */
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -191,6 +195,105 @@ async function setLongLivedAgent(page: Page): Promise<void> {
   })
 }
 
+const HOOK_STUB_FILENAME = '.e2e-agent-hook-stub.cjs'
+const FILL_DONE_SENTINEL = '.e2e-fill-done'
+
+// Why: the success terminal is driven by the production Stop-hook protocol. This stub
+// runs as the launched agent's own pane process and, once the trusted Engine fill has
+// landed (sentinel), emits the same authenticated POST the managed claude hook script
+// sends — built exclusively from the hook coordinates and pane identity main injected
+// into this pane's env at spawn. It then idles so PTY teardown never races the gate as
+// crash evidence.
+const HOOK_STUB_LOG = '.e2e-hook-stub-log'
+
+// The stub embeds absolute sentinel/log paths at generation time so it works
+// regardless of the cwd the agent pane's shell happens to start in.
+const buildHookStubSource = (worktreePath: string): string => `
+const fs = require('node:fs')
+const http = require('node:http')
+const sentinel = ${JSON.stringify(path.join(worktreePath, FILL_DONE_SENTINEL))}
+const logPath = ${JSON.stringify(path.join(worktreePath, HOOK_STUB_LOG))}
+// Diagnostic breadcrumbs only (booleans and the local port, never token values):
+// the test reads this log to distinguish "stub never saw the sentinel" from
+// "callback sent but rejected" when the terminal assertion fails.
+const log = (line) => {
+  try {
+    fs.appendFileSync(logPath, line + '\\n')
+  } catch {}
+}
+log('start cwd=' + process.cwd())
+log(
+  'env port=' + (process.env.ORCA_AGENT_HOOK_PORT || 'ABSENT') +
+  ' tokenPresent=' + Boolean(process.env.ORCA_AGENT_HOOK_TOKEN) +
+  ' paneKey=' + (process.env.ORCA_PANE_KEY || 'ABSENT') +
+  ' tabId=' + (process.env.ORCA_TAB_ID || 'ABSENT')
+)
+const startedAt = Date.now()
+const timer = setInterval(() => {
+  if (fs.existsSync(sentinel)) {
+    clearInterval(timer)
+    log('sentinel seen')
+    const payload = JSON.stringify({
+      hook_event_name: 'Stop',
+      session_id: 'e2e-fill-agent',
+      stop_hook_active: false,
+      last_assistant_message: 'Container generation complete'
+    })
+    const body = new URLSearchParams({
+      paneKey: process.env.ORCA_PANE_KEY || '',
+      tabId: process.env.ORCA_TAB_ID || '',
+      launchToken: process.env.ORCA_AGENT_LAUNCH_TOKEN || '',
+      worktreeId: process.env.ORCA_WORKTREE_ID || '',
+      env: process.env.ORCA_AGENT_HOOK_ENV || '',
+      version: process.env.ORCA_AGENT_HOOK_VERSION || '',
+      payload
+    }).toString()
+    const req = http.request({
+      host: '127.0.0.1',
+      port: Number(process.env.ORCA_AGENT_HOOK_PORT),
+      path: '/hook/claude',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'X-Orca-Agent-Hook-Token': process.env.ORCA_AGENT_HOOK_TOKEN || '',
+        'Content-Length': Buffer.byteLength(body)
+      }
+    })
+    req.on('response', (res) => log('response status=' + res.statusCode))
+    req.on('error', (error) => log('request error=' + String(error && error.message)))
+    req.end(body)
+  } else if (Date.now() - startedAt > 60000) {
+    clearInterval(timer)
+    log('sentinel timeout')
+  }
+}, 250)
+setTimeout(() => {}, 120000)
+`
+
+async function setHookEmittingAgent(page: Page, worktreePath: string): Promise<void> {
+  const stubPath = path.join(worktreePath, HOOK_STUB_FILENAME)
+  writeFileSync(stubPath, buildHookStubSource(worktreePath))
+  rmSync(path.join(worktreePath, FILL_DONE_SENTINEL), { force: true })
+  rmSync(path.join(worktreePath, HOOK_STUB_LOG), { force: true })
+  // Absolute node path: the pane shell's PATH is not guaranteed to resolve `node`.
+  // The leading `echo` writes shell-level evidence that the launch command line ran
+  // at all, independent of node succeeding.
+  const logPath = path.join(worktreePath, HOOK_STUB_LOG)
+  const launchCommand = `echo launched >> ${logPath}; ${process.execPath} ${stubPath}`
+  await page.evaluate((command) => {
+    window.__store?.setState((state) => ({
+      settings: {
+        ...state.settings,
+        defaultTuiAgent: 'codex',
+        agentCmdOverrides: {
+          ...state.settings?.agentCmdOverrides,
+          codex: command
+        }
+      }
+    }))
+  }, launchCommand)
+}
+
 async function drillInto(page: Page, nodeName: string): Promise<void> {
   const treeNode = page.getByTestId('architecture-tree-node').filter({ hasText: nodeName })
   await expect(treeNode.first()).toBeVisible({ timeout: 10_000 })
@@ -228,6 +331,17 @@ async function launchFillAndResolveAgentTab(page: Page): Promise<string> {
     throw new Error('Fill with AI did not launch an agent tab')
   }
   return agentTabId
+}
+
+// Diagnostic only: the visible content of the launched agent pane, so a broken
+// stub launch fails with "what the terminal actually ran" instead of a bare timeout.
+async function readAgentPaneText(page: Page, tabId: string): Promise<string> {
+  return page.evaluate((id) => {
+    const manager = window.__paneManagers?.get(id)
+    const pane = manager?.getActivePane?.() ?? manager?.getPanes?.()[0] ?? null
+    const rows = pane?.container.querySelector<HTMLElement>('.xterm-rows')
+    return rows?.innerText ?? '(terminal DOM unavailable)'
+  }, tabId)
 }
 
 type LeaseStatus = { activeLease: { owner?: string; agentRunId?: string } | null }
@@ -452,22 +566,18 @@ test.describe('Architecture Fill with AI container generation', () => {
     ).toBeVisible({ timeout: 15_000 })
   })
 
-  // ENVIRONMENT-GATED (kept, not deleted, per the release-critical spec): the visible
-  // SUCCESS terminal requires the main-side Completion Gate to fire, which the edit-session
-  // controller triggers only when its native agent-run runtime observes the agent-run as
-  // `done`. That signal is fed exclusively by the agent-hook server over real agent
-  // Stop-hook HTTP callbacks (see register-core-handlers.ts: subscribeAgentStatus ->
-  // agentHookServer). A synthetic headless agent emits no such hook, renderer
-  // setAgentStatus does not reach main's runtime, and completeEditSession refuses a run in
-  // 'running' state (empirically verified). So the gate-driven success terminal
-  // (nothing_to_fold, lease released, visible "Container generated with AI") cannot be
-  // driven headless and must run against a real agent runtime. The file-effect + visible-
-  // subtree evidence above is the product-integration proof this environment CAN produce.
-  test.fixme('reaches a visible success terminal once the completion gate passes', async ({
+  // The visible SUCCESS terminal, driven end-to-end through the production done-signal
+  // chain: the launched agent pane's stub emits the authenticated Stop-hook HTTP POST
+  // (the same callback the managed claude hook script sends, built from the pane env
+  // main injected at spawn) -> agent-hook server ingest -> native agent-run runtime ->
+  // edit-session controller -> Completion Gate (nothing_to_fold; container.fill mirrors
+  // both layers) -> lease release -> visible "Container generated with AI". Renderer
+  // setAgentStatus is NOT used: main's runtime only trusts the hook-server signal.
+  test('reaches a visible success terminal once the completion gate passes', async ({
     orcaPage
   }) => {
     const worktreePath = await getActiveWorktreePath(orcaPage)
-    await setLongLivedAgent(orcaPage)
+    await setHookEmittingAgent(orcaPage, worktreePath)
     await seedEmptyContainerAndDrillIn(orcaPage, worktreePath)
     mkdirSync(path.join(worktreePath, 'src'), { recursive: true })
     writeFileSync(path.join(worktreePath, 'src', 'orders.ts'), 'export const x = () => {}\n')
@@ -480,13 +590,51 @@ test.describe('Architecture Fill with AI container generation', () => {
       .toBe(agentTabId)
     const fill = runContainerFill({ worktreePath, agentTabId, proposal: VALID_PROPOSAL })
     expect(fill.status).toBe(0)
-    await reportAgentDone(orcaPage, agentTabId, false)
+    // Release the stub: from here on, every step to the visible terminal is production
+    // code reacting to the real Stop-hook HTTP callback.
+    writeFileSync(path.join(worktreePath, FILL_DONE_SENTINEL), 'done\n')
+
+    // Diagnostic gate: the stub's callback must be accepted (204) by the agent-hook
+    // server. On failure the stub log plus the pane's visible content pinpoint which
+    // leg broke (stub never launched / env missing / callback rejected).
+    try {
+      await expect
+        .poll(
+          () => {
+            const logPath = path.join(worktreePath, HOOK_STUB_LOG)
+            return existsSync(logPath) ? readFileSync(logPath, 'utf8') : '(no stub log)'
+          },
+          { timeout: 15_000 }
+        )
+        .toContain('response status=204')
+    } catch (error) {
+      const paneText = await readAgentPaneText(orcaPage, agentTabId)
+      throw new Error(`stub hook callback not confirmed; agent pane shows:\n${paneText}`, {
+        cause: error
+      })
+    }
+
+    // Diagnostic gate: the accepted callback must fan out as a `done` status for
+    // this run's pane. On failure the polled snapshot shows every pane's status,
+    // separating an ingest/alias drop from a runtime/controller failure.
+    await expect
+      .poll(
+        () =>
+          orcaPage.evaluate((tabId) => {
+            const entries = Object.entries(
+              window.__store?.getState().agentStatusByPaneKey ?? {}
+            ).map(([paneKey, entry]) => `${paneKey}=${(entry as { state?: string }).state}`)
+            return `${entries.join(' | ') || '(empty)'} [want ${tabId}:*=done]`
+          }, agentTabId),
+        { timeout: 15_000 }
+      )
+      .toMatch(new RegExp(`${agentTabId}:[^=]*=done`))
 
     // Completion Gate passed (nothing_to_fold, container.fill mirrors both layers) and
-    // the lease is released.
+    // the lease is released by the production done-signal chain.
     await expect
       .poll(async () => (await readEditSession(orcaPage, worktreePath)).activeLease, {
-        timeout: 15_000
+        timeout: 30_000
       })
       .toBeNull()
     await activateArchitectureTab(orcaPage)
