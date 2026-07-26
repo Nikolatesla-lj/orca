@@ -127,17 +127,23 @@ must not be repeated for reviewable implementation commits.
 
 ## Final Verified Convergence Results
 
-These results supersede the checkpoint baseline above. They record the verified
-integration tree and the assembled review branch as of 2026-07-25.
+These results supersede the checkpoint baseline above. They record the frozen
+gate as of 2026-07-25; later verified commits are recorded in the Post-Gate
+Convergence Update below, and the tree hashes here are historical to this gate.
 
 Integration branch: `scryer/convergence-integration`
-Integration HEAD: `6a5c3977565838eabc2783be75a3361964b631fd`
-Integration tree: `cec4973d30871995c3ae02bb9a26b0f149a59c2e`
+Integration HEAD at this gate: `6a5c3977565838eabc2783be75a3361964b631fd`
+Integration tree at this gate: `cec4973d30871995c3ae02bb9a26b0f149a59c2e`
 Review branch: `scryer/convergence-review`
-Review HEAD: `226b9e34a003225ff1061cf62fafb128a0b7110c` (before this documentation update)
-Review tree: `cec4973d30871995c3ae02bb9a26b0f149a59c2e` (identical to the integration tree)
 Base: `eca93d0954da7fae297a0f1390f1427cc6167ff4`
-Remote status: local-only; not pushed, landed, or closed
+
+Exact-tree policy: the review branch is rebuilt as the same four groups whenever
+a later verified commit folds in, so its tip SHA is not pinned here. The binding
+invariant — verified mechanically at every rebuild — is that the review tip's
+git tree object equals the integration HEAD's tree object
+(`git rev-parse <tip>^{tree}` on both sides). At this gate both trees were
+`cec4973d...`; the Post-Gate Convergence Update lists the integration commits
+folded since.
 
 The review branch presents the same tree as four reviewable commit groups built on
 the base:
@@ -200,10 +206,25 @@ the converged set. The 300 cataloged execution flows contain no Scryer flows,
 so the empty affected-process list reflects catalog coverage, not proof of zero
 impact.
 
-Remaining follow-up hardening (non-blocking): panel-remount re-derivation of a
-successful fill terminal (the toast is the durable visible signal today), the
-#70 lease-release `lock_busy` swallow note, and the #71 MCP `readModel(`
-ownership assertion.
+A two-axis code review (Standards + Spec, independent sub-agent reviewers) ran
+over the full base→tip diff on 2026-07-25. Its merge-blocking findings were
+fixed and folded in:
+
+5. `282620543` — fix: the parity call-site exclusion hand-split paths on `/`,
+   which never matches on Windows; switched to `node:path` `basename` (also
+   removed a verbatim design-doc quote from a comment).
+6. `e0160a671` — fix: `get_rules` guidance and the Build with AI initial prompt
+   still directed agents at the retired `set_node` (which the strict MCP bridge
+   rejects); container-level authoring now points at `add_container`/`add_links`
+   and per-container internals at the atomic `orca scryer container fill` path.
+
+Remaining review findings are tracked as follow-up issues rather than blocking
+the merge: #76 (panel-remount re-derivation of a successful fill terminal), #77
+(lease-release `lock_busy` retry), #78 (MCP raw-document ownership assertion,
+now explicitly covering reads), plus the error-redaction array-nesting gap, the
+machine-checking of product-entry E2E evidence (and the stale
+`docs/scryer-cli-tool-parity.md`), the anchored-responsibility test case, and
+the fill run's read-failure grading in `containerHasChildren`.
 
 ## Reference Worktree Extraction Matrix
 
