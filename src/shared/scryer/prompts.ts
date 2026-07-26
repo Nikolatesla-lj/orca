@@ -38,7 +38,7 @@ Instructions:
 1. Call get_rules to load the modeling workflow and C4 rules.
 2. Call get_structure with path "${cwd}" to get the annotated directory tree.
 3. Read the manifests surfaced by get_structure.
-4. Build the model level by level: set_model for persons/systems/system edges, then set_node on the system for containers/container edges.
+4. Build the model level by level: set_model for persons/systems/system edges, then add_container for each container and add_links for container-level edges.
 5. Stop at the container level unless the user explicitly asked for component detail.
 6. Set status "implemented" on nodes that already exist in code. Use "proposed" for new planned work.
 7. Set source mappings with update_source_map.

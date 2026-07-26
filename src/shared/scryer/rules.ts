@@ -23,9 +23,9 @@ export const SCRYER_RULES = `1. One edge per relationship. Edges represent relat
 2. Call get_structure with the project path to get the annotated directory tree. Read manifests it surfaces to identify runtime dependencies, external services, databases, and frameworks.
 3. Model one level at a time.
    - First call set_model with persons, the system, external systems, and system-level edges only.
-   - Second call set_node on the system to add all containers plus container-level edges. Then group containers that deploy together using set_groups.
-   - Later, set_node per container to add components only when the user asks for deeper detail.
-   - When adding components, model all components in that container, not just the new ones.
+   - Second, add each container with add_container and container-level edges with add_links. Then group containers that deploy together using set_groups.
+   - Later, when the user asks for deeper detail, generate a container's internals atomically through Container Generation (\`orca scryer container fill\` with ONE complete proposal for that container). Never add components one by one through per-node mutation tools.
+   - When generating a container's internals, model all components in that container, not just the new ones.
 4. Edges must exist at every abstraction level.
 5. Do not create flows during initial modeling. Flows are added later by the user or on explicit request.
 6. When adding components, populate them with operation, process, and model nodes where the code has that detail. Models must use properties for fields. Operations map to individual functions/methods. Processes map to multi-step workflows.
