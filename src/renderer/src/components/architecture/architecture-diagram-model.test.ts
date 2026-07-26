@@ -13,8 +13,10 @@ import {
   getVisibleGroupBubbles,
   getVisibleArchitectureView,
   reconcileExpandedPath,
+  shouldOfferContainerFill,
   updateEdgeDataInModel
 } from './architecture-diagram-model'
+import type { ArchitectureDiagramNode } from './architecture-diagram-types'
 
 function fixtureModel(): ArchitectureDiagramModel {
   return {
@@ -389,5 +391,99 @@ describe('architecture diagram model view helpers', () => {
         depth: 0
       }
     ])
+  })
+})
+
+describe('shouldOfferContainerFill (Container Generation gating)', () => {
+  function refNode(id: string): ArchitectureDiagramNode {
+    return {
+      id,
+      type: 'architecture',
+      position: { x: 0, y: 0 },
+      data: { name: id, description: '', kind: 'container', _reference: true }
+    }
+  }
+
+  function authoredNode(id: string): ArchitectureDiagramNode {
+    return {
+      id,
+      type: 'architecture',
+      position: { x: 0, y: 0 },
+      data: { name: id, description: '', kind: 'component' }
+    }
+  }
+
+  const base = { syncing: false, hasFillHandler: true }
+
+  it('offers Fill only when drilled into a container with no authored children', () => {
+    expect(
+      shouldOfferContainerFill({
+        ...base,
+        view: {
+          currentParentId: 'api',
+          currentParentKind: 'container',
+          visibleNodes: [refNode('x')]
+        }
+      })
+    ).toBe(true)
+    // Empty container (no visible nodes at all) still offers fill.
+    expect(
+      shouldOfferContainerFill({
+        ...base,
+        view: { currentParentId: 'api', currentParentKind: 'container', visibleNodes: [] }
+      })
+    ).toBe(true)
+  })
+
+  it('hides Fill for system and component parents even when children are all references', () => {
+    for (const currentParentKind of ['system', 'component'] as const) {
+      expect(
+        shouldOfferContainerFill({
+          ...base,
+          view: { currentParentId: 'shop', currentParentKind, visibleNodes: [refNode('x')] }
+        })
+      ).toBe(false)
+    }
+  })
+
+  it('hides Fill at the root, while syncing, without a handler, or once a child is authored', () => {
+    expect(
+      shouldOfferContainerFill({
+        ...base,
+        view: { currentParentId: undefined, currentParentKind: undefined, visibleNodes: [] }
+      })
+    ).toBe(false)
+    expect(
+      shouldOfferContainerFill({
+        ...base,
+        syncing: true,
+        view: {
+          currentParentId: 'api',
+          currentParentKind: 'container',
+          visibleNodes: [refNode('x')]
+        }
+      })
+    ).toBe(false)
+    expect(
+      shouldOfferContainerFill({
+        ...base,
+        hasFillHandler: false,
+        view: {
+          currentParentId: 'api',
+          currentParentKind: 'container',
+          visibleNodes: [refNode('x')]
+        }
+      })
+    ).toBe(false)
+    expect(
+      shouldOfferContainerFill({
+        ...base,
+        view: {
+          currentParentId: 'api',
+          currentParentKind: 'container',
+          visibleNodes: [refNode('x'), authoredNode('handler')]
+        }
+      })
+    ).toBe(false)
   })
 })

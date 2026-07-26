@@ -1,6 +1,6 @@
-import { mkdtemp } from 'fs/promises'
-import { tmpdir } from 'os'
-import { join } from 'path'
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const handlers = new Map<string, (_event: unknown, args: unknown) => Promise<unknown>>()
@@ -19,6 +19,18 @@ import {
   type ArchitectureIpcRegistrar
 } from './architecture'
 import type { ScryerEngine } from '../scryer/engine'
+
+async function captureError(action: () => unknown): Promise<Error> {
+  try {
+    await action()
+  } catch (error) {
+    if (error instanceof Error) {
+      return error
+    }
+    throw error
+  }
+  throw new Error('Expected action to fail')
+}
 
 describe('registerArchitectureHandlers native engine migration', () => {
   afterEach(() => {
@@ -233,166 +245,6 @@ describe('registerArchitectureHandlers native engine migration', () => {
     }
   })
 
-  it('routes canonical node patches through scryer.node.update before adapting the planned model', async () => {
-    handlers.clear()
-    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-node-update-seam-'))
-    const patchNodeData = vi.fn(defaultArchitectureDeps.patchNodeData)
-    const send = vi.fn()
-    const executeOperation = vi.fn(async () => ({
-      ok: true,
-      operationId: 'scryer.node.update',
-      requestId: 'req-engine-patch',
-      result: { updatedCount: 1 }
-    }))
-    const readView = vi.fn(async () => ({
-      ok: true,
-      operationId: 'scryer.model.read',
-      requestId: 'req-engine-read',
-      result: {
-        mode: 'full',
-        layer: 'plan',
-        summary: { nodeCount: 1, linkCount: 0, groupCount: 0 },
-        nodes: [],
-        links: [],
-        recommendedNextReads: [],
-        model: {
-          version: '0.3',
-          nodes: [{ id: 'api', kind: 'system', name: 'Public API' }],
-          links: [],
-          groups: [],
-          sourceMap: {},
-          boundaries: {}
-        }
-      }
-    }))
-    const registrar: ArchitectureIpcRegistrar = {
-      handle: (channel, handler) => {
-        handlers.set(channel, handler as (_event: unknown, args: unknown) => Promise<unknown>)
-      }
-    }
-    registerArchitectureHandlers(registrar, {
-      ...defaultArchitectureDeps,
-      patchNodeData,
-      scryerEngine: {
-        executeOperation: executeOperation as unknown as ScryerEngine['executeOperation'],
-        readView: readView as unknown as ScryerEngine['readView']
-      }
-    })
-
-    const result = await handlers.get('architecture:patchNodeData')!(
-      { sender: { send } },
-      { projectPath, modelName: 'model', nodeId: 'api', patch: { name: 'Public API' } }
-    )
-
-    expect(executeOperation).toHaveBeenCalledWith(
-      'scryer.node.update',
-      { nodes: [{ node_id: 'api', name: 'Public API' }] },
-      expect.objectContaining({ transport: 'ipc', projectRoot: projectPath })
-    )
-    expect(readView).toHaveBeenCalledWith(
-      { layer: 'plan', view: 'full' },
-      expect.objectContaining({ transport: 'ipc', projectRoot: projectPath })
-    )
-    expect(patchNodeData).not.toHaveBeenCalled()
-    expect(send).toHaveBeenCalledWith('architecture:modelChanged', {
-      projectPath,
-      fileName: 'planned.scry'
-    })
-    expect(result).toMatchObject({
-      revision: 'req-engine-patch',
-      model: {
-        nodes: [
-          expect.objectContaining({
-            id: 'api',
-            data: expect.objectContaining({ name: 'Public API' })
-          })
-        ]
-      }
-    })
-  })
-
-  it('does not fall back to legacy node patching after a cataloged engine refresh failure', async () => {
-    handlers.clear()
-    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-patch-read-failure-'))
-    const patchNodeData = vi.fn(defaultArchitectureDeps.patchNodeData)
-    const executeOperation = vi.fn(async () => ({
-      ok: true,
-      operationId: 'scryer.node.update',
-      requestId: 'req-engine-patch-failure',
-      result: { updatedCount: 1 }
-    }))
-    const readView = vi.fn(async () => ({
-      ok: false,
-      operationId: 'scryer.model.read',
-      requestId: 'req-engine-refresh-failure',
-      error: {
-        code: 'internal_error',
-        message: 'refresh contract failed',
-        details: { reason: 'success_schema_failed' }
-      }
-    }))
-    const registrar: ArchitectureIpcRegistrar = {
-      handle: (channel, handler) => {
-        handlers.set(channel, handler as (_event: unknown, args: unknown) => Promise<unknown>)
-      }
-    }
-    registerArchitectureHandlers(registrar, {
-      ...defaultArchitectureDeps,
-      patchNodeData,
-      scryerEngine: {
-        executeOperation: executeOperation as unknown as ScryerEngine['executeOperation'],
-        readView: readView as unknown as ScryerEngine['readView']
-      }
-    })
-
-    await expect(
-      handlers.get('architecture:patchNodeData')!(
-        { sender: { send: vi.fn() } },
-        { projectPath, modelName: 'model', nodeId: 'api', patch: { name: 'Public API' } }
-      )
-    ).rejects.toThrow('refresh contract failed')
-    expect(patchNodeData).not.toHaveBeenCalled()
-  })
-
-  it('does not fall back to legacy node patching after an incompatible cataloged engine write', async () => {
-    handlers.clear()
-    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-patch-incompatible-'))
-    const patchNodeData = vi.fn(defaultArchitectureDeps.patchNodeData)
-    const executeOperation = vi.fn(async () => ({
-      ok: false,
-      operationId: 'scryer.node.update',
-      requestId: 'req-engine-patch-incompatible',
-      error: {
-        code: 'incompatible_model',
-        message: 'Model file uses an incompatible schema',
-        details: { reason: 'unsupported_version' }
-      }
-    }))
-    const readView = vi.fn()
-    const registrar: ArchitectureIpcRegistrar = {
-      handle: (channel, handler) => {
-        handlers.set(channel, handler as (_event: unknown, args: unknown) => Promise<unknown>)
-      }
-    }
-    registerArchitectureHandlers(registrar, {
-      ...defaultArchitectureDeps,
-      patchNodeData,
-      scryerEngine: {
-        executeOperation: executeOperation as unknown as ScryerEngine['executeOperation'],
-        readView: readView as unknown as ScryerEngine['readView']
-      }
-    })
-
-    await expect(
-      handlers.get('architecture:patchNodeData')!(
-        { sender: { send: vi.fn() } },
-        { projectPath, modelName: 'model', nodeId: 'api', patch: { name: 'Public API' } }
-      )
-    ).rejects.toThrow('Model file uses an incompatible schema')
-    expect(patchNodeData).not.toHaveBeenCalled()
-    expect(readView).not.toHaveBeenCalled()
-  })
-
   it('does not synthesize legacy drift results after incompatible cataloged engine results', async () => {
     handlers.clear()
     const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-drift-incompatible-'))
@@ -548,8 +400,7 @@ describe('registerArchitectureHandlers native engine migration', () => {
         projectPath,
         operationId: 'scryer.node.update',
         input: { nodes: [{ node_id: 'api', name: 'API' }] },
-        requestId: 'req-node-update',
-        leaseToken: 'renderer-token'
+        requestId: 'req-node-update'
       }
     )
 
@@ -571,12 +422,67 @@ describe('registerArchitectureHandlers native engine migration', () => {
       { nodes: [{ node_id: 'api', name: 'API' }] },
       expect.objectContaining({ requestId: 'req-node-update', transport: 'ipc' })
     )
-    expect(executeOperation.mock.calls[2]?.[2]).not.toHaveProperty('leaseToken')
     expect(send).toHaveBeenCalledWith('architecture:modelChanged', {
       projectPath,
       fileName: 'planned.scry'
     })
     expect(readView).not.toHaveBeenCalled()
+  })
+
+  it('rejects authorization and unknown execute-operation request fields without leaking values', async () => {
+    handlers.clear()
+    const executeOperation = vi.fn()
+    const registrar: ArchitectureIpcRegistrar = {
+      handle: (channel, handler) => {
+        handlers.set(channel, handler as (_event: unknown, args: unknown) => Promise<unknown>)
+      }
+    }
+    registerArchitectureHandlers(registrar, {
+      ...defaultArchitectureDeps,
+      scryerEngine: {
+        executeOperation: executeOperation as unknown as ScryerEngine['executeOperation'],
+        readView: vi.fn() as unknown as ScryerEngine['readView']
+      }
+    })
+    const handler = handlers.get('architecture:executeScryerOperation')!
+    const baseRequest = {
+      projectPath: '/repo',
+      operationId: 'scryer.node.update',
+      input: { nodes: [] }
+    }
+    const authorizationFields = [
+      'leaseToken',
+      'token',
+      'leaseId',
+      'activeLeaseId',
+      'authorization'
+    ] as const
+
+    for (const field of authorizationFields) {
+      const secret = `must-not-leak-execute-${field}`
+      const error = await captureError(() => handler(null, { ...baseRequest, [field]: secret }))
+      expect(error.message).toContain(`forbidden authorization field '${field}'`)
+      expect(error.message).not.toContain(secret)
+    }
+
+    const unknownValue = 'must-not-leak-execute-unknown'
+    const unknownError = await captureError(() =>
+      handler(null, {
+        ...baseRequest,
+        unexpected: unknownValue
+      })
+    )
+    expect(unknownError.message).toContain("unknown field 'unexpected'")
+    expect(unknownError.message).not.toContain(unknownValue)
+
+    await expect(handler(null, { operationId: 'scryer.node.update' })).rejects.toThrow(
+      'invalid request field'
+    )
+    await expect(handler(null, { projectPath: '/repo' })).rejects.toThrow('invalid request field')
+    await expect(handler(null, { ...baseRequest, projectPath: '   ' })).rejects.toThrow(
+      'invalid request field'
+    )
+    expect(executeOperation).not.toHaveBeenCalled()
   })
 
   it('forwards #32 structural mutation operations through generic engine dispatch', async () => {

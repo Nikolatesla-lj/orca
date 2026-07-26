@@ -52,7 +52,13 @@ import { registerCodexAccountHandlers } from './codex-accounts'
 import { registerAgentHookHandlers } from './agent-hooks'
 import { registerAgentTrustHandlers } from './agent-trust'
 import { registerClaudeAccountHandlers } from './claude-accounts'
-import { registerArchitectureHandlers } from './architecture'
+import {
+  createArchitectureEditSessionControllerForAgentRuntime,
+  defaultArchitectureDeps,
+  registerArchitectureHandlers
+} from './architecture'
+import { agentHookServer } from '../agent-hooks/server'
+import { createNativeScryerAgentRunRuntime } from '../scryer/native-agent-run-runtime'
 import { registerUpdaterHandlers } from '../window/attach-main-window-services'
 import {
   registerClipboardHandlers,
@@ -150,7 +156,17 @@ export function registerCoreHandlers(
   }
   registerTelemetryHandlers(store)
   registerBrowserHandlers()
-  registerArchitectureHandlers()
+  const scryerAgentRunRuntime = createNativeScryerAgentRunRuntime({
+    resolveAgentRunIdentity: async (agentRunId) => runtime.resolveAgentRunIdentity(agentRunId),
+    getAgentStatusSnapshot: () => agentHookServer.getAgentStatusEventSnapshot(),
+    subscribeAgentStatus: (listener) => agentHookServer.subscribeAgentStatusEvents(listener),
+    subscribeTerminalTermination: (listener) => runtime.subscribeTerminalTerminations(listener)
+  })
+  registerArchitectureHandlers(undefined, {
+    ...defaultArchitectureDeps,
+    scryerEditSessionController:
+      createArchitectureEditSessionControllerForAgentRuntime(scryerAgentRunRuntime)
+  })
   registerShellHandlers()
   registerPetHandlers()
   registerSessionHandlers(store)

@@ -8,8 +8,9 @@ import {
 import { CLIENT_PLATFORM } from '@/lib/new-workspace'
 import { getAgentLaunchPlatformForRepo } from '@/lib/agent-launch-platform'
 import { reconcileTabOrder } from '@/components/tab-bar/reconcile-order'
-import { track, tuiAgentToAgentKind } from '@/lib/telemetry'
-import { pasteDraftWhenAgentReady } from '@/lib/agent-paste-draft'
+import { tuiAgentToAgentKind } from '@/lib/telemetry'
+import { scheduleAgentStartupPaste } from '@/lib/schedule-agent-startup-paste'
+import { deliverStartupToAlreadyMountedPane } from '@/lib/agent-startup-delayed-delivery'
 import { initialAgentTabViewModeProps } from '@/lib/native-chat-initial-view-mode'
 import { getRuntimeEnvironmentIdForWorktree } from '@/lib/worktree-runtime-owner'
 import { getLocalProjectExecutionRuntimeContext } from '@/lib/local-preflight-context'
@@ -24,7 +25,6 @@ import {
 } from '../../../shared/tui-agent-launch-defaults'
 import { TUI_AGENT_CONFIG } from '../../../shared/tui-agent-config'
 import { repoIsRemote } from '../../../shared/agent-launch-remote'
-import { seedCommandCodeSubmittedPromptStatus } from '@/lib/command-code-prompt-status-seed'
 import type { TuiAgent } from '../../../shared/types'
 import type { LaunchSource } from '../../../shared/telemetry-events'
 import { translate } from '@/i18n/i18n'
@@ -53,6 +53,13 @@ export type LaunchAgentInNewTabArgs = {
   launchPlatform?: NodeJS.Platform
   /** Called after the prompt is actually delivered to the agent input path. */
   onPromptDelivered?: () => void
+  /** Async hook run on the local-tab path after the tab is created but BEFORE the
+   *  agent's startup command is queued. Used to acquire an edit-session lease for
+   *  the new tab (by its id) so the agent's first write is authorized under the
+   *  session instead of racing it. The startup command is deferred until this
+   *  resolves; if it rejects, the startup command is never queued. Not invoked on
+   *  the host-owned web-runtime path (that returns a null tab id). */
+  onBeforeStartup?: (tabId: string) => Promise<void>
 }
 
 function removeStaleLocalAgentTabsForWebHostLaunch(worktreeId: string): void {
@@ -103,7 +110,8 @@ export function launchAgentInNewTab(args: LaunchAgentInNewTabArgs): LaunchAgentI
     launchSource,
     quickCommandLabel,
     launchPlatform,
-    onPromptDelivered
+    onPromptDelivered,
+    onBeforeStartup
   } = args
   const store = useAppStore.getState()
   const worktree = store.allWorktrees?.().find((entry: { id: string }) => entry.id === worktreeId)
@@ -273,83 +281,65 @@ export function launchAgentInNewTab(args: LaunchAgentInNewTabArgs): LaunchAgentI
     quickCommandLabel,
     ...initialAgentTabViewModeProps(store.settings)
   })
-  store.queueTabStartupCommand(tab.id, {
-    command: startupPlan.launchCommand,
-    ...(startupPlan.env ? { env: startupPlan.env } : {}),
-    launchConfig: startupPlan.launchConfig,
-    launchAgent: agent,
-    ...(startupPlan.startupCommandDelivery
-      ? { startupCommandDelivery: startupPlan.startupCommandDelivery }
-      : {}),
-    ...(agent === 'command-code' && hasPrompt && promptDelivery === 'auto-submit'
-      ? { initialAgentStatus: { agent, prompt: trimmedPrompt } }
-      : {}),
-    telemetry: {
-      agent_kind: tuiAgentToAgentKind(agent),
-      launch_source: launchSource ?? 'tab_bar_quick_launch',
-      request_kind: 'new'
-    }
-  })
-  // Why: schedule the bracketed-paste-after-ready follow-up immediately after
-  // the startup command is queued. Fire-and-forget so callers keep their
-  // synchronous `{ tabId, startupPlan }` signature. The helper short-circuits
-  // for agents with a `draftPromptFlag`, so calling it on the followup path
-  // is safe even when the draft was already injected via the native flag.
-  if (pasteDraftAfterLaunch !== null) {
-    // Why: surface silent paste failures — without onTimeout, a stalled agent
-    // readiness wait drops the user's notes with no feedback. Suppress when
-    // the user closed the tab or switched worktrees so the toast/telemetry
-    // don't fire for user-initiated cancellation (mirrors the 5s launch
-    // watchdog in QuickLaunchButton).
-    const tabId = tab.id
-    void pasteDraftWhenAgentReady({
-      tabId,
-      content: pasteDraftAfterLaunch,
-      agent,
-      submit: submitPastedPrompt,
-      forcePaste: forcePasteAfterLaunch,
-      onTimeout: () => {
-        const state = useAppStore.getState()
-        const tabsForWorktree = state.tabsByWorktree[worktreeId] ?? []
-        const tab = tabsForWorktree.find((t) => t.id === tabId)
-        // Why: if the PTY never spawned, QuickLaunch's 5s watchdog already
-        // surfaced the launch failure. Don't double-toast for the same root
-        // cause. Looking up directly in `worktreeId` (not scanning every
-        // worktree) also preserves "still in this worktree" intent.
-        if (!tab) {
-          return // tab closed by user
-        }
-        if (tab.ptyId === null) {
-          return // launch failed; QuickLaunch handled the user-facing toast
-        }
-        if (state.activeWorktreeId !== worktreeId) {
-          return
-        }
-        const label = submitPastedPrompt ? 'prompt' : 'notes'
-        toast.message(
-          translate(
-            'auto.lib.launch.agent.in.new.tab.a5a1f7033f',
-            "Your {{value0}} wasn't sent — paste it once the agent is ready.",
-            { value0: label }
-          )
-        )
-        track('agent_error', {
-          error_class: 'paste_readiness_timeout',
-          agent_kind: tuiAgentToAgentKind(agent)
-        })
-      }
-    }).then((delivered) => {
-      if (delivered) {
-        if (agent === 'command-code' && submitPastedPrompt) {
-          // Why: Command Code has no prompt-submit hook; when Orca submits a
-          // generated prompt after readiness, seed working at delivery time.
-          seedCommandCodeSubmittedPromptStatus(tabId, trimmedPrompt)
-        }
-        onPromptDelivered?.()
+  // Why: queueing the startup command is what actually launches the agent binary.
+  // Deferring it lets `onBeforeStartup` acquire an edit-session lease for this tab
+  // first, so the agent's first write runs under the session rather than racing it.
+  const deliverStartupCommand = (): void => {
+    store.queueTabStartupCommand(tab.id, {
+      command: startupPlan.launchCommand,
+      ...(startupPlan.env ? { env: startupPlan.env } : {}),
+      launchConfig: startupPlan.launchConfig,
+      launchAgent: agent,
+      ...(startupPlan.startupCommandDelivery
+        ? { startupCommandDelivery: startupPlan.startupCommandDelivery }
+        : {}),
+      ...(agent === 'command-code' && hasPrompt && promptDelivery === 'auto-submit'
+        ? { initialAgentStatus: { agent, prompt: trimmedPrompt } }
+        : {}),
+      telemetry: {
+        agent_kind: tuiAgentToAgentKind(agent),
+        launch_source: launchSource ?? 'tab_bar_quick_launch',
+        request_kind: 'new'
       }
     })
-  } else if (hasPrompt) {
-    onPromptDelivered?.()
+    // Why: schedule the bracketed-paste-after-ready follow-up after the startup
+    // command is queued (extracted so this launcher stays focused). Fire-and-forget
+    // so callers keep their synchronous `{ tabId, startupPlan }` signature.
+    if (pasteDraftAfterLaunch !== null) {
+      scheduleAgentStartupPaste({
+        tabId: tab.id,
+        worktreeId,
+        agent,
+        content: pasteDraftAfterLaunch,
+        submit: submitPastedPrompt,
+        forcePaste: forcePasteAfterLaunch,
+        submittedPrompt: trimmedPrompt,
+        onPromptDelivered
+      })
+    } else if (hasPrompt) {
+      onPromptDelivered?.()
+    }
+  }
+
+  if (onBeforeStartup) {
+    // Why: acquire the tab's edit-session lease before the agent can run. On
+    // failure the startup command is never queued (the agent never launches); the
+    // hook owns user-facing failure surfacing. Keep the log token-free.
+    void Promise.resolve(onBeforeStartup(tab.id))
+      .then(() => {
+        deliverStartupCommand()
+        // Why: deferring the queue behind an async hook can lose the mount race —
+        // TerminalPane captures its startup command once, on first render, so a
+        // pane that mounted during the hook spawned a bare shell and will never
+        // consume the queue. Recover by typing the launch command into that live
+        // pane; the agent still starts strictly after the lease is held.
+        void deliverStartupToAlreadyMountedPane(tab.id, startupPlan.launchCommand)
+      })
+      .catch(() => {
+        console.error('[launch-agent] onBeforeStartup rejected; startup command not queued')
+      })
+  } else {
+    deliverStartupCommand()
   }
 
   // Why: match the `+` button's `createNewTerminalTab` sequence — without

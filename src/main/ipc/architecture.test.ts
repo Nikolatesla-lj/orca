@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, readFile, writeFile } from 'fs/promises'
-import { join } from 'path'
-import { tmpdir } from 'os'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 type ArchitectureWatchCallback = (eventType: string, filename: string) => void
@@ -246,43 +246,140 @@ describe('registerArchitectureHandlers', () => {
     await expect(readFile(join(projectPath, '.scryer', 'model.scry'), 'utf8')).rejects.toThrow()
   })
 
-  it('does not create a legacy default model while refreshing planned node patches', async () => {
-    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-planned-patch-'))
+  it('generates a container subtree through the executeScryerOperation IPC bridge', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-container-fill-'))
+    await mkdir(join(projectPath, '.scryer'), { recursive: true })
+    const seed = JSON.stringify({
+      version: '0.3',
+      nodes: [
+        { id: 'shop', kind: 'system', name: 'Shop' },
+        { id: 'api', kind: 'container', name: 'API', parentId: 'shop' }
+      ],
+      links: [],
+      groups: [],
+      sourceMap: {},
+      boundaries: {}
+    })
+    await writeFile(join(projectPath, '.scryer', 'model.scry'), seed, 'utf8')
+    await writeFile(join(projectPath, '.scryer', 'planned.scry'), seed, 'utf8')
     const send = vi.fn()
 
-    const writeResult = await handlers.get('architecture:executeScryerOperation')!(
+    const result = (await handlers.get('architecture:executeScryerOperation')!(
       { sender: { send } },
       {
         projectPath,
-        operationId: 'scryer.system.add',
-        requestId: 'ipc-planned-system-add',
-        input: { items: [{ name: 'System 1', description: '' }] }
+        operationId: 'scryer.container.fill',
+        requestId: 'ipc-container-fill',
+        input: {
+          container_id: 'api',
+          components: [
+            {
+              key: 'orders',
+              name: 'Orders',
+              symbols: [{ key: 'h', name: 'handleOrder', source_file: 'src/orders.ts' }]
+            }
+          ]
+        }
       }
-    )
-    expect(writeResult).toMatchObject({ ok: true })
+    )) as { ok: boolean; result: { created: { components: { id: string }[] } } }
 
-    const plannedBefore = JSON.parse(
-      await readFile(join(projectPath, '.scryer', 'planned.scry'), 'utf8')
-    ) as { nodes: { id: string; name?: string }[] }
-    const nodeId = plannedBefore.nodes[0]?.id
-    expect(nodeId).toBeTruthy()
-
-    const patched = await handlers.get('architecture:patchNodeData')!(
-      { sender: { send } },
-      { projectPath, modelName: 'model', nodeId, patch: { name: 'Shop System' } }
-    )
-
-    expect(patched).toMatchObject({
-      model: {
-        nodes: [
-          expect.objectContaining({
-            id: nodeId,
-            data: expect.objectContaining({ name: 'Shop System' })
-          })
-        ]
+    expect(result).toMatchObject({
+      ok: true,
+      result: {
+        commit: { committedWritten: true, plannedMirrored: true, baselineRefreshed: false }
       }
     })
-    await expect(readFile(join(projectPath, '.scryer', 'model.scry'), 'utf8')).rejects.toThrow()
+    // A committed generation write notifies the committed model file.
+    expect(send).toHaveBeenCalledWith('architecture:modelChanged', {
+      projectPath,
+      fileName: 'model.scry'
+    })
+    const componentId = result.result.created.components[0].id
+    const committed = JSON.parse(
+      await readFile(join(projectPath, '.scryer', 'model.scry'), 'utf8')
+    ) as { nodes: { id: string }[] }
+    expect(committed.nodes.some((node) => node.id === componentId)).toBe(true)
+  })
+
+  it('reports model health through the executeScryerOperation IPC bridge without a write', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-health-'))
+    await mkdir(join(projectPath, '.scryer'), { recursive: true })
+    const seed = JSON.stringify({
+      version: '0.3',
+      nodes: [
+        { id: 'shop', kind: 'system', name: 'Shop' },
+        { id: 'api', kind: 'container', name: 'API', parentId: 'shop' }
+      ],
+      links: [],
+      groups: [],
+      sourceMap: {},
+      boundaries: {}
+    })
+    await writeFile(join(projectPath, '.scryer', 'model.scry'), seed, 'utf8')
+    const send = vi.fn()
+
+    const result = await handlers.get('architecture:executeScryerOperation')!(
+      { sender: { send } },
+      { projectPath, operationId: 'scryer.model.health', requestId: 'ipc-health', input: {} }
+    )
+
+    expect(result).toMatchObject({ ok: true, operationId: 'scryer.model.health' })
+    // A read/report op is not a semantic write, so it fires no modelChanged.
+    expect(send).not.toHaveBeenCalledWith('architecture:modelChanged', expect.anything())
+  })
+
+  it('records a drift finding into planned state through the IPC bridge', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-drift-flag-'))
+    await mkdir(join(projectPath, '.scryer'), { recursive: true })
+    const seed = JSON.stringify({
+      version: '0.3',
+      nodes: [
+        { id: 'shop', kind: 'system', name: 'Shop' },
+        { id: 'api', kind: 'container', name: 'API', parentId: 'shop' },
+        { id: 'orders', kind: 'component', name: 'Orders', parentId: 'api' }
+      ],
+      links: [],
+      groups: [],
+      sourceMap: {},
+      boundaries: { api: [{ pattern: 'src/**/*.ts' }] }
+    })
+    await writeFile(join(projectPath, '.scryer', 'model.scry'), seed, 'utf8')
+    await writeFile(join(projectPath, '.scryer', 'planned.scry'), seed, 'utf8')
+    const send = vi.fn()
+
+    const result = await handlers.get('architecture:executeScryerOperation')!(
+      { sender: { send } },
+      {
+        projectPath,
+        operationId: 'scryer.drift.flag',
+        requestId: 'ipc-drift-flag',
+        input: {
+          node_id: 'api',
+          undescribed: [
+            { node_id: 'orders', statement: 'Cancels stale orders', source_file: 'src/orders.ts' }
+          ]
+        }
+      }
+    )
+
+    expect(result).toMatchObject({
+      ok: true,
+      operationId: 'scryer.drift.flag',
+      result: { flagged: 1 }
+    })
+    // A planned-only write notifies planned.scry and leaves committed untouched.
+    expect(send).toHaveBeenCalledWith('architecture:modelChanged', {
+      projectPath,
+      fileName: 'planned.scry'
+    })
+    expect(await readFile(join(projectPath, '.scryer', 'model.scry'), 'utf8')).toBe(seed)
+    const planned = JSON.parse(
+      await readFile(join(projectPath, '.scryer', 'planned.scry'), 'utf8')
+    ) as { nodes: { id: string; responsibilities?: { statement: string; vagrant?: boolean }[] }[] }
+    const orders = planned.nodes.find((node) => node.id === 'orders')!
+    expect(
+      orders.responsibilities?.some((r) => r.statement === 'Cancels stale orders' && r.vagrant)
+    ).toBe(true)
   })
 
   it('creates the default blank model through the Scryer operation catalog', async () => {
@@ -327,28 +424,6 @@ describe('registerArchitectureHandlers', () => {
     })
   })
 
-  it('rejects legacy C4-shaped default raw writes instead of converting them', async () => {
-    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-write-engine-'))
-
-    await expect(
-      handlers.get('architecture:writeModel')!(null, {
-        projectPath,
-        model: {
-          nodes: [
-            {
-              id: 'system',
-              type: 'c4',
-              data: { name: 'Shop', description: 'Commerce', kind: 'system' }
-            }
-          ],
-          edges: [],
-          sourceMap: {}
-        }
-      })
-    ).rejects.toThrow()
-    await expect(readFile(join(projectPath, '.scryer', 'model.scry'), 'utf8')).rejects.toThrow()
-  })
-
   it('routes drift and reconcile IPC channels through Native Scryer Engine envelopes', async () => {
     const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-drift-engine-'))
     await mkdir(join(projectPath, '.scryer'), { recursive: true })
@@ -388,95 +463,6 @@ describe('registerArchitectureHandlers', () => {
     expect(changedScryerModelFileForOperation('scryer.source.update')).toBe('planned.scry')
     expect(changedScryerModelFileForOperation('scryer.model.set')).toBe('model.scry')
     expect(changedScryerModelFileForOperation('scryer.plan.fold')).toBe('model.scry')
-  })
-
-  it('notifies the renderer immediately when IPC writes replace the model', async () => {
-    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-write-'))
-    const send = vi.fn()
-
-    await handlers.get('architecture:writeModel')!(
-      { sender: { send } },
-      {
-        projectPath,
-        model: {
-          version: '0.3',
-          nodes: [
-            {
-              id: 'system',
-              kind: 'system',
-              name: 'System',
-              description: 'Root system'
-            }
-          ],
-          links: [],
-          boundaries: {},
-          sourceMap: {},
-          groups: []
-        }
-      }
-    )
-
-    expect(send).toHaveBeenCalledWith('architecture:modelChanged', {
-      projectPath,
-      fileName: 'model.scry'
-    })
-  })
-
-  it('bridges revisioned document reads and node patches through IPC', async () => {
-    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-ipc-revision-'))
-    const send = vi.fn()
-    const modelName = 'legacy-draft'
-
-    const first = (await handlers.get('architecture:writeModelDocument')!(
-      { sender: { send } },
-      {
-        projectPath,
-        modelName,
-        model: {
-          nodes: [
-            {
-              id: 'api',
-              type: 'c4',
-              data: { name: 'API', description: 'Initial description', kind: 'system' }
-            }
-          ],
-          edges: [],
-          sourceMap: {},
-          groups: []
-        }
-      }
-    )) as { model: { nodes: { data: Record<string, unknown> }[] }; revision: string }
-    expect(first).toMatchObject({
-      model: expect.objectContaining({ nodes: expect.any(Array) }),
-      revision: expect.any(String)
-    })
-
-    const patched = await handlers.get('architecture:patchNodeData')!(
-      { sender: { send } },
-      {
-        projectPath,
-        modelName,
-        nodeId: 'api',
-        patch: { name: 'API Local Draft' },
-        baseRevision: first.revision,
-        baseNodeData: first.model.nodes[0]!.data
-      }
-    )
-
-    expect(patched).toMatchObject({
-      model: expect.objectContaining({
-        nodes: [
-          expect.objectContaining({
-            data: expect.objectContaining({ name: 'API Local Draft' })
-          })
-        ]
-      }),
-      revision: expect.any(String)
-    })
-    expect(send).toHaveBeenLastCalledWith('architecture:modelChanged', {
-      projectPath,
-      fileName: 'legacy-draft.scry'
-    })
   })
 
   it('forwards Native Scryer Engine operation envelopes through IPC', async () => {

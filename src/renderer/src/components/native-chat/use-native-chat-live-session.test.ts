@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { NativeChatMessage } from '../../../../shared/native-chat-types'
 import { mergeNativeChatLiveSession } from './native-chat-live-status'
+import { nativeChatLiveSessionBaseSignature } from './use-native-chat-live-session'
 
 // These exercise the hook's merge core (mergeNativeChatLiveSession), which is
 // the pure decision the hook delegates to after doing IPC + store reads. The
@@ -20,6 +21,17 @@ function assistant(id: string, text: string): NativeChatMessage {
 function user(id: string, text: string): NativeChatMessage {
   return { id, role: 'user', blocks: [{ type: 'text', text }], timestamp: 1, source: 'transcript' }
 }
+
+describe('nativeChatLiveSessionBaseSignature', () => {
+  it('preserves the historical runtime NUL delimiter without a literal source byte', () => {
+    const nul = String.fromCharCode(0)
+
+    expect(nativeChatLiveSessionBaseSignature('claude', null)).toBe(`claude${nul}`)
+    expect(nativeChatLiveSessionBaseSignature('claude', `session${nul}tail`)).toBe(
+      `claude${nul}session${nul}tail`
+    )
+  })
+})
 
 describe('mergeNativeChatLiveSession', () => {
   it("surfaces live 'working' before the assistant turn lands in the transcript", () => {

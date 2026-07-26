@@ -18,6 +18,7 @@
     "lint:switch-exhaustiveness": "oxlint --type-aware --config config/oxlint-switch-exhaustiveness.json src/main src/preload src/shared src/relay src/cli src/renderer/src config tests --quiet",
     "prepare": "husky",
     "test": "node config/scripts/ensure-native-runtime.mjs --runtime=node && vitest run --config config/vitest.config.ts",
+    "test:parity": "vitest run --config config/vitest.config.ts src/main/scryer/engine/machine-parity.test.ts src/main/scryer/engine/machine-parity-failures.test.ts src/main/scryer/engine/machine-parity-ipc-blackbox.test.ts src/main/scryer/engine/parity-fixtures.test.ts src/main/scryer/engine/parity-golden.test.ts src/cli/scryer-machine-parity-blackbox.test.ts",
     "check:styled-scrollbars": "node config/scripts/check-styled-scrollbars.mjs",
     "check:feature-wall-assets": "node config/scripts/check-feature-wall-assets.mjs",
     "verify:macos-entitlements": "node config/scripts/verify-macos-entitlements.mjs",

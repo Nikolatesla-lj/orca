@@ -27,7 +27,8 @@ import type {
 import {
   applyNodePositionChangesToModel,
   getVisibleGroupBubbles,
-  getVisibleArchitectureView
+  getVisibleArchitectureView,
+  shouldOfferContainerFill
 } from './architecture-diagram-model'
 import { Button } from '../ui/button'
 import { edgeTypes, type ArchitectureFlowEdge } from './edges'
@@ -181,17 +182,13 @@ function ArchitectureCanvasInner({
     () => getVisibleGroupBubbles(model, view.visibleNodes),
     [model, view.visibleNodes]
   )
-  const showFillWithAi =
-    !!view.currentParentId &&
-    !syncing &&
-    !!onFillNodeWithAi &&
-    view.visibleNodes.every((node) => node.data._reference)
-  const fillLabel =
-    view.currentParentKind === 'system'
-      ? 'containers'
-      : view.currentParentKind === 'container'
-        ? 'components'
-        : 'children'
+  const showFillWithAi = shouldOfferContainerFill({
+    view,
+    syncing,
+    hasFillHandler: !!onFillNodeWithAi
+  })
+  // Container Generation only ever fills a container with components (#73).
+  const fillLabel = 'components'
 
   const onNodesChange = useCallback<OnNodesChange<ArchitectureFlowNode>>(
     (changes) => {

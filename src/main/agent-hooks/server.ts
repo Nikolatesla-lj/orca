@@ -78,7 +78,17 @@ export type AgentHookStatusChangeEntry = {
   observedInCurrentRuntime: boolean
 }
 
+export type AgentHookStatusEvent = {
+  paneKey: string
+  connectionId: string | null
+  state: AgentStatusState
+  interrupted?: boolean
+  receivedAt: number
+  isReplay?: boolean
+}
+
 type StatusChangeListener = (statuses: AgentHookStatusChangeEntry[]) => void
+type AgentStatusEventListener = (event: AgentHookStatusEvent) => void
 type PaneStatusClearListener = (paneKey: string) => void
 type PaneKeyAliasPersistenceListener = (entries: LegacyPaneKeyAliasEntry[]) => void
 type PaneKeyAliasEntry = {
@@ -243,6 +253,20 @@ function toAgentStatusIpcPayload(entry: EnrichedAgentHookEventPayload): AgentSta
     stateStartedAt: entry.stateStartedAt,
     ...(entry.providerSession ? { providerSession: entry.providerSession } : {}),
     ...entry.payload
+  }
+}
+
+function toAgentHookStatusEvent(
+  entry: EnrichedAgentHookEventPayload,
+  isReplay = entry.isReplay === true
+): AgentHookStatusEvent {
+  return {
+    paneKey: entry.paneKey,
+    connectionId: entry.connectionId,
+    state: entry.payload.state,
+    receivedAt: entry.receivedAt,
+    ...(entry.payload.interrupted === true ? { interrupted: true } : {}),
+    ...(isReplay ? { isReplay: true } : {})
   }
 }
 
@@ -431,6 +455,7 @@ export class AgentHookServer {
   private onAgentStatus: ((payload: EnrichedAgentHookEventPayload) => void) | null = null
   private onPaneStatusCleared: PaneStatusClearListener | null = null
   private statusChangeListeners = new Set<StatusChangeListener>()
+  private agentStatusEventListeners = new Set<AgentStatusEventListener>()
   // Why: directory that holds the on-disk endpoint file. Set via start()'s
   // `userDataPath` option so the class has no direct Electron dependency
   // (keeps it mockable in the vitest node environment).
@@ -488,6 +513,22 @@ export class AgentHookServer {
     this.statusChangeListeners.add(listener)
     return () => {
       this.statusChangeListeners.delete(listener)
+    }
+  }
+
+  getAgentStatusEventSnapshot(): AgentHookStatusEvent[] {
+    return Array.from(this.state.lastStatusByPaneKey.entries(), ([paneKey, entry]) =>
+      toAgentHookStatusEvent(
+        entry as EnrichedAgentHookEventPayload,
+        !this.runtimeObservedStatusPaneKeys.has(paneKey) || entry.isReplay === true
+      )
+    )
+  }
+
+  subscribeAgentStatusEvents(listener: AgentStatusEventListener): () => void {
+    this.agentStatusEventListeners.add(listener)
+    return () => {
+      this.agentStatusEventListeners.delete(listener)
     }
   }
 
@@ -591,6 +632,21 @@ export class AgentHookServer {
         listener(snapshot)
       } catch (err) {
         console.error('[agent-hooks] status-change listener threw', err)
+      }
+    }
+  }
+
+  private notifyAgentStatusEventListeners(entry: EnrichedAgentHookEventPayload): void {
+    if (this.agentStatusEventListeners.size === 0) {
+      return
+    }
+    const event = toAgentHookStatusEvent(entry)
+    for (const listener of this.agentStatusEventListeners) {
+      try {
+        listener(event)
+      } catch {
+        // Why: event consumers are lifecycle observers; never expose their raw errors to logs.
+        console.error('[agent-hooks] agent-status event listener threw')
       }
     }
   }
@@ -771,6 +827,7 @@ export class AgentHookServer {
     this.state.lastStatusByPaneKey.set(enriched.paneKey, enriched)
     this.scheduleStatusPersist()
     this.notifyStatusChangeListeners()
+    this.notifyAgentStatusEventListeners(enriched)
     this.onAgentStatus?.(enriched)
     return enriched
   }
@@ -1264,6 +1321,7 @@ export class AgentHookServer {
     this.env = 'production'
     this.onAgentStatus = null
     this.onPaneStatusCleared = null
+    this.agentStatusEventListeners.clear()
     for (const timer of this.assistantMessageRetryTimers.values()) {
       clearTimeout(timer)
     }

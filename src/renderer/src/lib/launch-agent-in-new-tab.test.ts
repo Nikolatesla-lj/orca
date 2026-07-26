@@ -453,6 +453,62 @@ describe('launchAgentInNewTab', () => {
     expect(mockTrack).not.toHaveBeenCalledWith('agent_prompt_sent', expect.anything())
   })
 
+  it('defers the startup command until onBeforeStartup resolves (session before launch)', async () => {
+    const { launchAgentInNewTab } = await import('./launch-agent-in-new-tab')
+    let resolveHook: () => void = () => {}
+    const hookGate = new Promise<void>((resolve) => {
+      resolveHook = resolve
+    })
+    const order: string[] = []
+    mockQueueTabStartupCommand.mockImplementation(() => {
+      order.push('queue')
+    })
+    const onBeforeStartup = vi.fn(async (tabId: string) => {
+      order.push(`hook:${tabId}`)
+      await hookGate
+      order.push('hook-resolved')
+    })
+
+    const result = launchAgentInNewTab({
+      agent: 'codex',
+      worktreeId: 'wt-1',
+      prompt: 'fix the spinner',
+      onBeforeStartup
+    })
+
+    // The tab id is returned synchronously and the hook is invoked with it, but the
+    // startup command that launches the agent must not be queued yet.
+    expect(result?.tabId).toBe('tab-1')
+    expect(onBeforeStartup).toHaveBeenCalledWith('tab-1')
+    expect(mockQueueTabStartupCommand).not.toHaveBeenCalled()
+
+    resolveHook()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(mockQueueTabStartupCommand).toHaveBeenCalledTimes(1)
+    expect(order).toEqual(['hook:tab-1', 'hook-resolved', 'queue'])
+  })
+
+  it('never queues the startup command when onBeforeStartup rejects', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { launchAgentInNewTab } = await import('./launch-agent-in-new-tab')
+    const onBeforeStartup = vi.fn(async () => {
+      throw new Error('lease conflict')
+    })
+
+    launchAgentInNewTab({
+      agent: 'codex',
+      worktreeId: 'wt-1',
+      prompt: 'fix the spinner',
+      onBeforeStartup
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(onBeforeStartup).toHaveBeenCalledWith('tab-1')
+    expect(mockQueueTabStartupCommand).not.toHaveBeenCalled()
+    consoleError.mockRestore()
+  })
+
   it('queues per-launch CLI arguments without putting generated prompts in argv', async () => {
     const { launchAgentInNewTab } = await import('./launch-agent-in-new-tab')
 
