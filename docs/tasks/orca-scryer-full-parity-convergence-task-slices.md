@@ -1,8 +1,8 @@
 # Orca Scryer Full-Parity Convergence Task Slices
 
-Status: Published as GitHub PRD #67; local checkpoint committed; implementation open
+Status: Published as GitHub PRD #67; S1-S7 implemented, verified, and integrated locally; not pushed, landed, or closed
 Date: 2026-07-14
-Last updated: 2026-07-15
+Last updated: 2026-07-25
 Parent work set: `docs/prd/orca-scryer-full-parity-convergence-work-set.md`
 Issue bodies: `docs/prd/orca-scryer-full-parity-convergence-issue-slices.md`
 GitHub Parent: https://github.com/Nikolatesla-lj/orca/issues/67
@@ -34,13 +34,13 @@ one.
 
 | Slice | Type | Execution | Blocked by | Current status | Exit gate | GitHub issue |
 | --- | --- | --- | --- | --- | --- | --- |
-| S1 | Structural convergence | AFK | None | declared; blocker-bearing checkpoint preserved | no disables, target cycles, or NUL; focused tests and typecheck pass | [#68](https://github.com/Nikolatesla-lj/orca/issues/68) |
-| S2 | Engine semantics | AFK | S1 | locally checkpointed; needs attention; not verified | Decision #34 invariant and transaction gate | [#69](https://github.com/Nikolatesla-lj/orca/issues/69) |
-| S3 | Edit safety | AFK | S1 | partial; needs attention | lease/token/completion lifecycle gate | [#70](https://github.com/Nikolatesla-lj/orca/issues/70) |
-| S4 | Ownership retirement | AFK | S1; completion-path work waits for S3 | partial; needs attention | no-fallback ownership and final-state validation gate | [#71](https://github.com/Nikolatesla-lj/orca/issues/71) |
-| S5 | Machine parity | AFK | S2, S3, S4 | local regression evidence checkpointed; machine gate absent | catalog-derived 33-operation gate with real provenance | [#72](https://github.com/Nikolatesla-lj/orca/issues/72) |
-| S6 | Product cutover | AFK | S2, S3, S4, S5 | declared; not product-integrated | visible Electron Container Generation workflow gate | [#73](https://github.com/Nikolatesla-lj/orca/issues/73) |
-| S7 | Verification and landing | HITL | S1-S6 | declared | exact-tree release gate and four reviewable commit groups | [#74](https://github.com/Nikolatesla-lj/orca/issues/74) |
+| S1 | Structural convergence | AFK | None | `verified:s1-gate`; integrated at `1fb750756` | no disables, target cycles, or NUL; focused tests and typecheck pass | [#68](https://github.com/Nikolatesla-lj/orca/issues/68) |
+| S2 | Engine semantics | AFK | S1 | `verified:s2-gate`; integrated at `df15c37c6` | Decision #34 invariant and transaction gate | [#69](https://github.com/Nikolatesla-lj/orca/issues/69) |
+| S3 | Edit safety | AFK | S1 | `verified:s3-gate`; integrated at `db31b92b7` | lease/token/completion lifecycle gate | [#70](https://github.com/Nikolatesla-lj/orca/issues/70) |
+| S4 | Ownership retirement | AFK | S1; completion-path work waits for S3 | `verified:s4-gate`; integrated at `e3ad936dd` | no-fallback ownership and final-state validation gate | [#71](https://github.com/Nikolatesla-lj/orca/issues/71) |
+| S5 | Machine parity | AFK | S2, S3, S4 | `verified:parity-gate`; integrated at `d80d42bd9` | catalog-derived 33-operation gate with real provenance | [#72](https://github.com/Nikolatesla-lj/orca/issues/72) |
+| S6 | Product cutover | AFK | S2, S3, S4, S5 | `adapter verified`; integrated at `910e2106f`; not yet `product-integrated` (visible success-terminal E2E gated on real agent runtime) | visible Electron Container Generation workflow gate | [#73](https://github.com/Nikolatesla-lj/orca/issues/73) |
+| S7 | Verification and landing | HITL | S1-S6 | `verified:release-gate`; exact-tree review branch assembled; not pushed, landed, or closed | exact-tree release gate and four reviewable commit groups | [#74](https://github.com/Nikolatesla-lj/orca/issues/74) |
 
 ## Execution Order
 
@@ -85,13 +85,13 @@ Publication completed on 2026-07-14:
 
 | Slice | Implementation evidence | Verification evidence | Commit | Target ref | Last updated |
 | --- | --- | --- | --- | --- | --- |
-| S1 | Structural blockers preserved in local convergence checkpoint | structural scans fail as documented; #68 not started | `227cc8b169` | not landed | 2026-07-15 |
-| S2 | Planner, operation, schemas, tests, CLI/IPC increments preserved | 39 Engine tests pass; binding invariant gate remains open | `227cc8b169` | not landed | 2026-07-15 |
-| S3 | Existing lease store/controller/gate plus reference-worktree tests | incomplete; no status promotion | mixed committed/checkpoint | not landed | 2026-07-15 |
-| S4 | Renderer normal path partially cut over; compatibility seams remain | ownership gate incomplete; no status promotion | mixed committed/checkpoint | not landed | 2026-07-15 |
-| S5 | CLI mappings and local regression runner/fixtures preserved | 39 CLI/IPC tests pass; no catalog gate; provenance invalid | `227cc8b169` | not landed | 2026-07-15 |
-| S6 | visible workflow still uses legacy `set_node` prompt | existing Architecture E2E 22/22 passes; no Container Generation product E2E | — | not landed | 2026-07-15 |
-| S7 | release categories defined | checkpoint baseline recorded; final release gate not run | — | not landed | 2026-07-15 |
+| S1 | Engine contract hubs split into focused deep modules; disables, target cycles, and literal NUL removed | S1 focused gate passes: no `max-lines` suppressions, no NUL, focused Engine tests and Node typecheck green | `1fb750756` | not landed | 2026-07-25 |
+| S2 | Six Decision #34 invariants and single atomic committed-plus-planned transaction implemented | S2 focused gate passes: invariant and no-partial-write transaction tests green | `df15c37c6` | not landed | 2026-07-25 |
+| S3 | Edit-lease store, session controller, Completion Gate, native agent-run runtime adapter, token-free strict DTOs | S3 focused gate passes: lease/token redaction, completion lifecycle, cancel/crash cleanup, strict DTO rejection tests green | `db31b92b7` | not landed | 2026-07-25 |
+| S4 | Legacy semantic ownership retired (net −976 lines); MCP strict-only; product path routes through the Engine seam with no fallback | S4 focused gate passes: static ownership and Engine-failure no-fallback tests green | `e3ad936dd` | not landed | 2026-07-25 |
+| S5 | Catalog-derived 33-operation parity gate; placeholder provenance downgraded to local-regression (not fabricated upstream) | `pnpm run test:parity` passes: 6 files, 31 tests; `container.fill` reported as `planned`, not product-integrated | `d80d42bd9` | not landed | 2026-07-25 |
+| S6 | Fill with AI cut over to the Orca CLI `orca scryer container fill` Engine seam; edit-session acquired before agent launch; gate-driven terminal and view refresh; `set_node` removed from the prompt | Electron E2E proves 6 lifecycle states via the visible product path (6 passed); visible success-terminal case retained as `test.fixme` because it needs a real agent Stop-hook callback; `container.fill` catalog `ui.status` stays `planned` | `910e2106f` | not landed | 2026-07-25 |
+| S7 | Focused release gate run on the frozen tree; lint repaired; Scryer model folded and validated; four reviewable commit groups assembled on `scryer/convergence-review` | Release gate green (see Final Verified Convergence Results); review branch tree-hash equals integration tree-hash; nothing pushed, landed, or closed | `6a5c39775` (model fold); `c98023969` (lint repair) | not landed | 2026-07-25 |
 
 ## Checkpoint Baseline Results
 
@@ -125,6 +125,59 @@ hook failed on the recorded lint findings. The functional baseline and typecheck
 passed first. This exception preserves the blocker-bearing tree for #68-#74 and
 must not be repeated for reviewable implementation commits.
 
+## Final Verified Convergence Results
+
+These results supersede the checkpoint baseline above. They record the verified
+integration tree and the assembled review branch as of 2026-07-25.
+
+Integration branch: `scryer/convergence-integration`
+Integration HEAD: `6a5c3977565838eabc2783be75a3361964b631fd`
+Integration tree: `cec4973d30871995c3ae02bb9a26b0f149a59c2e`
+Review branch: `scryer/convergence-review`
+Review HEAD: `226b9e34a003225ff1061cf62fafb128a0b7110c` (before this documentation update)
+Review tree: `cec4973d30871995c3ae02bb9a26b0f149a59c2e` (identical to the integration tree)
+Base: `eca93d0954da7fae297a0f1390f1427cc6167ff4`
+Remote status: local-only; not pushed, landed, or closed
+
+The review branch presents the same tree as four reviewable commit groups built on
+the base:
+
+1. `c5c2b0ecb` — Engine implementation and structural convergence;
+2. `57f4e4950` — Engine tests, transactions, ownership, parity, provenance;
+3. `808d689a2` — CLI/IPC/agent/renderer adapters and product integration;
+4. group 4 (review branch tip) — Decision Map, task matrix, model, and evidence,
+   including this status update.
+
+The tree-hash equality between the integration HEAD and the review branch tip is
+the exact-tree proof required by S7: the two histories differ only in commit
+grouping, not in the resulting source tree.
+
+| Gate | Command | Result |
+| --- | --- | --- |
+| Comprehensive focused suite | `vitest run` over `src/main/scryer`, `src/cli`, architecture IPC, renderer architecture, `src/shared/scryer` | PASS: 734 tests |
+| Full Scryer suite (deterministic, run 3x) | `vitest run src/main/scryer` | PASS: 41 files, 248 tests |
+| Catalog-derived parity gate | `pnpm run test:parity` | PASS: 6 files, 31 tests; `container.fill` reported `planned` |
+| Node typecheck | `tc:node` | PASS |
+| CLI typecheck | `tc:cli` | PASS |
+| Web typecheck | `tc:web` | PASS |
+| Targeted oxlint (converged source) | `oxlint` over converged source | PASS: 0 errors after lint-repair `c98023969` |
+| Targeted formatting (converged source) | `oxfmt --write` | PASS: no changes |
+| React Doctor | `lint:react-doctor` | PASS |
+| Container Generation Electron E2E | `playwright` `architecture-container-fill.spec.ts` | PASS: 6 tests; 1 `test.fixme` (visible success terminal, gated on real agent runtime) |
+| Diff hygiene | `git diff --check` | PASS: no whitespace errors |
+| Scryer model validation | `validate_model` / `get_pending` | PASS: structurally clean; pending queue empty |
+
+Residual verification, tracked as remaining and requiring explicit approval or a
+real runtime environment:
+
+- #73 `product-integrated`: the visible success-terminal Electron E2E needs a real
+  agent Stop-hook HTTP callback that a headless synthetic agent cannot produce; the
+  `test.fixme` keeps its assertions, and `container.fill` stays `ui.status:
+  'planned'` until that case passes in a real agent runtime.
+- GitNexus exact-tree cycle/impact review over the integration/review worktree is
+  not yet run; per-slice cycle checks passed and the source tree is byte-identical
+  across the writers, but the integration tree itself is not indexed.
+
 ## Reference Worktree Extraction Matrix
 
 The `orca-scryer-sync` worktree is reference-only. Track every accepted extraction
@@ -132,17 +185,17 @@ here before any later cleanup request.
 
 | Reference behavior or test intent | Owner | Disposition | Active-tree evidence |
 | --- | --- | --- | --- |
-| lease-token redaction | S3 | rewrite | pending |
-| `model.set` active-lease policy | S3 | rewrite | pending |
-| lease store/controller/gate focused tests | S3 | rewrite | pending |
-| cancel/crash cleanup tests | S3 | rewrite | pending |
-| effective committed-plus-planned emptiness | S2 | rewrite | pending |
-| generated group ownership | S2 | rewrite | pending |
-| whole-symbol plain-responsibility anchor | S2 | rewrite | pending |
-| executor-warning pre-commit validation | S4 | rewrite | pending |
-| state-store final-snapshot validation | S4 | rewrite | pending |
-| Architecture ownership/static tests | S4 | rewrite | pending |
-| internal model-file filtering | S4 | evaluate and rewrite if still applicable | pending |
+| lease-token redaction | S3 | rewrite | rewritten; S3 gate at `db31b92b7` |
+| `model.set` active-lease policy | S3 | rewrite | rewritten; S3 gate at `db31b92b7` |
+| lease store/controller/gate focused tests | S3 | rewrite | rewritten; S3 gate at `db31b92b7` |
+| cancel/crash cleanup tests | S3 | rewrite | rewritten; S3 gate at `db31b92b7`; native-runtime flake fixed at `eedff1c8b` |
+| effective committed-plus-planned emptiness | S2 | rewrite | rewritten; S2 gate at `df15c37c6` |
+| generated group ownership | S2 | rewrite | rewritten; S2 gate at `df15c37c6` |
+| whole-symbol plain-responsibility anchor | S2 | rewrite | rewritten; S2 gate at `df15c37c6` |
+| executor-warning pre-commit validation | S4 | rewrite | rewritten; S4 gate at `e3ad936dd` |
+| state-store final-snapshot validation | S4 | rewrite | rewritten; S4 gate at `e3ad936dd` |
+| Architecture ownership/static tests | S4 | rewrite | rewritten; S4 gate at `e3ad936dd` |
+| internal model-file filtering | S4 | evaluate and rewrite if still applicable | evaluated during S4 at `e3ad936dd` |
 | old C4 round-trip sync | S4 | reject | Decision #26/#28 |
 | old `mode` / `fullModel` stack | S4 | reject | Decision #28 |
 | legacy MCP-to-`set_node` dispatch | S4 | reject | Decision #26/#38 |

@@ -451,16 +451,20 @@ Retire legacy semantic ownership by turning old paths into compatibility adapter
 
 For every cataloged operation, product callers must route through `executeOperation(...)` or `readView(...)`. If an engine operation fails, adapters must return the engine result; they must not silently retry the old implementation. Keep ownership tests and focused adapter tests that fail if legacy files import engine internals, write `.scryer/*` directly for migrated operations, or bypass the public engine seam.
 
-Implementation status: partial. Main-process default model reads, node patching,
-drift reads, and drift reconcile cross the Native Scryer Engine seam without an
-`incompatible_model` retry through legacy helpers. Catalog-backed aliases such
-as `update_nodes` and `add_edges` call engine operations, while unsupported
-strict-model aliases such as `add_nodes` are rejected. However, `sync.ts`,
-`mcp-tools.ts`, and main/preload compatibility adapters still require ownership
-and no-fallback proof for the default Scryer 0.3 path. They may retain file or
-name adaptation, but must not select a second semantic implementation, write
-planned/committed meaning directly, or treat an engine error as permission to
-retry legacy storage.
+Implementation status (2026-07-25): closed for the default Scryer 0.3 path,
+implemented and verified as S4 (#71) and integrated at `e3ad936dd`. Main-process
+default model reads, node patching, drift reads, and drift reconcile cross the
+Native Scryer Engine seam without an `incompatible_model` retry through legacy
+helpers. Catalog-backed aliases such as `update_nodes` and `add_edges` call
+engine operations, while unsupported strict-model aliases such as `add_nodes`
+are rejected. Legacy semantic ownership was retired (net −976 lines): the legacy
+MCP write tools were removed, `sync.ts` routes through the Engine, and static
+ownership plus Engine-failure no-fallback tests pass. Compatibility adapters may
+retain file or name adaptation, but no longer select a second semantic
+implementation, write planned/committed meaning directly, or treat an engine
+error as permission to retry legacy storage. Optional follow-up hardening remains
+available (an explicit static assertion forbidding a `readModel(` fallback in the
+MCP bridge); it is not required by the S4 gate. Not pushed, landed, or closed.
 
 ## #27: How Should Scryer Agent Runs Complete Safely In Orca?
 
@@ -522,16 +526,21 @@ Implementation slices:
 - #27C Agent runtime minimal integration: inject a small agent-run status/event interface, acquire lease on begin, release on done/cancel/crash, run the gate on done, and fold only when `foldPolicy: "when_gate_passes"` and the gate passes.
 - #27D IPC/UI gate status and live coverage: expose token-free begin/complete/cancel/read edit-session channels, render gate/status DTOs without lease tokens, keep UI buttons as intent only, prove renderer operations cannot pass `leaseToken`, and add focused live coverage for agent done -> gate result -> no legacy write bypass.
 
-Implementation status: partial. `ScryerEditSessionController`,
-`ScryerEditLeaseStore`, engine lease enforcement, IPC/preload edit-session
-channels, renderer sync completion/cancel wiring, and token-free TypeScript DTOs
-exist. Completion blockers do not yet own the terminal renderer/sync state,
-`model.set` and `container.fill` are still cataloged with `lease: 'none'`, the
-runtime integration still needs proof that it adapts Orca's native agent runtime
-rather than maintaining a second lifecycle, and renderer IPC still needs strict
-runtime rejection of authorization fields. #27 is complete only after focused
-controller/gate/lease tests and a live agent-done -> gate -> fold-or-attention
-workflow pass on the exact release tree.
+Implementation status (2026-07-25): implemented and verified as S3 (#70) and
+integrated at `db31b92b7`. `ScryerEditSessionController`, `ScryerEditLeaseStore`,
+engine lease enforcement, IPC/preload edit-session channels, renderer sync
+completion/cancel wiring, and token-free TypeScript DTOs are in place. The
+catalog now enforces that any operation with semantic writes carries a lease
+other than `none`, so `model.set` and `container.fill` are no longer cataloged
+with `lease: 'none'`. The native agent-run runtime adapter reuses Orca's own
+agent lifecycle rather than maintaining a second one, and renderer IPC rejects
+authorization fields at runtime. Focused controller, gate, lease, redaction,
+cancel/crash, and strict-DTO tests pass; the native-runtime lifecycle test flake
+was fixed at `eedff1c8b`. The one remaining item is the visible product proof of
+the live agent-done -> gate -> success-terminal path, which needs a real agent
+Stop-hook callback and is tracked as the S6 (#73) residual; the headless E2E
+keeps that case as `test.fixme` with its assertions. Not pushed, landed, or
+closed.
 
 ## #28: What Is The Renderer-Facing Architecture View Model?
 
@@ -556,17 +565,15 @@ Do not consider old model compatibility in #28. There is no implicit import, mig
 
 Implementation order: first tighten engine/state-store closed-schema validation, then add `ArchitectureViewAdapter` and `architecture:readArchitectureView`, then hard-cut renderer reads to `ArchitectureViewDto`, then hard-cut renderer writes to intent/operation calls, and finally add ownership tests that forbid Architecture renderer imports of legacy C4 model types and normal edit calls to `readModelDocument`/`writeModelDocument`.
 
-Implementation status: the normal Architecture renderer product path is
-implemented, but compatibility retirement is partial. Renderer reads use
-`readArchitectureView(...)` /
+Implementation status (2026-07-25): implemented and verified as part of S4 (#71)
+and integrated at `e3ad936dd`. Renderer reads use `readArchitectureView(...)` /
 `ArchitectureViewAdapter.readArchitectureView(...)`, renderer semantic writes
 use catalog operation intents, and `ArchitectureViewDto` carries canonical
-Scryer 0.3 facts without legacy C4/ReactFlow fields. Main/preload compatibility
-code still accepts foundation-era read shapes and exposes legacy document
-channels outside the normal renderer path. Completion requires a static ownership
-gate proving normal Architecture renderer code cannot import legacy C4 model
-types or call raw document IPC, plus removal of obsolete `fullModel`/`mode`
-aliases from the default Scryer 0.3 adapter seam.
+Scryer 0.3 facts without legacy C4/ReactFlow fields. The static ownership gate is
+in place: normal Architecture renderer code cannot import legacy C4 model types
+or call raw document IPC, the default raw-document channel and the obsolete
+`fullModel`/`mode` aliases were removed from the default Scryer 0.3 adapter seam,
+and the no-fallback ownership tests pass. Not pushed, landed, or closed.
 
 ## #29: What Live UI Coverage Is Required Before Product Completion?
 
@@ -1042,25 +1049,17 @@ requires transaction tests proving partial writes do not survive failure and
 focused invariant tests for state union, source identity, group ownership, edge
 evidence, anchors, and lease enforcement.
 
-Checkpoint status, 2026-07-15: the planner, build-edge adapter, thin operation,
-strict schemas, catalog executor, transaction and ownership tests, CLI/IPC
-adapter tests, and local regression fixtures are preserved in local commit
-`227cc8b16906733ac3a37f78a2d9320577d33d93` on branch
-`scryer/convergence-integration`. The checkpoint is not pushed, landed,
-release-ready, or final verification evidence. Its baseline gate passed 39
-focused Engine tests, 39 focused CLI/IPC tests, Node/CLI/Web typecheck, targeted
-formatting, React Doctor, and 22 existing Architecture Electron E2E tests. Those
-results prove that the saved checkpoint is internally executable and does not
-regress the existing Architecture slice; they do not satisfy the missing #34
-invariants or the #38 product cutover.
-
-The current draft still misses binding #34 invariants: it checks emptiness only
-in committed state, does not preserve source identity for every thin symbol,
-omits generated group `parentNodeId`, cannot report partially unresolved edge
-evidence, gives plain responsibilities a definition-sized range, and catalogs
-`container.fill` with `lease: 'none'`. The planner file also contains literal NUL
-separators and exceeds the repository file-size rule. These are convergence
-blockers, not optional follow-up polish.
+Implementation status (2026-07-25): closed, implemented and verified as S2 (#69)
+and integrated at `df15c37c6`. The planner, build-edge adapter, thin operation,
+strict schemas, catalog executor, and the single atomic committed-plus-planned
+transaction are in place, with focused invariant and no-partial-write transaction
+tests passing. All six binding #34 invariants now hold: emptiness is checked over
+the committed-plus-planned union, source identity is preserved for every thin
+symbol, generated groups carry `parentNodeId`, partially unresolved edge evidence
+is reported, plain responsibilities receive whole-symbol anchors rather than a
+definition-sized range, and `container.fill` is cataloged with a non-`none`
+lease. The literal NUL separators and the file-size violation in the planner were
+removed during S1 (#68). Not pushed, landed, or closed.
 
 ## #35: What Adapter And Coverage Gate Is Required For Full Operation Parity?
 
@@ -1084,14 +1083,17 @@ real visible product controls. Operations that are CLI/agent-only do not need
 fake UI tests, but they do need end-to-end command or IPC tests that assert
 engine-owned `.scryer` file effects.
 
-Checkpoint progress, 2026-07-15: the CLI mappings, generation/drift/health and
+Implementation status (2026-07-25): closed, implemented and verified as S5 (#72)
+and integrated at `d80d42bd9`. The CLI mappings, generation/drift/health and
 authoring dispatch tests, generic IPC cases, Container Generation ownership
-tests, and deterministic Orca regression runner are committed locally at
-`227cc8b16906733ac3a37f78a2d9320577d33d93`. The baseline passed 39 focused
-CLI/IPC tests in addition to the Engine and typecheck gates recorded in #34.
-This is committed preservation and adapter baseline evidence only: it has not
-passed the final catalog-derived parity gate, has not been pushed or landed, and
-is not product-integrated.
+tests, and the deterministic Orca regression runner are in place, and the
+catalog-derived 33-operation parity gate passes (`pnpm run test:parity`: 6 files,
+31 tests). The gate reports each operation's honest maturity from a single
+source, separating invariants that must hold from findings that are only
+reported. The two placeholder upstream fixtures were downgraded to local
+regression provenance rather than being given a fabricated upstream commit, so
+`container.fill` is reported as `planned` and not as product-integrated. Not
+pushed, landed, or closed.
 
 The current fixture directory must not be described as upstream parity. Its
 Container Generation case records `upstreamCommit: "0000000"`, runs Orca's own
@@ -1226,11 +1228,27 @@ tests/parity, CLI adapters/tests, and decision documentation. Committing or
 landing a partial group must not upgrade the status of the remaining groups.
 
 Preservation update, 2026-07-15: local checkpoint
-`227cc8b16906733ac3a37f78a2d9320577d33d93` freezes the pre-convergence code,
-tests, and fixtures so issue-specific worktrees can share one reproducible base.
-The normal pre-commit hook was intentionally not treated as a release gate: the
-checkpoint still has 52 targeted oxlint findings (29 Node protocol imports, 20
-array-style findings, and 3 max-lines failures), the existing unchanged
-switch-exhaustiveness failure, nine Scryer max-lines suppressions, a planner NUL,
-and placeholder golden provenance. The checkpoint therefore does not close #39;
-it makes #68 the first safe implementation slice.
+`227cc8b16906733ac3a37f78a2d9320577d33d93` froze the pre-convergence code, tests,
+and fixtures so issue-specific worktrees could share one reproducible base. That
+checkpoint deliberately did not close #39; it made #68 the first safe
+implementation slice.
+
+Convergence update (2026-07-25): #39 is now satisfied. S1 (#68) removed every
+Scryer `max-lines` suppression, split the oversized hubs into focused deep
+modules, broke the import cycles, and removed the literal NUL bytes. S5 (#72)
+replaced the placeholder parity provenance with honestly downgraded local
+regression provenance. On the frozen integration tree
+`cec4973d30871995c3ae02bb9a26b0f149a59c2e`
+(HEAD `6a5c3977565838eabc2783be75a3361964b631fd`) the focused Engine,
+transaction, ownership, adapter, typecheck, converged-source lint, and
+`git diff --check` gates pass, and the Container Generation Electron E2E passes 6
+lifecycle cases (one visible success-terminal case held as `test.fixme`, gated on
+a real agent runtime). The slice was then split into the four reviewable commit
+groups on `scryer/convergence-review`: Engine implementation (`c5c2b0ecb`),
+Engine tests/parity/provenance (`57f4e4950`), CLI/IPC/agent/renderer adapters and
+product integration (`808d689a2`), and decision documentation plus model (group
+4, review branch tip). The review branch tree-hash equals the integration
+tree-hash, which is the exact-tree proof #39 requires. The GitNexus cycle/impact
+review over the assembled integration tree is the one remaining gate from the
+list above and is tracked as an S7 residual. Nothing is pushed, landed, or
+closed.
