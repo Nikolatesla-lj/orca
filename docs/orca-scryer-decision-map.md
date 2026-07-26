@@ -10,6 +10,19 @@ Assets:
 - [First implementation PRD](./prd/orca-scryer-native-engine-first-slice.md)
 - [Engine catalog foundation PRD](./prd/orca-scryer-engine-catalog-foundation.md)
 
+Status terms in this map are evidence-bearing and independent:
+
+- **Working-tree implemented** means the implementation exists only in the current
+  tracked or untracked working tree.
+- **Committed at `<sha>`** means a named commit contains the slice.
+- **Verified by `<gate>`** means the named acceptance gate passed on that exact
+  tree or commit; the existence of test files is not verification.
+- **Landed on `<ref>`** means the containing commit is reachable from the named
+  target ref.
+- **Product-integrated** means a real visible product entrypoint crosses an Orca
+  adapter into `readView(...)` or `executeOperation(...)` and completes the
+  user-observable workflow.
+
 ## #1: Native TS/Node Engine Or Rust Sidecar?
 
 Blocked by:
@@ -177,7 +190,7 @@ How should Orca handle Scryer source-code licensing while preserving upstream be
 
 ### Answer
 
-Migrate Scryer functional semantics and reimplement the code in Orca-owned TypeScript/Node modules. Upstream Scryer remains the behavior, schema, and test reference, but Orca does not directly copy upstream implementation source into the product runtime. The first seven operation contracts have now landed; remaining decisions are about broad operation coverage, UI/agent adapter migration, and which upstream tools stay out of Orca product scope. See [ADR 0024](./adr/0024-reimplement-scryer-semantics-in-orca-owned-code.md).
+Migrate Scryer functional semantics and reimplement the code in Orca-owned TypeScript/Node modules. Upstream Scryer remains the behavior, schema, and test reference, but Orca does not directly copy upstream implementation source into the product runtime. The first seven operation contracts established the original committed Engine slice; later issues track broader operation coverage, adapter migration, verification, and named-ref landing. See [ADR 0024](./adr/0024-reimplement-scryer-semantics-in-orca-owned-code.md).
 
 ## #14: Which Upstream Operations Remain In Orca Scope?
 
@@ -345,7 +358,7 @@ When remaining operation coverage exists, how should existing Architecture UI, d
 
 ### Answer
 
-All product callers must cross the Native Scryer Engine seam through `readView(...)` or `executeOperation(...)`; UI, IPC, CLI, agent runtime, tests, and compatibility adapters may express user or agent intent, but they must not own Scryer model semantics. Move adapters in stages. First, `ArchitectureViewAdapter.readView(...)` returns a UI-specific view DTO rather than raw `ScryModel`, mapping engine read results to renderer data while keeping selection, expanded path, layout, diff glow, and flow extension state outside `ScryModel`. Follow upstream Scryer v0.3: selected item, expanded ids, workspace view, and diagram focus live in UI state, while positioned diagram scenes are derived by a layout adapter and are not persisted into `.scryer/model.scry`. Next, UI intents call `executeOperation(...)` instead of mutating `C4ModelData` or calling legacy storage helpers; old model-store helpers may remain only as temporary compatibility scaffolding, not wrapped as a long-term semantic write path. CLI and IPC commands then route through the same catalog operation names, input/result schemas, result envelopes, and error mapping used by UI; transport flags, IPC channel names, progress events, and exit-code mapping are adapter details only. Then `ScryerEditSessionController` reuses Orca's native agent runtime instead of owning process launch, terminal/account state, model selection, generic run status, completion detection, or orchestration context; it owns only Scryer-specific lease binding, completion-gated fold coordination, Scryer lease cleanup on cancellation/crash, visible handoff mapping, post-run planned pending foldability / validation checks, and conversion of agent outcomes into engine reads or catalog operations. Finally, demote `mcp-tools.ts` to a thin compatibility adapter that only normalizes legacy entrypoints into `executeOperation(...)` or `readView(...)`; remove it or keep a pure shim once all product callers cross the engine seam. Adapter ownership tests must prove adapters convert and call the engine seam rather than reimplementing source routing, group/link legality, drift, fold, id minting, state-store commits, or runtime process ownership.
+All product callers must cross the Native Scryer Engine seam through `readView(...)` or `executeOperation(...)`; UI, IPC, CLI, agent runtime, tests, and compatibility adapters may express user or agent intent, but they must not own Scryer model semantics. Move adapters in stages. First, `ArchitectureViewAdapter.readArchitectureView(...)` returns a UI-specific view DTO rather than raw `ScryModel`, mapping engine read results to renderer data while keeping selection, expanded path, layout, diff glow, and flow extension state outside `ScryModel`. Follow upstream Scryer v0.3: selected item, expanded ids, workspace view, and diagram focus live in UI state, while positioned diagram scenes are derived by a layout adapter and are not persisted into `.scryer/model.scry`. Next, UI intents call `executeOperation(...)` instead of mutating `C4ModelData` or calling legacy storage helpers; old model-store helpers may remain only as temporary compatibility scaffolding, not wrapped as a long-term semantic write path. CLI and IPC commands then route through the same catalog operation names, input/result schemas, result envelopes, and error mapping used by UI; transport flags, IPC channel names, progress events, and exit-code mapping are adapter details only. Then `ScryerEditSessionController` reuses Orca's native agent runtime instead of owning process launch, terminal/account state, model selection, generic run status, completion detection, or orchestration context; it owns only Scryer-specific lease binding, completion-gated fold coordination, Scryer lease cleanup on cancellation/crash, visible handoff mapping, post-run planned pending foldability / validation checks, and conversion of agent outcomes into engine reads or catalog operations. Finally, demote `mcp-tools.ts` to a thin compatibility adapter that only normalizes legacy entrypoints into `executeOperation(...)` or `readView(...)`; remove it or keep a pure shim once all product callers cross the engine seam. Adapter ownership tests must prove adapters convert and call the engine seam rather than reimplementing source routing, group/link legality, drift, fold, id minting, state-store commits, or runtime process ownership.
 
 ## #23: What Stays Out Of The Operation Migration?
 
@@ -377,7 +390,7 @@ Validators also own the warning-versus-blocking rule matrix. Operation files may
 
 Parity fixtures compare structured behavior against upstream anchors: operation success/error envelope fields, committed/planned Scryer file results, warning/error detail codes, semantic paths, structured details, diff/fold output state, sourceMap/boundary ownership, and illegal-input failure classification. They do not compare Rust source, MCP natural-language messages, request ids, timestamps, absolute paths, JSON key order, or non-semantic wording.
 
-Broad operation migration starts only after the implementation readiness gate proves the shared modules and first seven catalog-routed operations are green. Implement remaining operations by dependency maturity, not raw tool-list order: stabilize catalog/pipeline/state-store/schema/error-mapper/id-minter/validators/source-router/diff-fold first; migrate read/query next; then structural/source/group/intent writes; then drift/health/container generation; finally adapters and remaining coverage. Mixed engine/legacy behavior paths are allowed only as short-lived compatibility for operations not yet registered in the catalog. Once an operation is cataloged, all callers for that operation must route through `executeOperation(...)` or `readView(...)`; the same operation must not retain both engine and legacy semantic implementations, and engine failures must not fall back to a legacy implementation. Failure should return the standard `ScryerOperationResult` error envelope so tests prove the engine path, not a hidden legacy rescue path. Final readiness checks require adapters not to bypass the engine seam and legacy semantic paths to be gone or pure shims. UI refactor readiness specifically requires adapter contract tests for `ArchitectureViewAdapter.readView(...)`, view-state separation tests, UI write-intent tests through `executeOperation(...)`, legacy bypass/import tests, IPC bridge envelope tests, renderer DTO tests, agent-run UI lease/runtime tests, focused end-to-end smoke tests, and Electron Playwright live human-operation tests that drive real visible controls and prove reads/writes cross the engine seam. The implementation blueprint in the operation migration PRD turns these decisions into module interface drafts, catalog row requirements, test checklists, stable error/warning codes, fixture format, adapter mapping, UI live scenarios, and implementation issue templates. This prevents temporary operation-local rules from becoming hidden architecture.
+Broad operation migration starts only after the implementation readiness gate proves the shared modules and first seven catalog-routed operations are green. Implement remaining operations by dependency maturity, not raw tool-list order: stabilize catalog/pipeline/state-store/schema/error-mapper/id-minter/validators/source-router/diff-fold first; migrate read/query next; then structural/source/group/intent writes; then drift/health/container generation; finally adapters and remaining coverage. Mixed engine/legacy behavior paths are allowed only as short-lived compatibility for operations not yet registered in the catalog. Once an operation is cataloged, all callers for that operation must route through `executeOperation(...)` or `readView(...)`; the same operation must not retain both engine and legacy semantic implementations, and engine failures must not fall back to a legacy implementation. Failure should return the standard `ScryerOperationResult` error envelope so tests prove the engine path, not a hidden legacy rescue path. Final readiness checks require adapters not to bypass the engine seam and legacy semantic paths to be gone or pure shims. UI refactor readiness specifically requires adapter contract tests for `ArchitectureViewAdapter.readArchitectureView(...)`, view-state separation tests, UI write-intent tests through `executeOperation(...)`, legacy bypass/import tests, IPC bridge envelope tests, renderer DTO tests, agent-run UI lease/runtime tests, focused end-to-end smoke tests, and Electron Playwright live human-operation tests that drive real visible controls and prove reads/writes cross the engine seam. The implementation blueprint in the operation migration PRD turns these decisions into module interface drafts, catalog row requirements, test checklists, stable error/warning codes, fixture format, adapter mapping, UI live scenarios, and implementation issue templates. This prevents temporary operation-local rules from becoming hidden architecture.
 
 ## #25: How Do We Reconcile Docs With The Completed Operation Migration?
 
@@ -386,9 +399,9 @@ Type: Maintenance
 
 ### Question
 
-How should Orca keep the Scryer migration docs accurate when the Architecture
-product slice has landed but the full 33-operation parity surface is not yet
-executable?
+How should Orca keep the Scryer migration docs accurate when the stable
+Architecture renderer path exists but full 33-operation engine, adapter, and
+product parity are at different states?
 
 ### Answer
 
@@ -414,11 +427,13 @@ from the completed Architecture integration slice.
 Scope this ticket to repository docs only. The detailed status table belongs in
 `docs/orca-scryer-migration.md`; this decision map should stay compact.
 Acceptance means linked status docs no longer equate Architecture slice
-completion with full Scryer operation parity, and every remaining executable
-operation gap is assigned to tracked decision-map issues. As of the #32
-implementation, the read surface and structural mutation gaps are closed, and
-the remaining operation gaps are #33-#35.
-Verification is documentation-level:
+completion with full Scryer operation parity, and every remaining executable,
+adapter, and product-integration gap is assigned to tracked decision-map issues.
+As of HEAD `eca93d095`, the #31 read, #32 structural, and #33 health/drift engine
+slices are committed. #34 Container Generation and the current #35 CLI, IPC,
+and regression-fixture increments are only working-tree implemented. Their
+verification, landing, and visible product integration remain separate gates.
+Verification for this maintenance decision is documentation-level:
 `git diff --check` plus targeted stale-phrase searches.
 
 ## #26: How Should Legacy Scryer Semantic Paths Be Retired?
@@ -436,7 +451,20 @@ Retire legacy semantic ownership by turning old paths into compatibility adapter
 
 For every cataloged operation, product callers must route through `executeOperation(...)` or `readView(...)`. If an engine operation fails, adapters must return the engine result; they must not silently retry the old implementation. Keep ownership tests and focused adapter tests that fail if legacy files import engine internals, write `.scryer/*` directly for migrated operations, or bypass the public engine seam.
 
-Implementation status: main-process default model reads, node patching, drift reads, and drift reconcile now cross the Native Scryer Engine seam without `incompatible_model` fallback to legacy helpers. `mcp-tools.ts` is a compatibility shim for Scryer 0.3 projects: cataloged legacy aliases such as `update_nodes` and `add_edges` call engine operations and write planned state, while unsupported legacy semantic aliases such as `add_nodes` are rejected instead of writing through the old implementation. The renderer document-save/view-model hardening has landed through #28/#29, and the #30/#36 release-gate diff has been isolated in a clean branch with final review/test gate passing. Remaining work is PR publication and human acceptance rather than another operation migration batch.
+Implementation status (2026-07-25): closed for the default Scryer 0.3 path,
+implemented and verified as S4 (#71) and integrated at `e3ad936dd`. Main-process
+default model reads, node patching, drift reads, and drift reconcile cross the
+Native Scryer Engine seam without an `incompatible_model` retry through legacy
+helpers. Catalog-backed aliases such as `update_nodes` and `add_edges` call
+engine operations, while unsupported strict-model aliases such as `add_nodes`
+are rejected. Legacy semantic ownership was retired (net −976 lines): the legacy
+MCP write tools were removed, `sync.ts` routes through the Engine, and static
+ownership plus Engine-failure no-fallback tests pass. Compatibility adapters may
+retain file or name adaptation, but no longer select a second semantic
+implementation, write planned/committed meaning directly, or treat an engine
+error as permission to retry legacy storage. Optional follow-up hardening remains
+available (an explicit static assertion forbidding a `readModel(` fallback in the
+MCP bridge); it is not required by the S4 gate. Not pushed, landed, or closed.
 
 ## #27: How Should Scryer Agent Runs Complete Safely In Orca?
 
@@ -453,11 +481,41 @@ Use an Orca-owned `ScryerEditSessionController` for Scryer model-edit sessions. 
 
 The controller should expose a small interface: `beginAgentEditSession(...)`, `completeAgentEditSession(...)`, `cancelAgentEditSession(...)`, and `readEditSession(...)`. It depends on the public Native Scryer Engine seam (`executeOperation(...)` and `readView(...)`), a small Orca agent-run status interface, a clock, an id/token source, and a lease-store seam. It must not start agent processes, supervise terminals, select accounts, stream logs, directly write `.scryer/model.scry` / `.scryer/planned.scry`, or import engine internals.
 
-Edit leases are session/concurrency state, not modeling operations. Lease lifecycle should stay outside the operation catalog behind a small `ScryerEditLeaseStore`, while lease enforcement stays inside engine/state-store write policy. A lease is stored under `.scryer` while active and contains only small control data such as token, owner, agent run id, `createdAt`, and optional `expiresAt`. Semantic writes must carry the matching lease token when a lease is active; reads, validation, pending checks, prompt prep, and view-only UI state are not blocked by the lease.
+Edit leases are session/concurrency state, not modeling operations. Lease lifecycle
+stays outside the operation catalog behind a small `ScryerEditLeaseStore`, while
+lease enforcement stays inside engine/state-store write policy. A lease is stored
+under `.scryer` while active and contains only small control data such as token,
+owner, agent run id, `createdAt`, and optional `expiresAt`. Every operation that
+changes committed or planned model meaning must require the matching token while
+a lease is active, including high-risk whole-model and generation writes such as
+`scryer.model.set` and `scryer.container.fill`. Reads, validation, pending checks,
+prompt preparation, and view-only UI state are not blocked by the lease.
 
-The lease token is trusted main-process context, not renderer-facing state. `ScryerEditSessionController` and engine/state-store policy may read and pass the token through `ScryerOperationContext`, but React, preload DTOs, DOM state, logs, prompts, and generic renderer IPC inputs must not expose or accept it. `beginAgentEditSession(...)` returns only token-free session identity to renderer callers, `readEditSession(...)` returns sanitized status such as active/owner/agent run id/timestamps, and renderer `executeScryerOperation(...)` must not accept a `leaseToken` field. Agent completion and optional fold use `completeAgentEditSession(...)`, where the controller resolves the token internally before crossing the engine seam. This keeps the module deep: callers learn "begin, complete, cancel, read status", not the token lifecycle or write-authorization rules.
+The lease token is trusted main-process context, not renderer-facing state.
+`ScryerEditSessionController` and engine/state-store policy may read and pass the
+token through `ScryerOperationContext`, but React, preload DTOs, DOM state, logs,
+prompts, and generic renderer IPC inputs must not expose or accept it. Renderer-
+facing operation and edit-session DTOs are closed schemas: `leaseToken`, internal
+lease ids, and unknown authorization fields are rejected at the IPC seam rather
+than silently stripped. `beginAgentEditSession(...)` returns only token-free
+session identity, `readEditSession(...)` returns sanitized status, and
+`completeAgentEditSession(...)` resolves the token internally before crossing
+the engine seam. This keeps the module deep: callers learn "begin, complete,
+cancel, read status", not token lifecycle or write-authorization rules.
 
-An agent process reporting `done` is not the same as Scryer work being complete. After `done`, the controller must check planned state through `scryer.plan.pending` and `scryer.model.validate`. The completion gate must not require `pending.total === 0`; planned changes are expected after an edit session. Instead, it decides whether pending changes are foldable: every change kind is known to diff/fold, no blocking validation finding exists, no dangling link/source/group/member reference exists, no lease conflict exists, and verified-state contract gates are satisfied. Warnings and destructive-but-valid changes may still be foldable, but the result must surface warning/risk details to UI. `pending.total === 0` means `nothing_to_fold`, not failure.
+An agent process reporting `done` is not the same as Scryer work being complete.
+It only begins completion evaluation. After `done`, the controller must check
+planned state through `scryer.plan.pending` and `scryer.model.validate`. The
+completion gate must not require `pending.total === 0`; planned changes are
+expected after an edit session. Instead, it decides whether pending changes are
+foldable: every change kind is known to diff/fold, no blocking validation finding
+exists, no dangling link/source/group/member reference exists, no lease conflict
+exists, and verified-state contract gates are satisfied. Warnings and
+destructive-but-valid changes may still be foldable, but the result must surface
+warning/risk details to UI. `pending.total === 0` means `nothing_to_fold`, not
+failure. Renderer and legacy sync adapters must not announce a terminal finished
+state, clear the workflow, or advance a sync/drift baseline while the gate returns
+`fix_validation`, `manual_review`, `blocked_by_lease`, or another blocker.
 
 `completeAgentEditSession(...)` defaults to `foldPolicy: "never"` and returns a `CompletionGateResult`. Optional `foldPolicy: "when_gate_passes"` may call `scryer.plan.fold` only if the gate passes. Gate failure never folds. Force fold is a separate explicit human action through `executeOperation("scryer.plan.fold", ...)`, not an agent-controlled override.
 
@@ -468,7 +526,23 @@ Implementation slices:
 - #27C Agent runtime minimal integration: inject a small agent-run status/event interface, acquire lease on begin, release on done/cancel/crash, run the gate on done, and fold only when `foldPolicy: "when_gate_passes"` and the gate passes.
 - #27D IPC/UI gate status and live coverage: expose token-free begin/complete/cancel/read edit-session channels, render gate/status DTOs without lease tokens, keep UI buttons as intent only, prove renderer operations cannot pass `leaseToken`, and add focused live coverage for agent done -> gate result -> no legacy write bypass.
 
-Implementation status: #27A-#27D are implemented and focused-tested. `ScryerEditSessionController`, `ScryerEditLeaseStore`, engine lease enforcement, IPC/preload edit-session channels, renderer sync completion/cancel wiring, and token-free renderer DTOs now exist. Lease tokens remain available only inside trusted main-process/controller/engine context; renderer-facing edit-session status and operation IPC do not expose or accept them.
+Implementation status (2026-07-25): implemented and verified as S3 (#70) and
+integrated at `db31b92b7`. `ScryerEditSessionController`, `ScryerEditLeaseStore`,
+engine lease enforcement, IPC/preload edit-session channels, renderer sync
+completion/cancel wiring, and token-free TypeScript DTOs are in place. The
+catalog now enforces that any operation with semantic writes carries a lease
+other than `none`, so `model.set` and `container.fill` are no longer cataloged
+with `lease: 'none'`. The native agent-run runtime adapter reuses Orca's own
+agent lifecycle rather than maintaining a second one, and renderer IPC rejects
+authorization fields at runtime. Focused controller, gate, lease, redaction,
+cancel/crash, and strict-DTO tests pass; the native-runtime lifecycle test flake
+was fixed at `eedff1c8b`. The visible product proof of the live agent-done ->
+gate -> success-terminal path is now closed (2026-07-25): the release-critical
+Electron E2E drives the Completion Gate through the production agent Stop-hook
+HTTP protocol — the launched agent pane emits the same authenticated callback
+the managed claude hook script sends, and everything past the agent binary
+(transport, token auth, ingest, native runtime, gate, lease release, visible
+terminal) is production code. Not pushed, landed, or closed.
 
 ## #28: What Is The Renderer-Facing Architecture View Model?
 
@@ -493,7 +567,15 @@ Do not consider old model compatibility in #28. There is no implicit import, mig
 
 Implementation order: first tighten engine/state-store closed-schema validation, then add `ArchitectureViewAdapter` and `architecture:readArchitectureView`, then hard-cut renderer reads to `ArchitectureViewDto`, then hard-cut renderer writes to intent/operation calls, and finally add ownership tests that forbid Architecture renderer imports of legacy C4 model types and normal edit calls to `readModelDocument`/`writeModelDocument`.
 
-Implementation status: #28 is implemented and tested. Architecture renderer reads now go through `readArchitectureView(...)` / `ArchitectureViewAdapter.readView(...)`, renderer semantic writes go through catalog operation intent calls, `ArchitectureViewDto` carries upstream Scryer 0.3 `nodes`/`links`/`groups`/`sourceMap`/`boundaries` data without legacy C4/ReactFlow fields, normal Architecture renderer code is guarded against legacy model IPC/imports, `FlowScriptView` and `flows`/`scenarios` are removed from the normal product path, and closed-schema Scryer 0.3 rejection is covered by focused unit tests plus live Architecture e2e.
+Implementation status (2026-07-25): implemented and verified as part of S4 (#71)
+and integrated at `e3ad936dd`. Renderer reads use `readArchitectureView(...)` /
+`ArchitectureViewAdapter.readArchitectureView(...)`, renderer semantic writes
+use catalog operation intents, and `ArchitectureViewDto` carries canonical
+Scryer 0.3 facts without legacy C4/ReactFlow fields. The static ownership gate is
+in place: normal Architecture renderer code cannot import legacy C4 model types
+or call raw document IPC, the default raw-document channel and the obsolete
+`fullModel`/`mode` aliases were removed from the default Scryer 0.3 adapter seam,
+and the no-fallback ownership tests pass. Not pushed, landed, or closed.
 
 ## #29: What Live UI Coverage Is Required Before Product Completion?
 
@@ -510,7 +592,7 @@ Expand Electron Playwright coverage around real visible controls and real `.scry
 
 These tests should assert user-visible DOM state and engine-owned file effects. Store setup may be used to reach a state, but final assertions should not be store round-trips. View-only actions must not modify `.scryer/model.scry`; semantic actions must cross IPC into `executeOperation(...)`; reads must cross `readView(...)`; domain errors and validation failures must render as standard engine envelopes rather than ad hoc text.
 
-Implementation status: #29 is implemented and tested for the stable live product path. The Architecture live Electron suite now covers visible controls and `.scryer` file effects for opening Architecture tabs, engine-backed reads, tree navigation and drill-in, node add/update/delete, relationship add/update/delete through the inspector, source-map editing and editor opening, group creation/name/description/member drag/remove, closed-schema/domain-error rendering, drift checks, sync start/cancel/auto-finish, and clean relaunch restoration. View-only canvas controls are asserted without treating layout position as persisted Scryer state. Group nesting and bulk group restoration remain covered through operation-backed setup plus file-effect assertions rather than a fully pointer-driven visible-control assertion, because the headless dnd-kit nesting path is not stable enough to gate the product PR. The suite asserts planned/committed Scryer file state for semantic writes and keeps store setup limited to scenario seeding or terminal-agent simulation.
+Product-path evidence: the Architecture live Electron suite covers visible controls and `.scryer` file effects for opening Architecture tabs, engine-backed reads, tree navigation and drill-in, node add/update/delete, relationship add/update/delete through the inspector, source-map editing and editor opening, group creation/name/description/member drag/remove, closed-schema/domain-error rendering, drift checks, sync start/cancel/auto-finish, and clean relaunch restoration. View-only canvas controls are asserted without treating layout position as persisted Scryer state. Group nesting and bulk group restoration remain covered through operation-backed setup plus file-effect assertions rather than a fully pointer-driven visible-control assertion, because the headless dnd-kit nesting path is not stable enough to gate the product PR. The suite asserts planned/committed Scryer file state for semantic writes and keeps store setup limited to scenario seeding or terminal-agent simulation. Its sync auto-finish coverage does not prove the stronger #27 completion-gate ownership rule; that remains a separate live acceptance gate.
 
 ## #30: What Is The Current Operation Catalog Reality?
 
@@ -524,18 +606,19 @@ operation parity?
 
 ### Answer
 
-Treat the current release target as the Architecture product slice, not full
-Scryer operation parity. Current code declares the 33-operation catalog contract,
-but only the product-critical subset is executable. The completed executable
-slice covers model read/set/validate, plan pending/fold, node update/delete,
-link add/update/delete, source update, group add/set/update/delete,
-person/system/container/component/symbol add, drift get, and drift reconcile.
+Treat the current release target as an Architecture product slice plus a broader
+engine migration, not as full Scryer product parity. All 33 operation ids have
+catalog contracts. As of HEAD `eca93d095`, the #31 read, #32 structural, and #33
+health/drift slices are committed and `scryer.model.health` plus
+`scryer.drift.flag` are engine-executable. `scryer.container.fill`, its CLI/IPC
+adapters, the expanded CLI surface, and the current regression fixtures are only
+working-tree implemented on top of that HEAD.
 
-After #31, the read surface is also executable:
-`scryer.model.search`, `scryer.model.query`, `scryer.rules.read`, and
-`scryer.codebase.read` have engine executors and read-surface release gates.
-The catalog-only operations still needing executors are:
-`scryer.model.health`, `scryer.container.fill`, and `scryer.drift.flag`.
+Catalog declaration, engine execution, adapter verification, visible product
+integration, commit state, and landing are separate facts. A 33/33 CLI mapping
+or a generic IPC bridge does not prove full product parity. The visible
+container `Fill with AI` path still instructs the agent to use legacy `set_node`,
+so Container Generation has not crossed the `scryer.container.fill` product seam.
 
 Before claiming the Architecture slice complete, audit the already-executable
 product path as an end-to-end chain: visible renderer control -> renderer intent
@@ -549,16 +632,13 @@ messages.
 
 Audit artifact: `docs/orca-scryer-architecture-slice-audit.md`.
 
-Result: #30 is resolved as a catalog-reality audit, and #36 has closed the
-stricter zero-partial release gate for the current Architecture product slice.
-The stable default-model path is real and covered: active model external edits
-reload the visible UI, view-only controls have `.scryer` no-write fingerprint
-coverage, MCP compatibility has a supported/rejected alias matrix, visible
-`scryer.group.delete` removes planned groups, and `scryer.person.add` has
-focused IPC/API coverage. Non-default model manager save-as/delete remains
-explicitly outside the current Architecture 0.3 release-critical path. Full
-Scryer operation parity still has separate #33-#35 work after the #31 read
-surface and #32 structural mutation closures.
+Result: #30 remains the catalog-reality checkpoint. #36 records the tested
+scope of the stable Architecture renderer path, including external-edit reload,
+view-only no-write fingerprints, visible group deletion, and focused person-add
+coverage. It does not close #27 completion ownership, #34 Container Generation
+invariants, #35 adapter/provenance work, or the default-model legacy retirement
+in #26. Non-default model manager save-as/delete remains outside the current
+Architecture 0.3 release-critical path.
 
 ## #31: How Should Read Surface Completion Land?
 
@@ -930,11 +1010,13 @@ operation still uses `countResultSchema` placeholders; and generic
 `executeOperation(...)` tests proving both operations are executable through the
 catalog/pipeline.
 
-Status update, 2026-07-01: #33 is implemented for the engine-focused slice.
-`scryer.model.health` and `scryer.drift.flag` are executable through the
-catalog/pipeline with strict schemas, deep engine modules, planned-only drift
-recording, health maintenance-write guards, and focused release-gate tests. CLI,
-IPC, renderer, and live adapter parity remain explicitly scoped to #35.
+Status update, 2026-07-14: the #33 engine-focused slice is committed at
+`eca93d095` and landed on `fork/orca-scryer` as represented by the current local
+tracking ref. `scryer.model.health` and `scryer.drift.flag` are executable through
+the catalog/pipeline with strict schemas, deep engine modules, planned-only drift
+recording, and health maintenance-write guards. CLI, IPC, renderer, and live
+adapter verification remain explicitly scoped to #35 and the current working-
+tree acceptance gates.
 
 ## #34: How Should Container Generation Completion Land?
 
@@ -948,13 +1030,38 @@ into a series of raw intent calls?
 
 ### Answer
 
-Implement `scryer.container.fill` as one high-risk atomic generation primitive.
-It should validate a complete proposal for an empty container, mint ids through
-the shared id minter, derive optional links from build-edge evidence, route
-source anchors through the source router, and write committed plus planned state
-as one transaction. Successful results should return a compact structured
-generation summary, not a full model or prose. Acceptance requires transaction
-tests proving partial writes do not survive failure.
+Implement `scryer.container.fill` as one high-risk atomic generation primitive
+behind the `ScryerContainerGenerationPlanner` interface. It validates a complete
+proposal against the effective committed-plus-planned state: either layer having
+component children makes the target non-empty. Ids are minted against both layers
+and current batch reservations; freshly minted elements are referenced by request-
+local keys. Every generated symbol retains source identity, including thin
+symbols without responsibilities or properties. Plain responsibilities use a
+whole-symbol anchor; only explicitly ranged responsibilities carry subranges.
+Generated groups set `parentNodeId` to the target container and contain only its
+direct generated component children. Build-edge reporting distinguishes missing,
+empty, available, and partially unresolved evidence instead of guessing.
+
+The planner routes source anchors through the source router, validates final
+committed and planned snapshots, and writes both layers as one primary state-
+store transaction. History remains a best-effort sidecar. The operation is a
+semantic write and must honor an active edit lease. Successful results return a
+compact structured generation summary, not a full model or prose. Acceptance
+requires transaction tests proving partial writes do not survive failure and
+focused invariant tests for state union, source identity, group ownership, edge
+evidence, anchors, and lease enforcement.
+
+Implementation status (2026-07-25): closed, implemented and verified as S2 (#69)
+and integrated at `df15c37c6`. The planner, build-edge adapter, thin operation,
+strict schemas, catalog executor, and the single atomic committed-plus-planned
+transaction are in place, with focused invariant and no-partial-write transaction
+tests passing. All six binding #34 invariants now hold: emptiness is checked over
+the committed-plus-planned union, source identity is preserved for every thin
+symbol, generated groups carry `parentNodeId`, partially unresolved edge evidence
+is reported, plain responsibilities receive whole-symbol anchors rather than a
+definition-sized range, and `container.fill` is cataloged with a non-`none`
+lease. The literal NUL separators and the file-size violation in the planner were
+removed during S1 (#68). Not pushed, landed, or closed.
 
 ## #35: What Adapter And Coverage Gate Is Required For Full Operation Parity?
 
@@ -977,6 +1084,34 @@ operation-specific golden tests, and live UI coverage only for operations with
 real visible product controls. Operations that are CLI/agent-only do not need
 fake UI tests, but they do need end-to-end command or IPC tests that assert
 engine-owned `.scryer` file effects.
+
+Implementation status (2026-07-25): closed, implemented and verified as S5 (#72)
+and integrated at `d80d42bd9`. The CLI mappings, generation/drift/health and
+authoring dispatch tests, generic IPC cases, Container Generation ownership
+tests, and the deterministic Orca regression runner are in place, and the
+catalog-derived 33-operation parity gate passes (`pnpm run test:parity`: 6 files,
+31 tests). The gate reports each operation's honest maturity from a single
+source, separating invariants that must hold from findings that are only
+reported. The two placeholder upstream fixtures were downgraded to local
+regression provenance rather than being given a fabricated upstream commit.
+Update (2026-07-25): after the #38 product cutover's visible success-terminal
+E2E passed, `container.fill` was promoted to `product_integrated` at
+`24b546f12` and the gate now grades 13 operations product-integrated. Not
+pushed, landed, or closed.
+
+The current fixture directory must not be described as upstream parity. Its
+Container Generation case records `upstreamCommit: "0000000"`, runs Orca's own
+engine, and currently expects source-anchor behavior that differs from the Rust
+reference. It proves only a local deterministic regression until a real upstream
+commit, independently produced expected outcome, and explicit Orca differences
+are recorded. A catalog-to-CLI machine gap check also remains required; static
+33/33 mapping observed in the working tree is not a substitute for the gate.
+
+#35 is not product-integrated. The visible container `Fill with AI` control still
+uses `nodeFillPrompt(...)`, which tells the agent to add components with legacy
+`set_node`. That path must cross `scryer.container.fill`, honor edit-session lease
+and completion rules, expose failure/cancel states, and prove engine-owned file
+effects before Container Generation can be called a complete product slice.
 
 ## #36: How Should The Architecture Slice Release Gate Gaps Close?
 
@@ -1002,10 +1137,146 @@ strict `delete_group`) and rejected legacy aliases (`add_nodes`, `set_node`,
 `scryer.group.delete` if it remains release-critical; and add focused
 product/API coverage for `scryer.person.add` if it remains release-critical.
 
-Implementation status: #36 is implemented and tested for the current
-release-critical Architecture slice. The gate now has live coverage for active
+Release-scope evidence: the current release-critical Architecture gate has live
+coverage for active
 model reload and temporary-file ignore behavior, view-only `.scryer` no-write
 fingerprints, visible group deletion through `scryer.group.delete`, MCP config
 and strict alias matrix coverage, and focused `scryer.person.add` IPC/API
 coverage. Non-default model manager save-as/delete is scoped out of this release
 gate; promoting it later requires a separate product decision and e2e slice.
+
+## #37: How Is Full 33-Operation Parity Proven?
+
+Blocked by: #24, #35
+Type: Discuss
+
+### Question
+
+What machine evidence is required before Orca calls the 33-operation catalog
+complete?
+
+### Answer
+
+Derive a parity gate from the catalog rather than maintaining a prose checklist.
+For every operation id, prove a strict input and success schema, a non-placeholder
+executor, declared lock/lease/write policy, a CLI mapping, generic IPC support or
+an explicit transport waiver, ownership coverage, an operation contract or
+golden test, and no legacy semantic fallback. Any visible product entrypoint must
+also have a live user-path test; CLI/agent-only operations require an explicit UI
+waiver rather than a fake renderer test.
+
+The gate reports separate states: **declared**, **engine executable**, **adapter
+verified**, **product-integrated**, and **landed on `<ref>`**. Passing a catalog
+count, a CLI mapping check, or a partial golden set cannot promote an operation to
+a later state. Golden provenance records the real upstream revision and any
+accepted Orca semantic differences.
+
+## #38: What Is The Container Generation Product Cutover?
+
+Blocked by: #27, #28, #34, #37
+Type: Discuss
+
+### Question
+
+How does the existing visible container generation workflow move to the atomic
+Engine operation?
+
+### Answer
+
+The container `Fill with AI` control must express a generation intent whose agent
+or system adapter invokes `executeOperation("scryer.container.fill", ...)`.
+Default Scryer 0.3 prompts and adapters must not direct the agent to `set_node` or
+retry it after an Engine failure. Renderer, preload/IPC, agent runtime, and
+compatibility code remain adapters; proposal validation, id minting, source
+routing, group/link legality, transactions, and result semantics stay behind the
+Container Generation planner interface.
+
+Product integration requires a visible Electron workflow covering start,
+success, validation failure, cancellation, and agent completion. The test must
+observe the completion gate and active lease behavior, committed plus planned
+file effects, watcher/view refresh, and the final visible state. Until that path
+passes, #34 may be engine-executable and adapter-verified but is not
+product-integrated.
+
+Implementation status (2026-07-25): closed, implemented and verified as S6
+(#73). The visible Fill with AI run acquires the edit-session lease before the
+agent launches, the prompt directs the agent at a single
+`orca scryer container fill` through the Engine seam (never `set_node`, no
+legacy fallback), and the token-free Completion Gate drives the visible
+terminal. The release-critical Electron E2E passes all seven lifecycle cases —
+start/lease-before-write, atomic two-layer file effects with visible subtree
+refresh, the visible success terminal driven through the production agent
+Stop-hook HTTP protocol, atomic invalid-proposal rejection, cancellation on
+terminal teardown, lease conflict without token leakage, and prompt ownership.
+Closing the success terminal exposed and fixed two product defects: the agent
+startup command could lose the pane-mount race after the deferred lease
+acquisition (`a2af471bd`), and the fill terminal lived only in panel-local
+state and vanished when the agent tab foregrounded (`77a279376`); the E2E was
+then enabled at `30df9abfd` and `container.fill` promoted to
+`product_integrated` at `24b546f12`. Not pushed, landed, or closed.
+
+## #39: What Is The Convergence Gate Before Reviewable Commits?
+
+Blocked by: #26, #27, #34, #35, #37, #38
+Type: Maintenance
+
+### Question
+
+What must be resolved before the current working-tree slice is split into
+reviewable commits?
+
+### Answer
+
+Freeze feature expansion and converge the current slice first. Remove every
+Scryer `max-lines` disable instead of extending the oversized hubs. Split
+`types.ts`, `schemas.ts`, `catalog.ts`, and the generation planner into focused
+deep modules with small interfaces: operation contracts/results, generation
+contracts, catalog families, proposal validation, subtree minting, source
+anchoring, group/link construction, and result/history planning. Operation files
+remain thin adapters into those modules.
+
+The import graph must be acyclic. Move pending/diff contracts out of the
+`diff.ts` <-> `types.ts` cycle, and extract `ScryerAddedItemsResult` or equivalent
+leaf contracts before porting code that would recreate the
+`intent-planner.ts` <-> `intent-planner-group-add.ts` cycle. Remove literal NUL
+bytes from TypeScript source. Replace placeholder parity provenance with a real
+upstream commit and independently verified expected state.
+
+Only after focused Engine, transaction, ownership, adapter, typecheck, lint,
+Electron E2E, `git diff --check`, and GitNexus impact/cycle gates pass should the
+slice be split into four reviewable commit groups: Engine implementation, Engine
+tests/parity, CLI adapters/tests, and decision documentation. Committing or
+landing a partial group must not upgrade the status of the remaining groups.
+
+Preservation update, 2026-07-15: local checkpoint
+`227cc8b16906733ac3a37f78a2d9320577d33d93` froze the pre-convergence code, tests,
+and fixtures so issue-specific worktrees could share one reproducible base. That
+checkpoint deliberately did not close #39; it made #68 the first safe
+implementation slice.
+
+Convergence update (2026-07-25): #39 is now satisfied. S1 (#68) removed every
+Scryer `max-lines` suppression, split the oversized hubs into focused deep
+modules, broke the import cycles, and removed the literal NUL bytes. S5 (#72)
+replaced the placeholder parity provenance with honestly downgraded local
+regression provenance. On the frozen integration tree
+`cec4973d30871995c3ae02bb9a26b0f149a59c2e`
+(HEAD `6a5c3977565838eabc2783be75a3361964b631fd`) the focused Engine,
+transaction, ownership, adapter, typecheck, converged-source lint, and
+`git diff --check` gates pass. The slice was split into four reviewable commit
+groups on `scryer/convergence-review` with a tree-hash equal to the integration
+tree-hash — the exact-tree proof #39 requires; the groups are rebuilt to the
+same proof whenever later verified commits fold in.
+
+Completion update (2026-07-25): the two gates that remained open are now
+closed. The GitNexus cycle/impact review ran over the assembled integration
+tree: all 38 file-import cycles in the whole repository pre-exist at the base
+and none touch the converged Scryer modules (the two cycles adjacent to
+convergence-modified files were verified edge-by-edge to exist at the base);
+the change-impact review maps 1072 changed symbols across 184 files with the
+blast radius of every Engine-seam symbol contained inside the converged set,
+and honestly notes that the 300 cataloged execution flows contain no Scryer
+flows, so the empty affected-process list reflects catalog coverage, not proof
+of zero impact. The Container Generation Electron E2E now passes all seven
+lifecycle cases including the visible success terminal driven through the
+production agent Stop-hook protocol, and `container.fill` is
+product-integrated (#38). Nothing is pushed, landed, or closed.
