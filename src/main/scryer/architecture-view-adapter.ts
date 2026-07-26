@@ -11,12 +11,20 @@ import type {
 import type {
   ScryerEngine,
   ScryerLayer,
+  ScryerModelValidateResult,
   ScryerOperationContext,
   ScryerOperationResult,
   ScryerReadView
 } from './engine'
-import type { ScryGroup, ScryLink, ScryModel, ScryNode } from './engine/model'
-import { validateModelStructure } from './engine/validators'
+
+// Why: consume only the canonical ScryerReadView contract. Node/link/group/model
+// shapes are derived from that public contract so the adapter never imports engine
+// internals (engine/model, engine/validators).
+type FullReadView = Extract<ScryerReadView, { view: 'full' }>
+type ReadModel = FullReadView['model']
+type ReadNode = ReadModel['nodes'][number]
+type ReadLink = ReadModel['links'][number]
+type ReadGroup = ReadModel['groups'][number]
 
 export type ArchitectureViewReadInput = {
   projectPath: string
@@ -31,7 +39,7 @@ export type ArchitectureViewAdapter = {
   ): Promise<ScryerOperationResult<ArchitectureViewDto>>
 }
 
-function nodeDto(node: ScryNode): ArchitectureViewNode {
+function nodeDto(node: ReadNode): ArchitectureViewNode {
   return {
     id: node.id,
     kind: node.kind,
@@ -51,7 +59,7 @@ function nodeDto(node: ScryNode): ArchitectureViewNode {
   }
 }
 
-function linkDto(link: ScryLink): ArchitectureViewLink {
+function linkDto(link: ReadLink): ArchitectureViewLink {
   return {
     id: link.id,
     src: link.src,
@@ -61,7 +69,7 @@ function linkDto(link: ScryLink): ArchitectureViewLink {
   }
 }
 
-function groupDto(group: ScryGroup): ArchitectureViewGroup {
+function groupDto(group: ReadGroup): ArchitectureViewGroup {
   return {
     id: group.id,
     name: group.name,
@@ -74,16 +82,11 @@ function groupDto(group: ScryGroup): ArchitectureViewGroup {
   }
 }
 
-function modelFromReadView(view: ScryerReadView): ScryModel | null {
-  const legacyView = view as ScryerReadView & { fullModel?: ScryModel; mode?: string }
-  const model = (view as ScryerReadView & { model?: ScryModel }).model
-  return (
-    legacyView.fullModel ??
-    (view.view === 'full' || legacyView.mode === 'full' ? (model ?? null) : null)
-  )
+function modelFromReadView(view: ScryerReadView): ReadModel | null {
+  return view.view === 'full' ? view.model : null
 }
 
-function pathForNode(node: ScryNode, nodesById: Map<string, ScryNode>): string {
+function pathForNode(node: ReadNode, nodesById: Map<string, ReadNode>): string {
   const names: string[] = [node.name]
   let current = node.parentId ? nodesById.get(node.parentId) : undefined
   while (current) {
@@ -93,7 +96,7 @@ function pathForNode(node: ScryNode, nodesById: Map<string, ScryNode>): string {
   return names.join(' / ')
 }
 
-function treeRowsFromModel(model: ScryModel): ArchitectureViewTreeRow[] {
+function treeRowsFromModel(model: ReadModel): ArchitectureViewTreeRow[] {
   const nodesById = new Map(model.nodes.map((node) => [node.id, node]))
   const childCounts = new Map<string, number>()
   for (const node of model.nodes) {
@@ -117,20 +120,22 @@ function treeRowsFromModel(model: ScryModel): ArchitectureViewTreeRow[] {
   })
 }
 
-function sourceMapRowsFromModel(model: ScryModel): ArchitectureViewSourceMapRow[] {
+function sourceMapRowsFromModel(model: ReadModel): ArchitectureViewSourceMapRow[] {
   return Object.entries(model.sourceMap)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([ownerId, locations]) => ({ ownerId, locations }))
 }
 
-function boundaryRowsFromModel(model: ScryModel): ArchitectureViewBoundaryRow[] {
+function boundaryRowsFromModel(model: ReadModel): ArchitectureViewBoundaryRow[] {
   return Object.entries(model.boundaries)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([nodeId, sources]) => ({ nodeId, sources }))
 }
 
-function diagnosticsFromModel(model: ScryModel): ArchitectureViewDiagnostic[] {
-  return validateModelStructure(model).map((finding) => ({
+function diagnosticsFromFindings(
+  findings: ScryerModelValidateResult['findings']
+): ArchitectureViewDiagnostic[] {
+  return findings.map((finding) => ({
     severity: finding.severity,
     code: finding.code,
     message: finding.message,
@@ -139,8 +144,9 @@ function diagnosticsFromModel(model: ScryModel): ArchitectureViewDiagnostic[] {
 }
 
 function dtoFromModel(
-  model: ScryModel,
+  model: ReadModel,
   view: ScryerReadView,
+  diagnostics: ArchitectureViewDiagnostic[],
   refresh: ArchitectureViewDto['refresh']
 ): ArchitectureViewDto {
   const nodes = model.nodes.map(nodeDto)
@@ -166,13 +172,8 @@ function dtoFromModel(
         ...(node.stale !== undefined ? { stale: node.stale } : {}),
         ...(node.vagrant !== undefined ? { vagrant: node.vagrant } : {})
       })),
-    diagnostics: diagnosticsFromModel(model),
-    recommendedNextReads:
-      (
-        view as ScryerReadView & {
-          recommendedNextReads?: ArchitectureViewDto['recommendedNextReads']
-        }
-      ).recommendedNextReads ?? [],
+    diagnostics,
+    recommendedNextReads: [],
     ...(selectedNode
       ? {
           selectedDetails: {
@@ -198,17 +199,13 @@ export function createArchitectureViewAdapter(engine: ScryerEngine): Architectur
   return {
     async readArchitectureView(input, context) {
       const focusNodeId = input.focusNodeId?.trim() || undefined
-      const result = await engine.readView(
-        {
-          layer: input.layer ?? 'plan',
-          view: 'full'
-        },
-        {
-          ...context,
-          cwd: input.projectPath,
-          projectRoot: input.projectPath
-        }
-      )
+      const layer = input.layer ?? 'plan'
+      const engineContext = {
+        ...context,
+        cwd: input.projectPath,
+        projectRoot: input.projectPath
+      }
+      const result = await engine.readView({ layer, view: 'full' }, engineContext)
       if (!result.ok) {
         return {
           ok: false,
@@ -232,11 +229,22 @@ export function createArchitectureViewAdapter(engine: ScryerEngine): Architectur
           }
         }
       }
+      // Diagnostics are sourced through the Engine seam, never the engine's internal
+      // validators. This is an auxiliary overlay on the already-rendered model: when
+      // the engine cannot validate (e.g. no committed baseline exists yet for a brand
+      // new plan), the view still renders with no diagnostics — this degrades the
+      // overlay, it is not a legacy reader/writer fallback.
+      const validation = await engine.executeOperation<ScryerModelValidateResult>(
+        'scryer.model.validate',
+        { layer },
+        engineContext
+      )
+      const diagnostics = validation.ok ? diagnosticsFromFindings(validation.result.findings) : []
       return {
         ok: true,
         operationId: 'architecture.readArchitectureView',
         requestId: result.requestId,
-        result: dtoFromModel(model, result.result, {
+        result: dtoFromModel(model, result.result, diagnostics, {
           strategy: focusNodeId ? 'focus' : 'overview',
           ...(focusNodeId ? { focusNodeId } : {})
         }),

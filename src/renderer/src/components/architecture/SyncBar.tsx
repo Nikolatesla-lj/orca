@@ -11,10 +11,14 @@ import {
   X
 } from 'lucide-react'
 import type { ScryerCompletionGateResult } from '../../../../shared/scryer/edit-session'
+import {
+  formatCompletionGateMessage,
+  isArchitectureCompletionGateAttention
+} from './architecture-completion-gate-terminal'
 
 type DriftInfo = { nodeId: string; nodeName: string; patterns: string[] }
 
-export type SyncStatus = 'idle' | 'running' | 'error'
+export type SyncStatus = 'idle' | 'running' | 'attention' | 'error'
 
 export type SyncBarProps = {
   activeAgent: { name: string; available: boolean } | null
@@ -83,7 +87,13 @@ export function SyncBar({
     return () => clearInterval(timer)
   }, [syncStatus])
 
-  const isSuccess = syncStatus === 'idle' && !!syncMessage && !hasDrift
+  const gateNeedsAttention = completionGate
+    ? isArchitectureCompletionGateAttention(completionGate)
+    : false
+  // Why: idle + no drift is not automatically a success — a completion gate that needs
+  // attention (validation/manual-review/lease-blocked/unfolded) must stay visible and
+  // must not auto-dismiss as though the sync finished.
+  const isSuccess = syncStatus === 'idle' && !!syncMessage && !hasDrift && !gateNeedsAttention
   const completionGateMessage = completionGate ? formatCompletionGateMessage(completionGate) : null
   const dismissRef = useRef(onDismissMessage)
   dismissRef.current = onDismissMessage
@@ -125,7 +135,11 @@ export function SyncBar({
         <div className="flex shrink-0 items-center gap-1.5">
           <div
             className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-              syncStatus === 'running' ? 'animate-pulse bg-amber-500' : 'bg-emerald-500'
+              syncStatus === 'running'
+                ? 'animate-pulse bg-amber-500'
+                : syncStatus === 'attention'
+                  ? 'bg-amber-500'
+                  : 'bg-emerald-500'
             }`}
           />
           <span className="font-medium text-muted-foreground">{agentName}</span>
@@ -162,6 +176,31 @@ export function SyncBar({
               type="button"
               className="flex shrink-0 cursor-pointer items-center gap-1 rounded px-2 py-0.5 font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               onClick={() => void onCancelSync()}
+              data-testid="architecture-sync-cancel"
+            >
+              <X className="size-3" />
+              Cancel
+            </button>
+          </>
+        ) : syncStatus === 'attention' ? (
+          <>
+            <div
+              className="flex min-w-0 items-center gap-1.5 text-amber-600 dark:text-amber-400"
+              data-testid="architecture-sync-attention"
+            >
+              <AlertCircle className="size-3 shrink-0" />
+              <span className="truncate">
+                {completionGateMessage ??
+                  syncMessage ??
+                  'Sync needs attention before it can finish'}
+              </span>
+            </div>
+            <div className="flex-1" />
+            <button
+              type="button"
+              className="flex shrink-0 cursor-pointer items-center gap-1 rounded px-2 py-0.5 font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              onClick={() => void onCancelSync()}
+              title="Discard sync changes and restore the pre-sync model"
               data-testid="architecture-sync-cancel"
             >
               <X className="size-3" />
@@ -364,23 +403,4 @@ export function SyncBar({
       ) : null}
     </div>
   )
-}
-
-export function formatCompletionGateMessage(gate: ScryerCompletionGateResult): string {
-  switch (gate.nextAction) {
-    case 'nothing_to_fold':
-      return 'No model changes to fold'
-    case 'fold_allowed': {
-      const count = gate.pending.total
-      return `${count} pending change${count === 1 ? '' : 's'} ready to fold`
-    }
-    case 'fix_validation': {
-      const count = gate.validation.blockingCount
-      return `Fix ${count} validation error${count === 1 ? '' : 's'} before folding`
-    }
-    case 'manual_review':
-      return 'Manual review required before folding'
-    case 'blocked_by_lease':
-      return 'Edit session blocked by another lease'
-  }
 }

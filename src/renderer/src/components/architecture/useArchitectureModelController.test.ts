@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ArchitectureDiagramModel } from './architecture-diagram-types'
+import type { ScryerCompletionGateResult } from '../../../../shared/scryer/edit-session'
 import {
   pushArchitectureUndoSnapshot,
   createEmptyArchitectureModel,
@@ -10,6 +11,33 @@ import {
   nodeUpdateInputFromDiagramPatch,
   sourcePatternForNode
 } from './useArchitectureModelController'
+import {
+  isArchitectureCompletionGateSuccess,
+  resolveArchitectureSyncFinishOutcome,
+  resolveArchitectureSyncLoadOutcome
+} from './architecture-completion-gate-terminal'
+
+function gateResult(
+  overrides: Partial<ScryerCompletionGateResult> = {}
+): ScryerCompletionGateResult {
+  return {
+    ok: true,
+    foldAllowed: false,
+    nextAction: 'nothing_to_fold',
+    pending: {
+      total: 0,
+      foldable: true,
+      byKind: {},
+      byChange: {},
+      changes: [],
+      blockers: [],
+      risks: []
+    },
+    validation: { blockingCount: 0, warningCount: 0, findings: [] },
+    lease: { active: false, blocked: false },
+    ...overrides
+  }
+}
 
 describe('architecture model controller helpers', () => {
   it('creates a complete empty Scryer model for the current project', () => {
@@ -198,6 +226,114 @@ describe('architecture model controller helpers', () => {
         }
       })
     ).toEqual({ paneKey: 'tab-sync:0', interrupted: true })
+  })
+
+  it('finishes sync only for a folded / nothing-to-fold success gate', () => {
+    expect(isArchitectureCompletionGateSuccess(gateResult({ nextAction: 'nothing_to_fold' }))).toBe(
+      true
+    )
+    expect(
+      resolveArchitectureSyncFinishOutcome(gateResult({ nextAction: 'nothing_to_fold' }))
+    ).toEqual({ kind: 'success' })
+  })
+
+  it('routes every attention / blocked gate away from the success terminal', () => {
+    const attentionGates: ScryerCompletionGateResult[] = [
+      gateResult({
+        ok: true,
+        foldAllowed: true,
+        nextAction: 'fold_allowed',
+        pending: {
+          total: 1,
+          foldable: true,
+          byKind: { node: 1 },
+          byChange: { added: 1 },
+          changes: [],
+          blockers: [],
+          risks: []
+        }
+      }),
+      gateResult({
+        ok: false,
+        nextAction: 'fix_validation',
+        validation: {
+          blockingCount: 1,
+          warningCount: 0,
+          findings: []
+        }
+      }),
+      gateResult({ ok: false, nextAction: 'manual_review' }),
+      gateResult({
+        ok: false,
+        nextAction: 'blocked_by_lease',
+        lease: {
+          active: true,
+          blocked: true,
+          owner: 'human'
+        }
+      })
+    ]
+    for (const gate of attentionGates) {
+      // Attention/blocked gates must not report success: no finishSync/markSynced,
+      // no snapshot clear, no baseline advance in the controller's finish path.
+      expect(isArchitectureCompletionGateSuccess(gate)).toBe(false)
+      expect(resolveArchitectureSyncFinishOutcome(gate)).toEqual({ kind: 'attention' })
+    }
+  })
+
+  it('re-derives an attention terminal on load when main retains an attention-blocked sync', () => {
+    const attentionGate = gateResult({ ok: false, nextAction: 'manual_review' })
+
+    // Panel remount resets local syncStatus to idle, but the retained sync (implementing
+    // + snapshot) with a recorded attention gate must resolve to attention, not running.
+    expect(
+      resolveArchitectureSyncLoadOutcome({
+        localAttention: false,
+        isSyncing: true,
+        hasPreSyncSnapshot: true,
+        recordedGate: attentionGate
+      })
+    ).toBe('attention')
+
+    // A genuinely in-progress sync (no recorded gate yet) stays running.
+    expect(
+      resolveArchitectureSyncLoadOutcome({
+        localAttention: false,
+        isSyncing: true,
+        hasPreSyncSnapshot: true,
+        recordedGate: null
+      })
+    ).toBe('running')
+
+    // A recorded success gate on a still-open session is not attention.
+    expect(
+      resolveArchitectureSyncLoadOutcome({
+        localAttention: false,
+        isSyncing: true,
+        hasPreSyncSnapshot: true,
+        recordedGate: gateResult({ ok: true, nextAction: 'nothing_to_fold' })
+      })
+    ).toBe('running')
+
+    // A local attention terminal is preserved even with no open main session.
+    expect(
+      resolveArchitectureSyncLoadOutcome({
+        localAttention: true,
+        isSyncing: false,
+        hasPreSyncSnapshot: false,
+        recordedGate: null
+      })
+    ).toBe('attention')
+
+    // No open session resolves any stale running back to idle.
+    expect(
+      resolveArchitectureSyncLoadOutcome({
+        localAttention: false,
+        isSyncing: false,
+        hasPreSyncSnapshot: true,
+        recordedGate: attentionGate
+      })
+    ).toBe('clear-running')
   })
 
   it('keeps the last 10 undo snapshots and batches rapid edits for one second', () => {

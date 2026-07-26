@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, writeFile } from 'fs/promises'
-import { tmpdir } from 'os'
-import { join } from 'path'
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createScryerEngine } from './index'
 import type { ScryerOperationContext } from './types'
@@ -53,6 +53,54 @@ describe('scryer.model.validate', () => {
         ]),
         validationWarningCount: 2,
         validationErrorCount: 0
+      }
+    })
+  })
+
+  it('validates the explicit planned candidate layer used by completion gating', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-engine-validate-plan-'))
+    await mkdir(join(projectPath, '.scryer'), { recursive: true })
+    await writeFile(
+      join(projectPath, '.scryer', 'model.scry'),
+      JSON.stringify({
+        version: '0.3',
+        nodes: [{ id: 'api', kind: 'system', name: 'API' }],
+        links: [],
+        groups: [],
+        sourceMap: {},
+        boundaries: {}
+      }),
+      'utf8'
+    )
+    await writeFile(
+      join(projectPath, '.scryer', 'planned.scry'),
+      JSON.stringify({
+        version: '0.3',
+        nodes: [{ id: 'component', kind: 'component', name: 'Orphan component' }],
+        links: [],
+        groups: [],
+        sourceMap: {},
+        boundaries: {}
+      }),
+      'utf8'
+    )
+
+    const committed = await createScryerEngine().executeOperation(
+      'scryer.model.validate',
+      { layer: 'committed' },
+      testContext(projectPath)
+    )
+    const planned = await createScryerEngine().executeOperation(
+      'scryer.model.validate',
+      { layer: 'plan' },
+      { ...testContext(projectPath), requestId: 'req-validate-plan' }
+    )
+
+    expect(committed).toMatchObject({ ok: true, result: { findings: [] } })
+    expect(planned).toMatchObject({
+      ok: true,
+      result: {
+        findings: [expect.objectContaining({ code: 'invalid_hierarchy' })]
       }
     })
   })

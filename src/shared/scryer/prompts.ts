@@ -38,13 +38,19 @@ Instructions:
 1. Call get_rules to load the modeling workflow and C4 rules.
 2. Call get_structure with path "${cwd}" to get the annotated directory tree.
 3. Read the manifests surfaced by get_structure.
-4. Build the model level by level: set_model for persons/systems/system edges, then set_node on the system for containers/container edges.
+4. Build the model level by level: set_model for persons/systems/system edges, then add_container for each container and add_links for container-level edges.
 5. Stop at the container level unless the user explicitly asked for component detail.
 6. Set status "implemented" on nodes that already exist in code. Use "proposed" for new planned work.
 7. Set source mappings with update_source_map.
 8. Call get_changes to summarize what was modeled.`
 }
 
+// Why: the visible Fill with AI is the Container Generation entry point (#73). The
+// agent builds one complete proposal and commits it with a single atomic run of the
+// `orca scryer container fill` CLI — the product path per ADR 0004 (the Orca CLI
+// replaces the Scryer MCP for writes). The retired legacy set_node path is no longer
+// offered, the Engine never falls back to it, and the agent never folds or decides the
+// terminal state (Orca's completion gate owns that).
 export function nodeFillPrompt(args: {
   modelName: string
   cwd: string
@@ -53,30 +59,22 @@ export function nodeFillPrompt(args: {
   nodeKind: string
   modelJson: string
 }): string {
-  const childKind =
-    args.nodeKind === 'system'
-      ? 'containers'
-      : args.nodeKind === 'container'
-        ? 'components'
-        : args.nodeKind === 'component'
-          ? 'operations, processes, and models'
-          : 'child nodes'
-
-  return `You have access to Orca's Scryer-compatible architecture MCP tools. Fill out the internals of "${args.nodeName}" in model "${args.modelName}" from ${args.cwd}.
+  return `You have access to Orca's Scryer-compatible architecture tools and the \`orca scryer\` CLI. Fill out the internals of "${args.nodeName}" in model "${args.modelName}" from ${args.cwd} using Container Generation.
 
 Current model state:
 ${args.modelJson}
 
 Instructions:
-1. Call get_rules.
-2. Call get_node with id "${args.nodeId}" to inspect the node context.
-3. Use get_structure with path "${args.cwd}" and read relevant source files.
-4. Add ${childKind} using set_node on "${args.nodeId}".
-5. Set status "implemented" on nodes that already exist in code. Leave new planned nodes as "proposed".
-6. Update source mappings for new nodes.
-7. Call get_changes.
+1. Call get_rules to load the modeling workflow and C4 rules.
+2. Call get_structure with path "${args.cwd}" and read the source files that implement "${args.nodeName}" (id "${args.nodeId}") so you understand its real components, their relationships, and boundaries.
+3. Assemble ONE complete JSON proposal for the internals of "${args.nodeName}": "container_id" "${args.nodeId}", a non-empty "components" array (each component a local "key", a "name", and its "symbols" with their "source_file"), and any "links" and "groups" between those components. Reference components only by their local keys; never invent node ids.
+4. Run \`orca scryer container fill --json-input -\` in this terminal EXACTLY ONCE, piping that JSON proposal on stdin (for example with a heredoc). This single command atomically generates the whole container subtree.
 
-Focus only on "${args.nodeName}". Do not change boundaries outside this scope.`
+Constraints:
+- Build the internals ONLY through that single \`orca scryer container fill\` command. Do not use the retired per-node mutation tools, node subtree edits, or any other legacy path to add components one by one.
+- If \`orca scryer container fill\` (the Engine) fails, do NOT fall back to a legacy tool and do NOT retry with a per-node mutation — stop and report the failure verbatim.
+- Do NOT fold, mark nodes implemented, or otherwise decide whether the result is accepted. Orca's completion gate owns the terminal state of the generated subtree.
+- Focus only on "${args.nodeName}". Do not change anything outside this container's scope.`
 }
 
 export function advisorPrompt(args: { modelName: string; cwd: string; modelJson: string }): string {

@@ -1,26 +1,7 @@
 import type { ScryGroup, ScryModel, ScrySchemaProperty } from './model'
-import type { PendingSummary } from './types'
+import type { PendingChange, PendingSummary } from './pending-contracts'
 
-export type PendingChangeType =
-  | 'added'
-  | 'deleted'
-  | 'moved'
-  | 'repointed'
-  | 'reworded'
-  | 'membersChanged'
-
-export type PendingChange = {
-  kind: 'node' | 'link' | 'responsibility' | 'property' | 'group'
-  id: string
-  ownerId?: string
-  label: string
-  changes: (
-    | { type: 'added' | 'deleted' | 'membersChanged' }
-    | { type: 'moved'; from?: string; to?: string }
-    | { type: 'repointed'; srcFrom: string; srcTo: string; dstFrom: string; dstTo: string }
-    | { type: 'reworded'; field: string; from: string; to: string }
-  )[]
-}
+export type { PendingChange, PendingChangeType } from './pending-contracts'
 
 function reword(
   changes: PendingChange['changes'],

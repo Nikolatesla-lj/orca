@@ -49,6 +49,16 @@ export type NativeChatLiveSession = NativeChatSession & {
 // Stable empty-base reference so a non-ready read doesn't churn the base axis.
 const EMPTY_MESSAGES: readonly NativeChatMessage[] = []
 
+// Preserve the historical runtime delimiter without embedding a literal NUL byte in source.
+const NUL_SEPARATOR = String.fromCharCode(0)
+
+export function nativeChatLiveSessionBaseSignature(
+  agent: AgentType,
+  sessionId: string | null
+): string {
+  return `${agent}${NUL_SEPARATOR}${sessionId ?? ''}`
+}
+
 /** True when `whole`'s first `len` entries are referentially identical to
  *  `prefix` — i.e. `whole` is `prefix` extended at the tail, so the incremental
  *  assembler can splice just the suffix instead of resetting. */
@@ -248,7 +258,7 @@ export function useNativeChatLiveSession(
     // Base axis: the read's message array reference changes on session swap and
     // loadEarlier; sessionId/agent identify the conversation. Any change forces a
     // full reset so a missed trigger can't leave the cache stale.
-    const baseSig = `${agent} ${sessionId ?? ''}`
+    const baseSig = nativeChatLiveSessionBaseSignature(agent, sessionId)
     const baseChanged = baseSig !== baseSigRef.current || baseMessages !== baseMessagesRef.current
     const applied = appliedTranscriptRef.current
     const isSuffixExtension =

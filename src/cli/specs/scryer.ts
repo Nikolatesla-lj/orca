@@ -1,7 +1,6 @@
 import type { CommandSpec } from '../args'
-import { GLOBAL_FLAGS } from '../args'
-
-const SCRYER_FLAGS = [...GLOBAL_FLAGS, 'project', 'lease-token']
+import { SCRYER_AUTHORING_COMMAND_SPECS } from './scryer-authoring-command-specs'
+import { SCRYER_FLAGS } from './scryer-command-flags'
 
 export const SCRYER_COMMAND_SPECS: CommandSpec[] = [
   {
@@ -51,6 +50,39 @@ export const SCRYER_COMMAND_SPECS: CommandSpec[] = [
     usage: 'orca scryer model validate [--project <path>] [--layer plan|committed] [--json]',
     allowedFlags: [...SCRYER_FLAGS, 'layer'],
     examples: ['orca scryer model validate --project . --json']
+  },
+  {
+    path: ['scryer', 'model', 'health'],
+    summary: 'Report Scryer model health, anchor coverage, and drift observations',
+    usage: 'orca scryer model health [--node-id <id>] [--project <path>] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'node-id'],
+    examples: ['orca scryer model health --json', 'orca scryer model health --node-id api --json']
+  },
+  {
+    path: ['scryer', 'drift', 'get'],
+    summary: 'Detect Scryer code-to-model drift scopes since the last reconcile',
+    usage: 'orca scryer drift get [--project <path>] [--json]',
+    allowedFlags: SCRYER_FLAGS,
+    examples: ['orca scryer drift get --json']
+  },
+  {
+    path: ['scryer', 'drift', 'flag'],
+    summary: 'Record reviewed Scryer drift findings into planned state',
+    usage: 'orca scryer drift flag --json-input - [--project <path>] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'json-input', 'node-id'],
+    notes: [
+      'The JSON input must contain `node_id` and at least one finding array (e.g. `undescribed`, `new_nodes`, `stale`).'
+    ],
+    examples: [
+      'echo \'{"node_id":"api","undescribed":[{"node_id":"orders","statement":"Cancels stale orders","source_file":"src/orders.ts"}]}\' | orca scryer drift flag --json-input - --json'
+    ]
+  },
+  {
+    path: ['scryer', 'drift', 'reconcile'],
+    summary: 'Advance the Scryer drift reconcile baseline after review',
+    usage: 'orca scryer drift reconcile [--project <path>] [--json]',
+    allowedFlags: SCRYER_FLAGS,
+    examples: ['orca scryer drift reconcile --json']
   },
   {
     path: ['scryer', 'node', 'update'],
@@ -118,6 +150,36 @@ export const SCRYER_COMMAND_SPECS: CommandSpec[] = [
     allowedFlags: [...SCRYER_FLAGS, 'json-input', 'link-ids'],
     examples: ['orca scryer link delete --link-ids link-web-api --json']
   },
+  {
+    path: ['scryer', 'container', 'fill'],
+    summary: 'Atomically generate an empty Scryer container subtree from code',
+    usage: 'orca scryer container fill --json-input - [--project <path>] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'json-input'],
+    notes: [
+      'The JSON input must contain `container_id` and a non-empty `components` array; optional `links` and `groups`.'
+    ],
+    examples: [
+      'echo \'{"container_id":"api","components":[{"key":"orders","name":"Orders","symbols":[{"key":"h","name":"handleOrder","source_file":"src/orders.ts"}]}]}\' | orca scryer container fill --json-input - --json'
+    ]
+  },
+  {
+    path: ['scryer', 'link', 'update'],
+    summary: 'Update planned Scryer link labels or methods',
+    usage: 'orca scryer link update --json-input - [--project <path>] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'json-input'],
+    notes: ['The JSON input must contain a non-empty `links` array of `{ link_id, ... }` patches.'],
+    examples: [
+      'echo \'{"links":[{"link_id":"link-web-api","label":"calls"}]}\' | orca scryer link update --json-input - --json'
+    ]
+  },
+  {
+    path: ['scryer', 'node', 'delete'],
+    summary: 'Delete planned Scryer nodes and their subtrees',
+    usage: 'orca scryer node delete --node-ids <id,id> [--project <path>] [--json]',
+    allowedFlags: [...SCRYER_FLAGS, 'json-input', 'node-ids'],
+    examples: ['orca scryer node delete --node-ids orders --json']
+  },
+  ...SCRYER_AUTHORING_COMMAND_SPECS,
   {
     path: ['scryer', 'plan', 'pending'],
     summary: 'Read pending Scryer plan work',

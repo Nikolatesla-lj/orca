@@ -135,7 +135,15 @@ import type {
   SpeechTranscriptEvent
 } from '../shared/speech-types'
 import type { TelemetryConsentState } from '../shared/telemetry-consent-types'
-import type { PreflightRuntimeContext, RefreshAgentsResult } from './api-types'
+import type {
+  ArchitectureBeginEditSessionRequest,
+  ArchitectureCancelEditSessionRequest,
+  ArchitectureCompleteEditSessionRequest,
+  ArchitectureExecuteScryerOperationRequest,
+  ArchitectureReadEditSessionRequest,
+  PreflightRuntimeContext,
+  RefreshAgentsResult
+} from './api-types'
 import type { AgentKind, LaunchSource, RequestKind } from '../shared/telemetry-events'
 import type { AppStarSource } from '../shared/gh-star-source'
 import type {
@@ -1808,25 +1816,8 @@ const api = {
       projectPath: string
       modelName?: string | null
     }): Promise<unknown> => ipcRenderer.invoke('architecture:readModelDocument', args),
-    writeModel: (args: {
-      projectPath: string
-      model: unknown
-      modelName?: string | null
-    }): Promise<void> => ipcRenderer.invoke('architecture:writeModel', args),
-    writeModelDocument: (args: {
-      projectPath: string
-      model: unknown
-      modelName?: string | null
-      baseRevision?: string | null
-    }): Promise<unknown> => ipcRenderer.invoke('architecture:writeModelDocument', args),
-    patchNodeData: (args: {
-      projectPath: string
-      nodeId: string
-      patch: unknown
-      modelName?: string | null
-      baseRevision?: string | null
-      baseNodeData?: unknown
-    }): Promise<unknown> => ipcRenderer.invoke('architecture:patchNodeData', args),
+    // Retired: raw writeModel/writeModelDocument/patchNodeData. Default Architecture
+    // writes go through architecture.executeScryerOperation.
     listModels: (args: { projectPath: string }): Promise<unknown> =>
       ipcRenderer.invoke('architecture:listModels', args),
     createModel: (args: {
@@ -1873,25 +1864,18 @@ const api = {
       ipcRenderer.invoke('architecture:cancelSync', args),
     finishSync: (args: { projectPath: string }): Promise<void> =>
       ipcRenderer.invoke('architecture:finishSync', args),
-    beginEditSession: (args: { projectPath: string; agentRunId: string }): Promise<unknown> =>
+    beginEditSession: (args: ArchitectureBeginEditSessionRequest): Promise<unknown> =>
       ipcRenderer.invoke('architecture:beginEditSession', args),
-    completeEditSession: (args: {
-      projectPath: string
-      agentRunId: string
-      foldPolicy?: 'never' | 'when_gate_passes'
-    }): Promise<unknown> => ipcRenderer.invoke('architecture:completeEditSession', args),
-    cancelEditSession: (args: { projectPath: string; agentRunId: string }): Promise<void> =>
+    completeEditSession: (args: ArchitectureCompleteEditSessionRequest): Promise<unknown> =>
+      ipcRenderer.invoke('architecture:completeEditSession', args),
+    cancelEditSession: (args: ArchitectureCancelEditSessionRequest): Promise<void> =>
       ipcRenderer.invoke('architecture:cancelEditSession', args),
-    readEditSession: (args: { projectPath: string }): Promise<unknown> =>
+    readEditSession: (args: ArchitectureReadEditSessionRequest): Promise<unknown> =>
       ipcRenderer.invoke('architecture:readEditSession', args),
     callTool: (args: { projectPath: string; call: unknown }): Promise<unknown> =>
       ipcRenderer.invoke('architecture:callTool', args),
-    executeScryerOperation: (args: {
-      projectPath: string
-      operationId: string
-      input?: unknown
-      requestId?: string
-    }): Promise<unknown> => ipcRenderer.invoke('architecture:executeScryerOperation', args),
+    executeScryerOperation: (args: ArchitectureExecuteScryerOperationRequest): Promise<unknown> =>
+      ipcRenderer.invoke('architecture:executeScryerOperation', args),
     watchModel: (args: { projectPath: string }): Promise<void> =>
       ipcRenderer.invoke('architecture:watchModel', args),
     onModelChanged: (

@@ -65,8 +65,13 @@ describe('Scryer validators and semantic paths', () => {
     )
     const codes = new Set(findings.map((finding) => finding.code))
 
+    // Why: 'destructive_change' is a fold-path code produced by plan-fold (blocking
+    // destructive auto-fold), not an output of the structural validator; exclude it
+    // from this exhaustiveness set like 'no_op'.
     expect([...codes].sort()).toEqual(
-      validationFindingCodeSchema.options.filter((code) => code !== 'no_op').sort()
+      validationFindingCodeSchema.options
+        .filter((code) => code !== 'no_op' && code !== 'destructive_change')
+        .sort()
     )
     expect([...codes]).toEqual(
       expect.arrayContaining([

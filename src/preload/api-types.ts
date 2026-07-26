@@ -13,6 +13,20 @@ import type {
   ScryerCompletionGateResult,
   ScryerEditSessionStatus
 } from '../shared/scryer/edit-session'
+import type {
+  ArchitectureBeginEditSessionRequest,
+  ArchitectureCancelEditSessionRequest,
+  ArchitectureCompleteEditSessionRequest,
+  ArchitectureExecuteScryerOperationRequest,
+  ArchitectureReadEditSessionRequest
+} from '../shared/scryer/architecture-ipc-contracts'
+export type {
+  ArchitectureBeginEditSessionRequest,
+  ArchitectureCancelEditSessionRequest,
+  ArchitectureCompleteEditSessionRequest,
+  ArchitectureExecuteScryerOperationRequest,
+  ArchitectureReadEditSessionRequest
+} from '../shared/scryer/architecture-ipc-contracts'
 import type { ReadClipboardTextOptions } from '../shared/clipboard-text'
 import type { AppIdentity } from '../shared/app-identity'
 import type { TerminalPaneSplitSource } from '../shared/feature-education-telemetry'
@@ -408,7 +422,6 @@ import type {
 import type { KeybindingActionId, KeybindingFileSnapshot } from '../shared/keybindings'
 import type {
   C4ModelData,
-  C4NodeData,
   DriftReport,
   ScryerToolCall,
   ScryerToolResult
@@ -851,25 +864,8 @@ export type ArchitectureApi = {
     model: C4ModelData
     revision: string
   }>
-  writeModel: (args: {
-    projectPath: string
-    model: C4ModelData
-    modelName?: string | null
-  }) => Promise<void>
-  writeModelDocument: (args: {
-    projectPath: string
-    model: C4ModelData
-    modelName?: string | null
-    baseRevision?: string | null
-  }) => Promise<{ model: C4ModelData; revision: string }>
-  patchNodeData: (args: {
-    projectPath: string
-    nodeId: string
-    patch: Partial<C4NodeData>
-    modelName?: string | null
-    baseRevision?: string | null
-    baseNodeData?: C4NodeData | null
-  }) => Promise<{ model: C4ModelData; revision: string }>
+  // Retired: raw writeModel/writeModelDocument/patchNodeData. Default Architecture
+  // writes go through executeScryerOperation.
   listModels: (args: { projectPath: string }) => Promise<
     {
       name: string
@@ -919,27 +915,19 @@ export type ArchitectureApi = {
   beginSync: (args: {
     projectPath: string
     modelName?: string
-  }) => Promise<{ prompt: string; drift: DriftReport; snapshot: C4ModelData }>
-  cancelSync: (args: { projectPath: string }) => Promise<C4ModelData>
+  }) => Promise<{ prompt: string; drift: DriftReport }>
+  cancelSync: (args: { projectPath: string }) => Promise<void>
   finishSync: (args: { projectPath: string }) => Promise<void>
-  beginEditSession: (args: {
-    projectPath: string
-    agentRunId: string
-  }) => Promise<{ projectPath: string; agentRunId: string }>
-  completeEditSession: (args: {
-    projectPath: string
-    agentRunId: string
-    foldPolicy?: 'never' | 'when_gate_passes'
-  }) => Promise<ScryerCompletionGateResult>
-  cancelEditSession: (args: { projectPath: string; agentRunId: string }) => Promise<void>
-  readEditSession: (args: { projectPath: string }) => Promise<ScryerEditSessionStatus>
+  beginEditSession: (
+    args: ArchitectureBeginEditSessionRequest
+  ) => Promise<{ projectPath: string; agentRunId: string }>
+  completeEditSession: (
+    args: ArchitectureCompleteEditSessionRequest
+  ) => Promise<ScryerCompletionGateResult>
+  cancelEditSession: (args: ArchitectureCancelEditSessionRequest) => Promise<void>
+  readEditSession: (args: ArchitectureReadEditSessionRequest) => Promise<ScryerEditSessionStatus>
   callTool: (args: { projectPath: string; call: ScryerToolCall }) => Promise<ScryerToolResult>
-  executeScryerOperation: (args: {
-    projectPath: string
-    operationId: string
-    input?: unknown
-    requestId?: string
-  }) => Promise<unknown>
+  executeScryerOperation: (args: ArchitectureExecuteScryerOperationRequest) => Promise<unknown>
   watchModel: (args: { projectPath: string }) => Promise<void>
   onModelChanged: (
     callback: (event: { projectPath: string; fileName: string }) => void

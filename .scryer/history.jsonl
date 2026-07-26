@@ -1,0 +1,13 @@
+{"at":1784131519,"by":"agent","driver":"build","kind":"born","nodeId":"node-1","rows":[{"marker":"+","text":"2 responsibilities · 4 symbols · component"}]}
+{"at":1784131519,"by":"agent","driver":"build","kind":"born","nodeId":"node-6","rows":[{"marker":"+","text":"1 responsibility · 1 symbol · component"}]}
+{"at":1784131519,"by":"agent","driver":"build","kind":"born","nodeId":"node-8","rows":[{"marker":"+","text":"2 responsibilities · 3 symbols · component"}]}
+{"at":1784131519,"by":"agent","driver":"build","kind":"born","nodeId":"node-12","rows":[{"marker":"+","text":"2 responsibilities · 1 symbol · component"}]}
+{"at":1784131519,"by":"agent","driver":"build","kind":"born","nodeId":"node-14","rows":[{"marker":"+","text":"1 responsibility · 1 symbol · component"}]}
+{"at":1784131519,"by":"agent","driver":"build","kind":"born","nodeId":"node-16","rows":[{"marker":"+","text":"1 responsibility · 1 symbol · component"}]}
+{"at":1784131519,"by":"agent","driver":"build","kind":"born","nodeId":"node-18","rows":[{"marker":"+","text":"1 responsibility · 1 symbol · component"}]}
+{"at":1784131519,"by":"agent","driver":"build","kind":"born","nodeId":"node-20","rows":[{"marker":"+","text":"1 responsibility · 1 symbol · component"}]}
+{"at":1784131519,"by":"agent","driver":"build","kind":"born","nodeId":"node-22","rows":[{"marker":"+","text":"1 responsibility · 1 symbol · component"}]}
+{"at":1784131551,"by":"agent","driver":"build","kind":"born","nodeId":"node-24","rows":[{"marker":"+","text":"2 responsibilities · 2 symbols · component"}]}
+{"at":1784132294,"by":"agent","driver":"reorganize","kind":"move","nodeId":"node-3","rows":[{"marker":"→","text":"reparented Native Scryer Engine → Operation Pipeline"}]}
+{"at":1784132294,"by":"agent","driver":"reorganize","kind":"move","nodeId":"node-4","rows":[{"marker":"→","text":"reparented Native Scryer Engine → Operation Catalog"}]}
+{"at":1784132294,"by":"agent","driver":"reorganize","kind":"move","nodeId":"node-5","rows":[{"marker":"→","text":"reparented Native Scryer Engine → State Transaction Store"}]}

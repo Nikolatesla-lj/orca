@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, readFile, writeFile } from 'fs/promises'
-import { tmpdir } from 'os'
-import { join } from 'path'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createScryerStateStore, type ScryerStateCommitPlan } from './state-store'
 import type { ScryerFlatOperationPolicy } from './types'
@@ -85,6 +85,34 @@ describe('Scryer state store', () => {
     expect(committed.nodes[0].name).toBe('API')
   })
 
+  it('defensively rejects an illegal commit plan before writing any semantic file', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-state-illegal-plan-'))
+    await writeModel(projectPath, 'model.scry', model('API'))
+    await writeModel(projectPath, 'planned.scry', model('API Draft'))
+    const store = createScryerStateStore()
+    const plan: ScryerStateCommitPlan = {
+      operationId: 'scryer.node.update',
+      requestId: 'req-illegal',
+      project: { projectRoot: projectPath },
+      primary: [
+        // Structurally invalid: missing the required links/groups arrays.
+        { target: 'planned', model: { version: '0.3', nodes: [] } as never },
+        { target: 'committed', model: model('Should Not Land') as never }
+      ],
+      bestEffort: []
+    }
+
+    await expect(store.commit(plan)).rejects.toMatchObject({
+      code: 'internal_error',
+      details: { reason: 'invalid_final_snapshot' }
+    })
+    const planned = JSON.parse(await readFile(join(projectPath, '.scryer', 'planned.scry'), 'utf8'))
+    const committed = JSON.parse(await readFile(join(projectPath, '.scryer', 'model.scry'), 'utf8'))
+    // Nothing was written: both files retain their pre-commit contents.
+    expect(planned.nodes[0].name).toBe('API Draft')
+    expect(committed.nodes[0].name).toBe('API')
+  })
+
   it('keeps successful primary writes when best-effort maintenance fails', async () => {
     const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-state-best-effort-'))
     await writeModel(projectPath, 'model.scry', model('API'))
@@ -104,5 +132,23 @@ describe('Scryer state store', () => {
     ])
     const committed = JSON.parse(await readFile(join(projectPath, '.scryer', 'model.scry'), 'utf8'))
     expect(committed.nodes[0].name).toBe('Committed')
+  })
+
+  it('treats an expired lease as stale while the caller holds the project lock', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'orca-scryer-state-expired-lease-'))
+    await writeModel(projectPath, '.model-edit-lease.json', {
+      token: 'expired-secret',
+      owner: 'agent',
+      agentRunId: 'run-expired',
+      expiresAt: '2000-01-01T00:00:00.000Z'
+    })
+    const store = createScryerStateStore()
+
+    const lease = await store.withWriteLock(projectPath, () => store.readActiveLease(projectPath))
+
+    expect(lease).toBeNull()
+    await expect(
+      readFile(join(projectPath, '.scryer', '.model-edit-lease.json'), 'utf8')
+    ).rejects.toThrow()
   })
 })

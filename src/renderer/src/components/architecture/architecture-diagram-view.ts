@@ -138,6 +138,25 @@ export function getVisibleArchitectureView({
   }
 }
 
+// Why: the visible Fill with AI is the Container Generation entry point (#73). It may
+// only appear when drilled into a container whose direct children are all references
+// (nothing authored yet). System and component parents never offer it — a system's
+// children are containers and a component's children are code-level symbols, neither
+// of which is filled by container generation.
+export function shouldOfferContainerFill(input: {
+  view: Pick<VisibleArchitectureView, 'currentParentId' | 'currentParentKind' | 'visibleNodes'>
+  syncing: boolean
+  hasFillHandler: boolean
+}): boolean {
+  return (
+    !!input.view.currentParentId &&
+    input.view.currentParentKind === 'container' &&
+    !input.syncing &&
+    input.hasFillHandler &&
+    input.view.visibleNodes.every((node) => Boolean(node.data._reference))
+  )
+}
+
 function createReferenceNodes(
   model: ArchitectureDiagramModel,
   currentParentId: string,

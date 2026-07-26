@@ -54,4 +54,27 @@ describe('architecture AI run state machine', () => {
       runId: 2
     })
   })
+
+  it('treats needs_attention as a terminal, non-success outcome', () => {
+    const started = beginArchitectureAiRun(createInitialArchitectureAiRunState(), 'sync')
+    const running = transitionArchitectureAiRun(started.state, 'sync', 'running')
+    const attention = transitionArchitectureAiRun(
+      running.state,
+      'sync',
+      'needs_attention',
+      'Fix 2 validation errors before folding'
+    )
+
+    expect(attention.changed).toBe(true)
+    expect(attention.state.sync).toMatchObject({
+      phase: 'needs_attention',
+      message: 'Fix 2 validation errors before folding'
+    })
+
+    // Why: an attention terminal must never later read as a successful completion.
+    const lateDone = transitionArchitectureAiRun(attention.state, 'sync', 'done', 'Sync finished')
+    expect(lateDone.changed).toBe(false)
+    expect(lateDone.state).toBe(attention.state)
+    expect(lateDone.state.sync.phase).toBe('needs_attention')
+  })
 })

@@ -995,6 +995,20 @@ export type RuntimeTerminalAgentStatusEvent = {
   payload: ParsedAgentStatusPayload
 }
 
+export type RuntimeAgentRunIdentity = {
+  agentRunId: string
+  paneKey: string
+  connectionId: string | null
+}
+
+export type RuntimeTerminalTerminationEvent = {
+  paneKey: string
+  connectionId: string | null
+  exitCode: number | null
+  occurredAt: number
+  reason: 'exit' | 'disappeared'
+}
+
 // Why: the full OSC 9999 payload flows through emitTerminalAgentStatusEvents and
 // is then forwarded to the renderer and dropped. Mobile is served by the main
 // process and has no renderer store, so we retain the latest payload per pane
@@ -1917,6 +1931,7 @@ export class OrcaRuntimeService {
   private ptyController: RuntimePtyController | null = null
   private notifier: RuntimeNotifier | null = null
   private clientEventListeners = new Set<(event: RuntimeClientEvent) => void>()
+  private terminalTerminationListeners = new Set<(event: RuntimeTerminalTerminationEvent) => void>()
   private forkBackfillStarted = false
   private agentBrowserBridge: AgentBrowserBridge | null = null
   private offscreenBrowserBackend: BrowserBackend | null = null
@@ -6861,6 +6876,8 @@ export class OrcaRuntimeService {
   }
 
   onPtyExit(ptyId: string, exitCode: number): void {
+    const pty = this.ptysById.get(ptyId)
+    const terminatedIdentities = this.getAgentRunIdentitiesForPty(ptyId, pty)
     advertisedUrlWatcher.unbindPty(ptyId)
     serveSimStateWatcher.unbindPty(ptyId)
     // Clean up new mobile state for this PTY
@@ -6914,7 +6931,6 @@ export class OrcaRuntimeService {
     }
     this.disposeHeadlessTerminal(ptyId)
     this.agentDetector?.onExit(ptyId)
-    const pty = this.ptysById.get(ptyId)
     if (pty) {
       pty.connected = false
       pty.disconnectedAt = Date.now()
@@ -6931,6 +6947,16 @@ export class OrcaRuntimeService {
       leaf.lastExitCode = exitCode
       this.resolveExitWaiters(leaf)
       this.failActiveDispatchOnExit(leaf, exitCode)
+    }
+    const occurredAt = Date.now()
+    for (const identity of terminatedIdentities) {
+      this.notifyTerminalTermination({
+        paneKey: identity.paneKey,
+        connectionId: identity.connectionId,
+        exitCode,
+        occurredAt,
+        reason: 'exit'
+      })
     }
     this.pruneDisconnectedPtyRecords()
   }
@@ -17883,6 +17909,19 @@ export class OrcaRuntimeService {
   private dropDisconnectedPtyRecord(ptyId: string): void {
     // Why: pruning can remove a PTY without the normal exit callback.
     serveSimStateWatcher.unbindPty(ptyId)
+    const pty = this.ptysById.get(ptyId)
+    if (pty?.lastExitCode === null) {
+      const occurredAt = Date.now()
+      for (const identity of this.getAgentRunIdentitiesForPty(ptyId, pty)) {
+        this.notifyTerminalTermination({
+          paneKey: identity.paneKey,
+          connectionId: identity.connectionId,
+          exitCode: null,
+          occurredAt,
+          reason: 'disappeared'
+        })
+      }
+    }
     this.ptysById.delete(ptyId)
     this.recentPtyOutputById.delete(ptyId)
     this.ptyOutputSequenceById.delete(ptyId)
@@ -17924,6 +17963,38 @@ export class OrcaRuntimeService {
 
   private getLeavesForPty(ptyId: string): RuntimeLeafRecord[] {
     return this.leavesByPtyId.get(ptyId) ?? []
+  }
+
+  private getAgentRunIdentitiesForPty(
+    ptyId: string,
+    pty = this.ptysById.get(ptyId)
+  ): RuntimeAgentRunIdentity[] {
+    const identities = new Map<string, RuntimeAgentRunIdentity>()
+    const connectionId = pty?.connectionId ?? parseAppSshPtyId(ptyId)?.connectionId ?? null
+    for (const leaf of this.getLeavesForPty(ptyId)) {
+      const identity = {
+        agentRunId: leaf.tabId,
+        paneKey: this.makeRuntimePaneKey(leaf),
+        connectionId
+      }
+      identities.set(`${connectionId ?? 'local'}\0${identity.paneKey}`, identity)
+    }
+    if (pty?.tabId && pty.paneKey) {
+      const identity = { agentRunId: pty.tabId, paneKey: pty.paneKey, connectionId }
+      identities.set(`${connectionId ?? 'local'}\0${identity.paneKey}`, identity)
+    }
+    return [...identities.values()]
+  }
+
+  private notifyTerminalTermination(event: RuntimeTerminalTerminationEvent): void {
+    for (const listener of this.terminalTerminationListeners) {
+      try {
+        listener(event)
+      } catch {
+        // Why: terminal cleanup must continue even when a lifecycle observer fails.
+        console.error('[runtime] terminal termination listener threw')
+      }
+    }
   }
 
   private getSummaryForRuntimeWorktreeId(
@@ -18621,6 +18692,53 @@ export class OrcaRuntimeService {
 
   getAgentStatusTerminalHandleForPaneKey(paneKey: string): string | undefined {
     return this.getTerminalHandleForPaneKey(paneKey) ?? undefined
+  }
+
+  resolveAgentRunIdentity(agentRunId: string): RuntimeAgentRunIdentity | null {
+    if (agentRunId.trim().length === 0) {
+      return null
+    }
+    const identities = new Map<string, RuntimeAgentRunIdentity>()
+    const addIdentity = (paneKey: string, connectionId: string | null): void => {
+      identities.set(`${connectionId ?? 'local'}\0${paneKey}`, {
+        agentRunId,
+        paneKey,
+        connectionId
+      })
+    }
+    for (const leaf of this.leaves.values()) {
+      if (leaf.tabId !== agentRunId || !leaf.connected || !leaf.ptyId) {
+        continue
+      }
+      const pty = this.ptysById.get(leaf.ptyId)
+      if (pty && !pty.connected) {
+        continue
+      }
+      addIdentity(
+        this.makeRuntimePaneKey(leaf),
+        pty?.connectionId ?? parseAppSshPtyId(leaf.ptyId)?.connectionId ?? null
+      )
+    }
+    for (const pty of this.ptysById.values()) {
+      if (pty.tabId === agentRunId && pty.paneKey && pty.connected) {
+        addIdentity(pty.paneKey, pty.connectionId)
+      }
+    }
+    // Why: an agent run maps to a single connected pane in the common case (a freshly
+    // launched agent tab). If a user splits that tab into multiple connected panes we
+    // cannot tell which one is the run, so we resolve to null rather than guess. Callers
+    // (e.g. Scryer edit sessions) then treat the run as unresolved/'crashed' and release
+    // the lease — a conservative reconcile that never reports a false completion.
+    return identities.size === 1 ? (identities.values().next().value ?? null) : null
+  }
+
+  subscribeTerminalTerminations(
+    listener: (event: RuntimeTerminalTerminationEvent) => void
+  ): () => void {
+    this.terminalTerminationListeners.add(listener)
+    return () => {
+      this.terminalTerminationListeners.delete(listener)
+    }
   }
 
   getAgentStatusLaunchConfigForPaneKey(
