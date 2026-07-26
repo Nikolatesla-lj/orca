@@ -536,11 +536,13 @@ with `lease: 'none'`. The native agent-run runtime adapter reuses Orca's own
 agent lifecycle rather than maintaining a second one, and renderer IPC rejects
 authorization fields at runtime. Focused controller, gate, lease, redaction,
 cancel/crash, and strict-DTO tests pass; the native-runtime lifecycle test flake
-was fixed at `eedff1c8b`. The one remaining item is the visible product proof of
-the live agent-done -> gate -> success-terminal path, which needs a real agent
-Stop-hook callback and is tracked as the S6 (#73) residual; the headless E2E
-keeps that case as `test.fixme` with its assertions. Not pushed, landed, or
-closed.
+was fixed at `eedff1c8b`. The visible product proof of the live agent-done ->
+gate -> success-terminal path is now closed (2026-07-25): the release-critical
+Electron E2E drives the Completion Gate through the production agent Stop-hook
+HTTP protocol — the launched agent pane emits the same authenticated callback
+the managed claude hook script sends, and everything past the agent binary
+(transport, token auth, ingest, native runtime, gate, lease release, visible
+terminal) is production code. Not pushed, landed, or closed.
 
 ## #28: What Is The Renderer-Facing Architecture View Model?
 
@@ -1091,8 +1093,10 @@ catalog-derived 33-operation parity gate passes (`pnpm run test:parity`: 6 files
 31 tests). The gate reports each operation's honest maturity from a single
 source, separating invariants that must hold from findings that are only
 reported. The two placeholder upstream fixtures were downgraded to local
-regression provenance rather than being given a fabricated upstream commit, so
-`container.fill` is reported as `planned` and not as product-integrated. Not
+regression provenance rather than being given a fabricated upstream commit.
+Update (2026-07-25): after the #38 product cutover's visible success-terminal
+E2E passed, `container.fill` was promoted to `product_integrated` at
+`24b546f12` and the gate now grades 13 operations product-integrated. Not
 pushed, landed, or closed.
 
 The current fixture directory must not be described as upstream parity. Its
@@ -1194,6 +1198,23 @@ file effects, watcher/view refresh, and the final visible state. Until that path
 passes, #34 may be engine-executable and adapter-verified but is not
 product-integrated.
 
+Implementation status (2026-07-25): closed, implemented and verified as S6
+(#73). The visible Fill with AI run acquires the edit-session lease before the
+agent launches, the prompt directs the agent at a single
+`orca scryer container fill` through the Engine seam (never `set_node`, no
+legacy fallback), and the token-free Completion Gate drives the visible
+terminal. The release-critical Electron E2E passes all seven lifecycle cases —
+start/lease-before-write, atomic two-layer file effects with visible subtree
+refresh, the visible success terminal driven through the production agent
+Stop-hook HTTP protocol, atomic invalid-proposal rejection, cancellation on
+terminal teardown, lease conflict without token leakage, and prompt ownership.
+Closing the success terminal exposed and fixed two product defects: the agent
+startup command could lose the pane-mount race after the deferred lease
+acquisition (`a2af471bd`), and the fill terminal lived only in panel-local
+state and vanished when the agent tab foregrounded (`77a279376`); the E2E was
+then enabled at `30df9abfd` and `container.fill` promoted to
+`product_integrated` at `24b546f12`. Not pushed, landed, or closed.
+
 ## #39: What Is The Convergence Gate Before Reviewable Commits?
 
 Blocked by: #26, #27, #34, #35, #37, #38
@@ -1241,14 +1262,21 @@ regression provenance. On the frozen integration tree
 `cec4973d30871995c3ae02bb9a26b0f149a59c2e`
 (HEAD `6a5c3977565838eabc2783be75a3361964b631fd`) the focused Engine,
 transaction, ownership, adapter, typecheck, converged-source lint, and
-`git diff --check` gates pass, and the Container Generation Electron E2E passes 6
-lifecycle cases (one visible success-terminal case held as `test.fixme`, gated on
-a real agent runtime). The slice was then split into the four reviewable commit
-groups on `scryer/convergence-review`: Engine implementation (`c5c2b0ecb`),
-Engine tests/parity/provenance (`57f4e4950`), CLI/IPC/agent/renderer adapters and
-product integration (`808d689a2`), and decision documentation plus model (group
-4, review branch tip). The review branch tree-hash equals the integration
-tree-hash, which is the exact-tree proof #39 requires. The GitNexus cycle/impact
-review over the assembled integration tree is the one remaining gate from the
-list above and is tracked as an S7 residual. Nothing is pushed, landed, or
-closed.
+`git diff --check` gates pass. The slice was split into four reviewable commit
+groups on `scryer/convergence-review` with a tree-hash equal to the integration
+tree-hash — the exact-tree proof #39 requires; the groups are rebuilt to the
+same proof whenever later verified commits fold in.
+
+Completion update (2026-07-25): the two gates that remained open are now
+closed. The GitNexus cycle/impact review ran over the assembled integration
+tree: all 38 file-import cycles in the whole repository pre-exist at the base
+and none touch the converged Scryer modules (the two cycles adjacent to
+convergence-modified files were verified edge-by-edge to exist at the base);
+the change-impact review maps 1072 changed symbols across 184 files with the
+blast radius of every Engine-seam symbol contained inside the converged set,
+and honestly notes that the 300 cataloged execution flows contain no Scryer
+flows, so the empty affected-process list reflects catalog coverage, not proof
+of zero impact. The Container Generation Electron E2E now passes all seven
+lifecycle cases including the visible success terminal driven through the
+production agent Stop-hook protocol, and `container.fill` is
+product-integrated (#38). Nothing is pushed, landed, or closed.

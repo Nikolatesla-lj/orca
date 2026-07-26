@@ -39,8 +39,8 @@ one.
 | S3 | Edit safety | AFK | S1 | `verified:s3-gate`; integrated at `db31b92b7` | lease/token/completion lifecycle gate | [#70](https://github.com/Nikolatesla-lj/orca/issues/70) |
 | S4 | Ownership retirement | AFK | S1; completion-path work waits for S3 | `verified:s4-gate`; integrated at `e3ad936dd` | no-fallback ownership and final-state validation gate | [#71](https://github.com/Nikolatesla-lj/orca/issues/71) |
 | S5 | Machine parity | AFK | S2, S3, S4 | `verified:parity-gate`; integrated at `d80d42bd9` | catalog-derived 33-operation gate with real provenance | [#72](https://github.com/Nikolatesla-lj/orca/issues/72) |
-| S6 | Product cutover | AFK | S2, S3, S4, S5 | `adapter verified`; integrated at `910e2106f`; not yet `product-integrated` (visible success-terminal E2E gated on real agent runtime) | visible Electron Container Generation workflow gate | [#73](https://github.com/Nikolatesla-lj/orca/issues/73) |
-| S7 | Verification and landing | HITL | S1-S6 | `verified:release-gate`; exact-tree review branch assembled; not pushed, landed, or closed | exact-tree release gate and four reviewable commit groups | [#74](https://github.com/Nikolatesla-lj/orca/issues/74) |
+| S6 | Product cutover | AFK | S2, S3, S4, S5 | `product-integrated`; integrated at `910e2106f`; success terminal closed at `30df9abfd`/`24b546f12` via the production Stop-hook protocol E2E | visible Electron Container Generation workflow gate | [#73](https://github.com/Nikolatesla-lj/orca/issues/73) |
+| S7 | Verification and landing | HITL | S1-S6 | `verified:release-gate`; GitNexus exact-tree cycle/impact review complete; exact-tree review branch assembled; not pushed, landed, or closed | exact-tree release gate and four reviewable commit groups | [#74](https://github.com/Nikolatesla-lj/orca/issues/74) |
 
 ## Execution Order
 
@@ -90,7 +90,7 @@ Publication completed on 2026-07-14:
 | S3 | Edit-lease store, session controller, Completion Gate, native agent-run runtime adapter, token-free strict DTOs | S3 focused gate passes: lease/token redaction, completion lifecycle, cancel/crash cleanup, strict DTO rejection tests green | `db31b92b7` | not landed | 2026-07-25 |
 | S4 | Legacy semantic ownership retired (net −976 lines); MCP strict-only; product path routes through the Engine seam with no fallback | S4 focused gate passes: static ownership and Engine-failure no-fallback tests green | `e3ad936dd` | not landed | 2026-07-25 |
 | S5 | Catalog-derived 33-operation parity gate; placeholder provenance downgraded to local-regression (not fabricated upstream) | `pnpm run test:parity` passes: 6 files, 31 tests; `container.fill` reported as `planned`, not product-integrated | `d80d42bd9` | not landed | 2026-07-25 |
-| S6 | Fill with AI cut over to the Orca CLI `orca scryer container fill` Engine seam; edit-session acquired before agent launch; gate-driven terminal and view refresh; `set_node` removed from the prompt | Electron E2E proves 6 lifecycle states via the visible product path (6 passed); visible success-terminal case retained as `test.fixme` because it needs a real agent Stop-hook callback; `container.fill` catalog `ui.status` stays `planned` | `910e2106f` | not landed | 2026-07-25 |
+| S6 | Fill with AI cut over to the Orca CLI `orca scryer container fill` Engine seam; edit-session acquired before agent launch; gate-driven terminal and view refresh; `set_node` removed from the prompt; startup mount-race and terminal-visibility product defects fixed | Electron E2E passes all 7 lifecycle cases via the visible product path, including the success terminal driven through the production agent Stop-hook HTTP protocol; `container.fill` promoted to `product_integrated`; parity gate re-run green (6 files, 31 tests) | `910e2106f`; fixes `a2af471bd` `77a279376` `30df9abfd`; promotion `24b546f12` | not landed | 2026-07-25 |
 | S7 | Focused release gate run on the frozen tree; lint repaired; Scryer model folded and validated; four reviewable commit groups assembled on `scryer/convergence-review` | Release gate green (see Final Verified Convergence Results); review branch tree-hash equals integration tree-hash; nothing pushed, landed, or closed | `6a5c39775` (model fold); `c98023969` (lint repair) | not landed | 2026-07-25 |
 
 ## Checkpoint Baseline Results
@@ -167,16 +167,43 @@ grouping, not in the resulting source tree.
 | Diff hygiene | `git diff --check` | PASS: no whitespace errors |
 | Scryer model validation | `validate_model` / `get_pending` | PASS: structurally clean; pending queue empty |
 
-Residual verification, tracked as remaining and requiring explicit approval or a
-real runtime environment:
+### Post-Gate Convergence Update (2026-07-25)
 
-- #73 `product-integrated`: the visible success-terminal Electron E2E needs a real
-  agent Stop-hook HTTP callback that a headless synthetic agent cannot produce; the
-  `test.fixme` keeps its assertions, and `container.fill` stays `ui.status:
-  'planned'` until that case passes in a real agent runtime.
-- GitNexus exact-tree cycle/impact review over the integration/review worktree is
-  not yet run; per-slice cycle checks passed and the source tree is byte-identical
-  across the writers, but the integration tree itself is not indexed.
+Both residuals recorded at the frozen-tree gate are now closed, with the
+following verified commits added on `scryer/convergence-integration`:
+
+1. `a2af471bd` — fix: the agent startup command could lose the pane-mount race
+   behind the deferred edit-session lease acquisition, so the visible Fill with
+   AI opened a bare shell and the agent never started; recovered by typed
+   delivery into the live pane, with focused unit tests.
+2. `77a279376` — fix: the fill terminal lived only in panel-local state and was
+   lost when the agent tab foregrounded; the resolved terminal now also surfaces
+   as a global toast.
+3. `30df9abfd` — test: the visible success-terminal E2E is enabled; the launched
+   agent pane emits the same authenticated Stop-hook HTTP callback the managed
+   claude hook script sends, and everything past the agent binary is production
+   code.
+4. `24b546f12` — feat: `scryer.container.fill` promoted to `product_integrated`
+   in the catalog; the machine-parity gate now grades 13 operations
+   product-integrated.
+
+Verification on the updated tree: Container Generation Electron E2E passes all
+7 lifecycle cases on a fresh build; the comprehensive focused suite passes (97
+files, 754 tests); `pnpm run test:parity` passes (6 files, 31 tests); the full
+Scryer suite passes (41 files, 248 tests); Node/CLI/Web typecheck pass.
+
+GitNexus exact-tree review over the assembled integration tree is complete: all
+38 repository-wide file-import cycles pre-exist at the base and none touch the
+converged Scryer modules; the change-impact review maps 1072 changed symbols
+across 184 files with every Engine-seam symbol's blast radius contained inside
+the converged set. The 300 cataloged execution flows contain no Scryer flows,
+so the empty affected-process list reflects catalog coverage, not proof of zero
+impact.
+
+Remaining follow-up hardening (non-blocking): panel-remount re-derivation of a
+successful fill terminal (the toast is the durable visible signal today), the
+#70 lease-release `lock_busy` swallow note, and the #71 MCP `readModel(`
+ownership assertion.
 
 ## Reference Worktree Extraction Matrix
 
