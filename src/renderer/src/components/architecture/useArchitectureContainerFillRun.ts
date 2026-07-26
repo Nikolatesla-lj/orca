@@ -198,6 +198,15 @@ export function useArchitectureContainerFillRun(deps: ContainerFillRunDeps) {
         })
         markFillRun(terminal.phase, terminal.message)
         setMessage(terminal.message)
+        // Why: the fill run foregrounds the agent terminal tab, which unmounts the
+        // architecture panel — panel-local run state cannot show the terminal to the
+        // user. Surface it as a global toast so the outcome is visible from whichever
+        // tab is active (the launch-failure path already toasts the same way).
+        if (terminal.phase === 'done') {
+          toast.success(terminal.message, { duration: 10_000 })
+        } else {
+          toast.error(terminal.message, { duration: 10_000 })
+        }
       },
     [markFillRun, projectPath, reloadModel, setMessage]
   )
