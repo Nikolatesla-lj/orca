@@ -1,5 +1,5 @@
-import { readdir, readFile } from 'fs/promises'
-import { join, relative } from 'path'
+import { readdir, readFile } from 'node:fs/promises'
+import { join, relative } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const ROOT = process.cwd()
@@ -74,6 +74,111 @@ describe('Scryer architecture ownership', () => {
         ),
         `${relative(ROOT, file)} imports an engine internal module`
       ).toEqual([])
+    }
+  })
+
+  it('keeps the architecture view adapter off engine internals and legacy C4 types', async () => {
+    const imports = importsOf(
+      await readFile(join(ROOT, 'src/main/scryer/architecture-view-adapter.ts'), 'utf8')
+    )
+    const forbidden = [
+      './engine/model',
+      './engine/validators',
+      './engine/diff',
+      './engine/fold',
+      './engine/read-selector',
+      './engine/state-store',
+      './engine/pipeline',
+      '../../shared/scryer/model-types'
+    ]
+
+    expect(
+      imports.filter((specifier) =>
+        forbidden.some((blocked) => specifier === blocked || specifier.startsWith(`${blocked}/`))
+      ),
+      'architecture-view-adapter.ts imports an engine internal or legacy C4 semantic type'
+    ).toEqual([])
+  })
+
+  it('keeps the MCP bridge off legacy model mutation and disk-format probing', async () => {
+    const mcpFiles = [
+      'src/main/scryer/mcp-tools.ts',
+      'src/main/scryer/mcp-model-persistence.ts',
+      'src/main/scryer/mcp-node-write-tools.ts',
+      'src/main/scryer/mcp-strict-operation-adapters.ts',
+      'src/main/scryer/mcp-tool-execution.ts'
+    ]
+    // Retired legacy seams: MCP writes go through cataloged Engine operations only, and
+    // there is no disk-format probing or fallback to a legacy C4 document.
+    const forbidden = [
+      /\bwriteModelAndBaseline\b/,
+      /\bisStrictScryerModel\b/,
+      /\bwriteModel\s*\(/,
+      /\bwriteModelDocument\s*\(/,
+      /\bpatchNodeData\s*\(/
+    ]
+
+    for (const file of mcpFiles) {
+      const source = await readFile(join(ROOT, file), 'utf8')
+      for (const pattern of forbidden) {
+        expect(pattern.test(source), `${file} still references ${pattern.source}`).toBe(false)
+      }
+    }
+  })
+
+  it('keeps the sync adapter off legacy C4 model IO and the legacy drift reader', async () => {
+    const source = await readFile(join(ROOT, 'src/main/scryer/sync.ts'), 'utf8')
+    const imports = importsOf(source)
+
+    // The legacy standalone drift module and engine internals are off-limits; drift
+    // comes from the Engine via the shared drift-report adapter.
+    expect(
+      imports.filter(
+        (specifier) =>
+          (specifier.includes('/drift') && !specifier.includes('drift-report')) ||
+          specifier.includes('/engine/')
+      )
+    ).toEqual([])
+
+    // Legacy semantic model IO is retired; only Engine reads + snapshot/sentinel
+    // maintenance (writePreSyncSnapshot, setImplementing, markSynced) remain.
+    const forbidden = [/\breadModel\b/, /\bwriteModel\b/, /\bcheckDrift\b/]
+    for (const pattern of forbidden) {
+      expect(pattern.test(source), `sync.ts still references ${pattern.source}`).toBe(false)
+    }
+  })
+
+  it('keeps the architecture IPC bridge off the retired raw-document write surface', async () => {
+    const source = await readFile(join(ROOT, 'src/main/ipc/architecture.ts'), 'utf8')
+    // The retired default raw-mutation channels and legacy semantic writers must not
+    // reappear. Read channels (readModel/readModelDocument) remain legitimate.
+    const forbidden = [
+      /architecture:writeModel\b/,
+      /architecture:writeModelDocument\b/,
+      /architecture:patchNodeData\b/,
+      /\bwriteModelDocument\b/,
+      /\bpatchNodeData\b/,
+      /\bwriteModelAndBaseline\b/
+    ]
+    for (const pattern of forbidden) {
+      expect(pattern.test(source), `architecture.ts still references ${pattern.source}`).toBe(false)
+    }
+  })
+
+  it('keeps the preload architecture API off the retired raw-document write channels', async () => {
+    const index = await readFile(join(ROOT, 'src/preload/index.ts'), 'utf8')
+    const apiTypes = await readFile(join(ROOT, 'src/preload/api-types.ts'), 'utf8')
+    const forbidden = [
+      /architecture:writeModel\b/,
+      /architecture:writeModelDocument\b/,
+      /architecture:patchNodeData\b/
+    ]
+    for (const pattern of forbidden) {
+      expect(pattern.test(index), `preload/index.ts still references ${pattern.source}`).toBe(false)
+    }
+    // The renderer-facing type surface no longer declares the raw write methods.
+    for (const method of ['writeModelDocument', 'patchNodeData']) {
+      expect(apiTypes.includes(`${method}:`), `api-types.ts still declares ${method}`).toBe(false)
     }
   })
 

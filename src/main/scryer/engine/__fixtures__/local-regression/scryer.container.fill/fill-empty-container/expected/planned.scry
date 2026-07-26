@@ -1,0 +1,22 @@
+{
+  "version": "0.3",
+  "nodes": [
+    { "id": "shop", "kind": "system", "name": "Shop" },
+    { "id": "api", "kind": "container", "name": "API", "parentId": "shop" },
+    { "id": "node-1", "kind": "component", "name": "Orders", "parentId": "api" },
+    {
+      "id": "node-2",
+      "kind": "symbol",
+      "name": "handleOrder",
+      "parentId": "node-1",
+      "responsibilities": [{ "id": "resp-1", "statement": "Handles an order request" }]
+    }
+  ],
+  "links": [],
+  "groups": [],
+  "sourceMap": {
+    "resp-1": [{ "pattern": "src/orders.ts", "symbol": "handleOrder" }],
+    "node-2": [{ "pattern": "src/orders.ts", "symbol": "handleOrder", "line": 10, "endLine": 40 }]
+  },
+  "boundaries": {}
+}

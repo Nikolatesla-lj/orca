@@ -1,0 +1,41 @@
+{
+  "ok": true,
+  "operationId": "scryer.container.fill",
+  "result": {
+    "commit": { "committedWritten": true, "plannedMirrored": true, "baselineRefreshed": false },
+    "summary": {
+      "containerId": "api",
+      "components": 1,
+      "symbols": 1,
+      "groups": 0,
+      "derivedLinks": 0,
+      "keptLinks": 0,
+      "droppedLinks": 0,
+      "sourceAnchors": 2
+    },
+    "created": {
+      "components": [
+        {
+          "id": "node-1",
+          "key": "orders",
+          "name": "Orders",
+          "responsibilityIds": [],
+          "symbolIds": ["node-2"]
+        }
+      ],
+      "symbols": [
+        {
+          "id": "node-2",
+          "key": "handleOrder",
+          "name": "handleOrder",
+          "parentComponentId": "node-1",
+          "responsibilityIds": ["resp-1"],
+          "propertyLabels": [],
+          "sourceKeys": ["resp-1", "node-2"]
+        }
+      ],
+      "groups": []
+    },
+    "reports": { "edgeGraphStatus": "missing" }
+  }
+}
